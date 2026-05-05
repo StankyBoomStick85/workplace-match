@@ -277,7 +277,7 @@ export function CandidateDashboard() {
 
   function scheduleConversation(job: JobListing) {
     const selectedTime = scheduleSelections[job.id]?.trim();
-    if (!selectedTime) {
+    if (!selectedTime || !profile) {
       return;
     }
 
