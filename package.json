@@ -17,7 +17,8 @@
     "next": "^14.2.20",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-leaflet": "^4.2.1"
+    "react-leaflet": "^4.2.1",
+    "resend": "^6.12.3"
   },
   "devDependencies": {
     "@types/leaflet": "^1.9.21",

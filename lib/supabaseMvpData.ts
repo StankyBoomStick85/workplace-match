@@ -195,6 +195,11 @@ export async function addInterest({
     },
     { onConflict: "from_user_id,to_user_id,job_id" }
   );
+  triggerTransactionalEmail({
+    type: "interest_notification",
+    recipientUserId: toUserId,
+    jobId
+  });
 }
 
 export async function removeInterest({
@@ -227,6 +232,14 @@ export async function addMutualMatch(match: {
   jobId: string;
   matchPercent: number;
 }) {
+  const { data: existingMatch } = await supabase
+    .from("matches")
+    .select("id")
+    .eq("candidate_id", match.candidateId)
+    .eq("employer_id", match.employerId)
+    .eq("job_id", match.jobId)
+    .maybeSingle();
+
   await supabase.from("matches").upsert(
     {
       candidate_id: match.candidateId,
@@ -238,6 +251,19 @@ export async function addMutualMatch(match: {
     },
     { onConflict: "candidate_id,employer_id,job_id" }
   );
+
+  if (!existingMatch) {
+    triggerTransactionalEmail({
+      type: "match_notification",
+      recipientUserId: match.candidateId,
+      jobId: match.jobId
+    });
+    triggerTransactionalEmail({
+      type: "match_notification",
+      recipientUserId: match.employerId,
+      jobId: match.jobId
+    });
+  }
 }
 
 export async function readNotificationsForEmail(email: string) {
@@ -418,4 +444,24 @@ function formatPay(payMin?: number | null, payMax?: number | null, payType?: str
 function stableRelatedId(value: string) {
   const text = value.padEnd(32, "0").replace(/[^a-f0-9]/gi, "0").slice(0, 32);
   return `${text.slice(0, 8)}-${text.slice(8, 12)}-${text.slice(12, 16)}-${text.slice(16, 20)}-${text.slice(20)}`;
+}
+
+function triggerTransactionalEmail({
+  type,
+  recipientUserId,
+  jobId
+}: {
+  type: "match_notification" | "interest_notification";
+  recipientUserId: string;
+  jobId: string;
+}) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  fetch("/api/email/notification", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type, recipientUserId, jobId })
+  }).catch(() => undefined);
 }

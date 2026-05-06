@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { logAdminEvent } from "../lib/adminEvents";
 import { supabase } from "../lib/supabase";
+import { AuthDivider, GoogleOAuthButton } from "./GoogleOAuthButton";
 
 type CandidateAuthFormProps = {
   mode: "login" | "signup";
@@ -70,6 +71,7 @@ export function CandidateAuthForm({ mode }: CandidateAuthFormProps) {
         applicantId: data.user.id,
         dedupeKey: `signup_created:candidate:${data.user.id}`
       });
+      await sendWelcomeEmail(email, "candidate");
       window.location.href = "/candidate/dashboard";
       return;
     }
@@ -110,7 +112,12 @@ export function CandidateAuthForm({ mode }: CandidateAuthFormProps) {
             : "Log in to continue to your dashboard."}
         </p>
 
-        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+        <div className="mt-6 space-y-4">
+          <GoogleOAuthButton role="candidate" />
+          <AuthDivider />
+        </div>
+
+        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div className="space-y-2">
             <label htmlFor="email" className="label">
               Email
@@ -176,6 +183,18 @@ export function CandidateAuthForm({ mode }: CandidateAuthFormProps) {
       </div>
     </section>
   );
+}
+
+async function sendWelcomeEmail(email: string, role: "candidate" | "employer") {
+  try {
+    await fetch("/api/email/welcome", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, role })
+    });
+  } catch {
+    // Account creation should not fail if transactional email is temporarily unavailable.
+  }
 }
 
 type PasswordFieldProps = {

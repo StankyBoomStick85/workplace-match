@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
 import { supabase } from "../lib/supabase";
+import { AuthDivider, GoogleOAuthButton } from "./GoogleOAuthButton";
 import { PasswordVisibilityField } from "./PasswordVisibilityField";
 
 export function UnifiedLoginForm() {
@@ -54,7 +55,12 @@ export function UnifiedLoginForm() {
           Log in with your email and password.
         </p>
 
-        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+        <div className="mt-6 space-y-4">
+          <GoogleOAuthButton />
+          <AuthDivider />
+        </div>
+
+        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div className="space-y-2">
             <label htmlFor="email" className="label">
               Email
