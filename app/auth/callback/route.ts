@@ -1,27 +1,24 @@
-import { NextRequest, NextResponse } from "next/server";
-import { createServerClient } from "@supabase/ssr";
+import { cookies } from "next/headers";
+import { NextResponse } from "next/server";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 
-export async function GET(request: NextRequest) {
+export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
-  let supabaseResponse = NextResponse.next({
-    request: {
-      headers: request.headers
-    }
-  });
+  const cookieStore = cookies();
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
         get(name: string) {
-          return request.cookies.get(name)?.value;
+          return cookieStore.get(name)?.value;
         },
-        set(name: string, value: string, options: Record<string, unknown>) {
-          supabaseResponse.cookies.set({ name, value, ...options });
+        set(name: string, value: string, options: CookieOptions) {
+          cookieStore.set(name, value, options);
         },
-        remove(name: string, options: Record<string, unknown>) {
-          supabaseResponse.cookies.set({ name, value: "", ...options });
+        remove(name: string, options: CookieOptions) {
+          cookieStore.set(name, "", options);
         }
       }
     }
@@ -36,32 +33,24 @@ export async function GET(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   if (!user) {
-    return redirectWithSupabaseCookies("/login", requestUrl, supabaseResponse);
+    return NextResponse.redirect(new URL("/login", requestUrl.origin));
   }
 
-  const { data: existingUser } = await supabase
+  const { data: userRecord } = await supabase
     .from("users")
     .select("role")
     .eq("id", user.id)
     .maybeSingle();
+
   const role =
-    existingUser?.role === "candidate" || existingUser?.role === "employer" ? existingUser.role : null;
+    userRecord?.role === "candidate" || userRecord?.role === "employer" ? userRecord.role : null;
   const destination =
-    role === "employer" ? "/employer/dashboard" : role === "candidate" ? "/candidate/dashboard" : "/onboarding";
+    role === "candidate"
+      ? "/candidate/dashboard"
+      : role === "employer"
+        ? "/employer/dashboard"
+        : "/onboarding";
 
-  const response = redirectWithSupabaseCookies(destination, requestUrl, supabaseResponse);
-  response.cookies.delete("workplace_match_oauth_role");
-  return response;
-}
-
-function redirectWithSupabaseCookies(
-  pathname: string,
-  requestUrl: URL,
-  supabaseResponse: NextResponse
-) {
-  const response = NextResponse.redirect(new URL(pathname, requestUrl.origin));
-  supabaseResponse.cookies.getAll().forEach((cookie) => {
-    response.cookies.set(cookie);
-  });
-  return response;
+  cookieStore.delete("workplace_match_oauth_role");
+  return NextResponse.redirect(new URL(destination, requestUrl.origin));
 }
