@@ -17,9 +17,21 @@ import {
   type MatchThreadContext
 } from "../lib/matchMessages";
 import { logAdminEvent } from "../lib/adminEvents";
+import {
+  addInterest as addSupabaseInterest,
+  addMutualMatch as addSupabaseMutualMatch,
+  getAllCandidateProfiles,
+  getCandidateInterests,
+  getCurrentMvpUser,
+  getEmployerInterests,
+  getEmployerJobs,
+  getMutualMatches,
+  removeInterest as removeSupabaseInterest
+} from "../lib/supabaseMvpData";
 import { RemoveInterestConfirmationModal } from "./RemoveInterestConfirmationModal";
 
 type EmployerAccount = {
+  id?: string;
   email: string;
   companyName?: string;
   displayName?: string;
@@ -31,6 +43,7 @@ type EmployerAccount = {
 type JobListing = {
   id: string;
   employerEmail: string;
+  employerId?: string;
   title: string;
   locationStreet?: string;
   locationCity: string;
@@ -181,37 +194,32 @@ export function EmployerFindApplicants() {
   const [pendingRemoveInterest, setPendingRemoveInterest] = useState<PendingEmployerInterestRemoval | null>(null);
 
   useEffect(() => {
-    const savedAccount = localStorage.getItem(employerAccountKey);
-    const activeRole = localStorage.getItem(activeRoleKey);
-    if (!savedAccount || activeRole !== "employer") {
-      window.location.href = "/employer/login";
-      return;
+    loadMapData();
+
+    async function loadMapData() {
+      const user = await getCurrentMvpUser("employer");
+      if (!user) {
+        window.location.href = "/employer/login";
+        return;
+      }
+
+      const [employerJobs, candidateProfiles, employerInterestRows, candidateInterestRows, mutualMatchRows] =
+        await Promise.all([
+          getEmployerJobs(user.id),
+          getAllCandidateProfiles(),
+          getEmployerInterests(),
+          getCandidateInterests(),
+          getMutualMatches()
+        ]);
+
+      setAccount({ id: user.id, email: user.email });
+      setJobs(employerJobs as JobListing[]);
+      setSelectedJobId(employerJobs[0]?.id ?? "");
+      setCandidateProfile((candidateProfiles[0] as CandidateProfile | undefined) ?? null);
+      setInterests(employerInterestRows as EmployerInterest[]);
+      setCandidateInterests(candidateInterestRows as CandidateInterest[]);
+      setMutualMatches(mutualMatchRows as MutualMatch[]);
     }
-
-    const parsedAccount = JSON.parse(savedAccount) as EmployerAccount;
-    setAccount(parsedAccount);
-
-    const savedJobs = localStorage.getItem(employerJobsKey);
-    const parsedJobs = savedJobs ? (JSON.parse(savedJobs) as JobListing[]) : [];
-    const employerJobs = parsedJobs.filter((job) => job.employerEmail === parsedAccount.email);
-    setJobs(employerJobs);
-    setSelectedJobId(employerJobs[0]?.id ?? "");
-
-    const savedCandidateProfile = localStorage.getItem(candidateProfileKey);
-    setCandidateProfile(savedCandidateProfile ? (JSON.parse(savedCandidateProfile) as CandidateProfile) : null);
-    refreshInterestState();
-
-    function refreshInterestState() {
-      setInterests(readEmployerInterests());
-      setCandidateInterests(readCandidateInterests());
-      setMutualMatches(readMutualMatches());
-    }
-
-    window.addEventListener("storage", refreshInterestState);
-
-    return () => {
-      window.removeEventListener("storage", refreshInterestState);
-    };
   }, []);
 
   useEffect(() => {
@@ -349,7 +357,11 @@ export function EmployerFindApplicants() {
       }
 
       const updated = [nextInterest, ...current];
-      localStorage.setItem(employerInterestsKey, JSON.stringify(updated));
+      addSupabaseInterest({
+        fromUserId: nextInterest.employerId,
+        toUserId: nextInterest.candidateId,
+        jobId: nextInterest.jobId
+      });
       logAdminEvent({
         type: "interest_selected",
         userRole: "employer",
@@ -378,7 +390,12 @@ export function EmployerFindApplicants() {
         }
 
         const updated = [nextMutualMatch, ...current];
-        localStorage.setItem(mutualMatchesKey, JSON.stringify(updated));
+        addSupabaseMutualMatch({
+          candidateId: nextMutualMatch.candidateId,
+          employerId: nextMutualMatch.employerId,
+          jobId: nextMutualMatch.jobId,
+          matchPercent: nextMutualMatch.matchPercent
+        });
         logAdminEvent({
           type: "mutual_match_created",
           userRole: "employer",
@@ -425,7 +442,7 @@ export function EmployerFindApplicants() {
             interest.candidateId === candidateId
           )
       );
-      localStorage.setItem(employerInterestsKey, JSON.stringify(updated));
+      removeSupabaseInterest({ fromUserId: employerId, toUserId: candidateId, jobId });
       if (updated.length !== current.length) {
         logAdminEvent({
           type: "interest_removed",
@@ -447,7 +464,6 @@ export function EmployerFindApplicants() {
             mutualMatch.candidateId === candidateId
           )
       );
-      localStorage.setItem(mutualMatchesKey, JSON.stringify(updated));
       return updated;
     });
   }
@@ -1320,83 +1336,27 @@ function RecenterMap({ center }: { center: Coordinates }) {
 }
 
 function readEmployerInterests() {
-  const savedInterests = localStorage.getItem(employerInterestsKey);
-  if (!savedInterests) {
-    return [];
-  }
-
-  try {
-    return JSON.parse(savedInterests) as EmployerInterest[];
-  } catch {
-    return [];
-  }
+  return [] as EmployerInterest[];
 }
 
 function readEmployerAccount() {
-  const savedAccount = localStorage.getItem(employerAccountKey);
-  if (!savedAccount) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(savedAccount) as EmployerAccount;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 function findCandidateAccount(profile: CandidateProfile) {
-  const candidateEmail = profile.candidateEmail?.trim().toLowerCase() ?? "";
-  const accounts = [...readCandidateAccounts(), readCandidateAccount()].filter(Boolean) as CandidateAccount[];
-
-  if (candidateEmail) {
-    const accountByEmail = accounts.find((account) => account.email.trim().toLowerCase() === candidateEmail);
-    if (accountByEmail) {
-      return accountByEmail;
-    }
-  }
-
-  return accounts[0] ?? null;
+  return profile.candidateEmail ? { email: profile.candidateEmail } : null;
 }
 
 function readCandidateAccounts() {
-  const savedAccounts = localStorage.getItem(candidateAccountsKey);
-  if (!savedAccounts) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(savedAccounts) as CandidateAccount[] | CandidateAccount;
-    return Array.isArray(parsed) ? parsed : [parsed];
-  } catch {
-    return [];
-  }
+  return [] as CandidateAccount[];
 }
 
 function readCandidateAccount() {
-  const savedAccount = localStorage.getItem(candidateAccountKey);
-  if (!savedAccount) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(savedAccount) as CandidateAccount;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 function readCandidateInterests() {
-  const savedInterests = localStorage.getItem(candidateInterestsKey);
-  if (!savedInterests) {
-    return [];
-  }
-
-  try {
-    return JSON.parse(savedInterests) as CandidateInterest[];
-  } catch {
-    return [];
-  }
+  return [] as CandidateInterest[];
 }
 
 function isCandidateInterestForPair(
@@ -1411,16 +1371,7 @@ function isCandidateInterestForPair(
 }
 
 function readMutualMatches() {
-  const savedMatches = localStorage.getItem(mutualMatchesKey);
-  if (!savedMatches) {
-    return [];
-  }
-
-  try {
-    return JSON.parse(savedMatches) as MutualMatch[];
-  } catch {
-    return [];
-  }
+  return [] as MutualMatch[];
 }
 
 function createMutualMatchRecord(interest: EmployerInterest): MutualMatch {

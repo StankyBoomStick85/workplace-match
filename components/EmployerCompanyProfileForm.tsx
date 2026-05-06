@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { getCityStateForZip, normalizeStateValue, normalizeZipCode } from "../lib/addressHelpers";
+import { supabase } from "../lib/supabase";
 import { StateAbbreviationSelect } from "./StateAbbreviationSelect";
 
 type EmployerAccount = {
@@ -23,10 +24,6 @@ type CompanyProfile = {
   updatedAt: string;
 };
 
-const employerAccountKey = "workplace_match_employer";
-const activeRoleKey = "workplace_match_active_role";
-const companyProfileKey = "workplace_match_employer_company_profile";
-
 export function EmployerCompanyProfileForm() {
   const [account, setAccount] = useState<EmployerAccount | null>(null);
   const [profile, setProfile] = useState<CompanyProfile | null>(null);
@@ -38,26 +35,45 @@ export function EmployerCompanyProfileForm() {
   });
 
   useEffect(() => {
-    const savedAccount = localStorage.getItem(employerAccountKey);
-    const activeRole = localStorage.getItem(activeRoleKey);
-    if (!savedAccount || activeRole !== "employer") {
-      window.location.href = "/employer/login";
-      return;
-    }
+    loadProfile();
 
-    const parsedAccount = JSON.parse(savedAccount) as EmployerAccount;
-    setAccount(parsedAccount);
+    async function loadProfile() {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const user = sessionData.session?.user ?? null;
+      if (!user) {
+        window.location.href = "/employer/login";
+        return;
+      }
 
-    const savedProfile = localStorage.getItem(companyProfileKey);
-    if (savedProfile) {
-      const parsedProfile = JSON.parse(savedProfile) as CompanyProfile;
-      if (parsedProfile.employerEmail === parsedAccount.email) {
-        setProfile(parsedProfile);
+      const { data: userRecord } = await supabase.from("users").select("role").eq("id", user.id).maybeSingle();
+      if (userRecord?.role !== "employer") {
+        window.location.href = "/employer/login";
+        return;
+      }
+
+      setAccount({ email: user.email ?? "" });
+      const { data } = await supabase.from("employer_profiles").select("*").eq("user_id", user.id).maybeSingle();
+      if (data) {
+        const nextProfile: CompanyProfile = {
+          employerEmail: user.email ?? "",
+          companyName: data.company_name ?? "",
+          industry: data.industry ?? "",
+          streetAddress: "",
+          city: "",
+          state: "",
+          zipCode: data.location_zip ?? "",
+          companySize: data.company_size ?? "",
+          description: "",
+          website: "",
+          updatedAt: data.created_at ?? ""
+        };
+        const zipMatch = getCityStateForZip(nextProfile.zipCode);
+        setProfile(nextProfile);
         setAddress({
-          streetAddress: parsedProfile.streetAddress ?? "",
-          city: parsedProfile.city ?? "",
-          state: parsedProfile.state ?? "",
-          zipCode: parsedProfile.zipCode ?? ""
+          streetAddress: nextProfile.streetAddress,
+          city: zipMatch?.city ?? "",
+          state: zipMatch?.state ?? "",
+          zipCode: nextProfile.zipCode
         });
       }
     }
@@ -89,7 +105,7 @@ export function EmployerCompanyProfileForm() {
     });
   }
 
-  function saveProfile(event: FormEvent<HTMLFormElement>) {
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!account) {
@@ -97,6 +113,13 @@ export function EmployerCompanyProfileForm() {
     }
 
     const formData = new FormData(event.currentTarget);
+    const { data: sessionData } = await supabase.auth.getSession();
+    const user = sessionData.session?.user ?? null;
+    if (!user) {
+      window.location.href = "/employer/login";
+      return;
+    }
+
     const nextProfile: CompanyProfile = {
       employerEmail: account.email,
       companyName: String(formData.get("companyName") ?? "").trim(),
@@ -111,14 +134,18 @@ export function EmployerCompanyProfileForm() {
       updatedAt: new Date().toISOString()
     };
 
-    localStorage.setItem(companyProfileKey, JSON.stringify(nextProfile));
-    const savedAccount = localStorage.getItem(employerAccountKey);
-    if (savedAccount) {
-      localStorage.setItem(
-        employerAccountKey,
-        JSON.stringify({ ...JSON.parse(savedAccount), companyProfileComplete: true })
-      );
-    }
+    await supabase.from("employer_profiles").upsert(
+      {
+        user_id: user.id,
+        company_name: nextProfile.companyName,
+        industry: nextProfile.industry,
+        company_size: nextProfile.companySize,
+        contact_email: user.email,
+        location_zip: nextProfile.zipCode,
+        member_status: "beta"
+      },
+      { onConflict: "user_id" }
+    );
 
     window.location.href = "/employer/dashboard";
   }

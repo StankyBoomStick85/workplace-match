@@ -4,9 +4,11 @@ import { useEffect, useState } from "react";
 import {
   getNotificationsForRecipient,
   markNotificationsRead,
+  refreshContactNotifications,
   type ContactNotification
 } from "../lib/contactPreferences";
 import { logAdminEvent } from "../lib/adminEvents";
+import { supabase } from "../lib/supabase";
 
 export function NotificationBell({ recipientEmail }: { recipientEmail: string }) {
   const [notifications, setNotifications] = useState<ContactNotification[]>([]);
@@ -23,8 +25,8 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
       window.removeEventListener("workplace-match-notifications-updated", refreshNotifications);
     };
 
-    function refreshNotifications() {
-      setNotifications(getNotificationsForRecipient(recipientEmail));
+    async function refreshNotifications() {
+      setNotifications(await refreshContactNotifications(recipientEmail));
     }
   }, [recipientEmail]);
 
@@ -39,11 +41,18 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
     }
   }
 
-  function openNotification(notification: ContactNotification) {
+  async function openNotification(notification: ContactNotification) {
     setIsOpen(false);
+    const { data: sessionData } = await supabase.auth.getSession();
+    const userId = sessionData.session?.user.id;
+    const { data: userRecord } = userId
+      ? await supabase.from("users").select("role").eq("id", userId).maybeSingle()
+      : { data: null };
+    const activeRole = userRecord?.role;
+
     logAdminEvent({
       type: "notification_clicked",
-      userRole: localStorage.getItem("workplace_match_active_role") === "employer" ? "employer" : "candidate",
+      userRole: activeRole === "employer" ? "employer" : "candidate",
       jobId: notification.jobId,
       applicantId: notification.candidateId,
       employerId: notification.employerId,
@@ -54,7 +63,6 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
       return;
     }
 
-    const activeRole = localStorage.getItem("workplace_match_active_role");
     const params = new URLSearchParams();
     params.set("matchJobId", notification.jobId);
     if (notification.candidateId) {

@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 import { NotificationBell } from "./NotificationBell";
 
 type Role = "candidate" | "employer";
@@ -14,14 +15,6 @@ type NavItem = {
   avatarUrl?: string;
 };
 
-const candidateAccountKey = "workplace_match_candidate";
-const candidateProfileKey = "workplace_match_candidate_profile";
-const employerAccountKey = "workplace_match_employer";
-const employerAccountsKey = "workplace_match_employer_accounts";
-const employerCompanyProfileKey = "workplace_match_employer_company_profile";
-const activeRoleKey = "workplace_match_active_role";
-const activeEmailKey = "workplace_match_active_email";
-
 export function Header() {
   const pathname = usePathname();
   const [activeRole, setActiveRole] = useState<Role | null>(null);
@@ -29,15 +22,47 @@ export function Header() {
   const [navItems, setNavItems] = useState<NavItem[]>(getLoggedOutNav());
 
   useEffect(() => {
-    const role = getCurrentRole(pathname);
-    setActiveRole(role);
-    setActiveEmail(role ? localStorage.getItem(activeEmailKey) ?? "" : "");
-    setNavItems(role ? getRoleAwareNav(role) : getLoggedOutNav());
+    let isMounted = true;
+
+    refreshSessionNav();
+    const { data: listener } = supabase.auth.onAuthStateChange(() => {
+      refreshSessionNav();
+    });
+
+    return () => {
+      isMounted = false;
+      listener.subscription.unsubscribe();
+    };
+
+    async function refreshSessionNav() {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const user = sessionData.session?.user ?? null;
+
+      if (!user) {
+        if (!isMounted) return;
+        setActiveRole(null);
+        setActiveEmail("");
+        setNavItems(getLoggedOutNav());
+        return;
+      }
+
+      const { data: userRecord } = await supabase
+        .from("users")
+        .select("role")
+        .eq("id", user.id)
+        .maybeSingle();
+      const role = userRecord?.role === "candidate" || userRecord?.role === "employer" ? userRecord.role : null;
+      const label = role ? await getRoleLabel(role, user.id) : "";
+
+      if (!isMounted) return;
+      setActiveRole(role);
+      setActiveEmail(role ? user.email ?? "" : "");
+      setNavItems(role ? getRoleAwareNav(role, label) : getLoggedOutNav());
+    }
   }, [pathname]);
 
-  function signOut() {
-    localStorage.removeItem(activeRoleKey);
-    localStorage.removeItem(activeEmailKey);
+  async function signOut() {
+    await supabase.auth.signOut();
     setActiveRole(null);
     setActiveEmail("");
     setNavItems(getLoggedOutNav());
@@ -78,13 +103,13 @@ export function Header() {
           {activeRole ? (
             <>
               {activeEmail ? <NotificationBell recipientEmail={activeEmail} /> : null}
-            <button
-              type="button"
-              onClick={signOut}
-              className="border-b-2 border-transparent px-1.5 py-2 font-bold text-zinc-950 transition-colors duration-150 hover:text-red-700"
-            >
-              Sign out
-            </button>
+              <button
+                type="button"
+                onClick={signOut}
+                className="border-b-2 border-transparent px-1.5 py-2 font-bold text-zinc-950 transition-colors duration-150 hover:text-red-700"
+              >
+                Sign out
+              </button>
             </>
           ) : null}
         </nav>
@@ -93,10 +118,10 @@ export function Header() {
   );
 }
 
-function getRoleAwareNav(role: Role): NavItem[] {
+function getRoleAwareNav(role: Role, label: string): NavItem[] {
   if (role === "employer") {
     return [
-      { href: "/employer/dashboard", label: getEmployerLabel() },
+      { href: "/employer/dashboard", label: label || "Dashboard" },
       { href: "/employer/find-applicants", label: "Find applicants" },
       { href: "/employer/matches", label: "My Matches" },
       { href: "/account/settings?role=employer", label: "Account" }
@@ -104,7 +129,7 @@ function getRoleAwareNav(role: Role): NavItem[] {
   }
 
   return [
-    { href: "/candidate/dashboard", label: getCandidateLabel(), avatarUrl: getCandidateProfilePicture() },
+    { href: "/candidate/dashboard", label: label || "Profile" },
     { href: "/jobs", label: "See jobs" },
     { href: "/candidate/matches", label: "My Matches" },
     { href: "/account/settings?role=candidate", label: "Account" }
@@ -115,126 +140,22 @@ function getLoggedOutNav(): NavItem[] {
   return [{ href: "/login", label: "Log in" }];
 }
 
-function getCurrentRole(pathname: string): Role | null {
-  const activeRole = localStorage.getItem(activeRoleKey);
-  if (activeRole === "candidate" || activeRole === "employer") {
-    return activeRole;
+async function getRoleLabel(role: Role, userId: string) {
+  if (role === "candidate") {
+    const { data } = await supabase
+      .from("candidate_profiles")
+      .select("display_name")
+      .eq("user_id", userId)
+      .maybeSingle();
+    return data?.display_name?.trim() || "Profile";
   }
 
-  return null;
-}
-
-function getCandidateLabel() {
-  const savedProfile = localStorage.getItem(candidateProfileKey);
-  if (!savedProfile) {
-    return "Profile";
-  }
-
-  try {
-    const profile = JSON.parse(savedProfile) as { fullName?: string };
-    return profile.fullName?.trim() || "Profile";
-  } catch {
-    return "Profile";
-  }
-}
-
-function getCandidateProfilePicture() {
-  const savedProfile = localStorage.getItem(candidateProfileKey);
-  const savedAccount = localStorage.getItem(candidateAccountKey);
-
-  const profilePicture = getStoredProfilePicture(savedProfile);
-  if (profilePicture) {
-    return profilePicture;
-  }
-
-  return getStoredProfilePicture(savedAccount);
-}
-
-function getStoredProfilePicture(value: string | null) {
-  if (!value) {
-    return "";
-  }
-
-  try {
-    const parsed = JSON.parse(value) as { profilePictureDataUrl?: string };
-    return parsed.profilePictureDataUrl?.trim() ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function getEmployerLabel() {
-  const savedEmployer = localStorage.getItem(employerAccountKey);
-  const activeEmail = localStorage.getItem(activeEmailKey);
-  const activeEmployer = getActiveEmployerAccount(savedEmployer, activeEmail);
-  const savedCompanyProfile = localStorage.getItem(employerCompanyProfileKey);
-  const companyProfileLabel = getStoredCompanyNameForEmployer(savedCompanyProfile, activeEmployer?.email ?? activeEmail);
-
-  if (companyProfileLabel) {
-    return companyProfileLabel;
-  }
-
-  return activeEmployer?.companyName?.trim() || "Dashboard";
-}
-
-function getStoredCompanyNameForEmployer(value: string | null, employerEmail?: string | null) {
-  if (!value || !employerEmail) {
-    return "";
-  }
-
-  try {
-    const parsed = JSON.parse(value) as { employerEmail?: string; companyName?: string };
-    return parsed.employerEmail?.trim().toLowerCase() === employerEmail.trim().toLowerCase()
-      ? parsed.companyName?.trim() ?? ""
-      : "";
-  } catch {
-    return "";
-  }
-}
-
-function getActiveEmployerAccount(savedEmployer: string | null, activeEmail: string | null) {
-  const legacyAccount = parseEmployerAccount(savedEmployer);
-  const accounts = parseEmployerAccounts(localStorage.getItem(employerAccountsKey));
-  const normalizedActiveEmail = activeEmail?.trim().toLowerCase() ?? "";
-
-  if (normalizedActiveEmail) {
-    return (
-      accounts.find((account) => account.email.trim().toLowerCase() === normalizedActiveEmail) ??
-      (legacyAccount?.email.trim().toLowerCase() === normalizedActiveEmail ? legacyAccount : null)
-    );
-  }
-
-  return legacyAccount;
-}
-
-function parseEmployerAccounts(value: string | null) {
-  if (!value) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(value) as Array<{ email?: string; companyName?: string }> | { email?: string; companyName?: string };
-    return Array.isArray(parsed) ? parsed.filter(isEmployerAccount) : isEmployerAccount(parsed) ? [parsed] : [];
-  } catch {
-    return [];
-  }
-}
-
-function parseEmployerAccount(value: string | null) {
-  if (!value) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(value) as { email?: string; companyName?: string };
-    return isEmployerAccount(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function isEmployerAccount(value: unknown): value is { email: string; companyName?: string } {
-  return Boolean(value && typeof value === "object" && typeof (value as { email?: unknown }).email === "string");
+  const { data } = await supabase
+    .from("employer_profiles")
+    .select("company_name")
+    .eq("user_id", userId)
+    .maybeSingle();
+  return data?.company_name?.trim() || "Dashboard";
 }
 
 function NavLink({

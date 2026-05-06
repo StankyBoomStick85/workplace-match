@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { findAccountByEmail, readAccounts, updateStoredAccount } from "../lib/localAccounts";
+import { supabase } from "../lib/supabase";
 
 type CandidateProfile = {
   candidateEmail?: string;
@@ -20,12 +20,6 @@ type CandidateProfile = {
   updatedAt: string;
 };
 
-const accountStorageKey = "workplace_match_candidate";
-const accountsStorageKey = "workplace_match_candidate_accounts";
-const profileStorageKey = "workplace_match_candidate_profile";
-const activeRoleKey = "workplace_match_active_role";
-const activeEmailKey = "workplace_match_active_email";
-
 function splitSkills(value: string) {
   return value
     .split(",")
@@ -40,28 +34,40 @@ export function CandidateProfileForm() {
   const isEditing = Boolean(profile);
 
   useEffect(() => {
-    const activeRole = localStorage.getItem(activeRoleKey);
-    const activeEmail = localStorage.getItem(activeEmailKey);
-    const account =
-      (activeEmail ? findAccountByEmail(accountsStorageKey, accountStorageKey, activeEmail) : null) ??
-      readAccounts(accountsStorageKey, accountStorageKey)[0] ??
-      null;
+    loadProfile();
 
-    if (!account || activeRole !== "candidate") {
-      window.location.href = "/candidate/login";
-      return;
+    async function loadProfile() {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const user = sessionData.session?.user ?? null;
+      if (!user) {
+        window.location.href = "/candidate/login";
+        return;
+      }
+
+      const { data: userRecord } = await supabase.from("users").select("role").eq("id", user.id).maybeSingle();
+      if (userRecord?.role !== "candidate") {
+        window.location.href = "/candidate/login";
+        return;
+      }
+
+      const { data } = await supabase.from("candidate_profiles").select("*").eq("user_id", user.id).maybeSingle();
+      if (data) {
+        setProfile({
+          candidateEmail: user.email ?? "",
+          fullName: data.display_name ?? "",
+          zipCode: data.zip_code ?? "",
+          desiredJobType: Array.isArray(data.job_types) ? data.job_types[0] ?? "" : "",
+          workPreference: data.work_preference ?? "open",
+          capabilitySummary: data.summary ?? "",
+          topSkills: data.capability_tags ?? [],
+          experienceLevel: data.experience_level ?? "",
+          educationLevel: "",
+          updatedAt: data.created_at ?? ""
+        });
+      }
+
+      setIsReady(true);
     }
-
-    const savedProfile = localStorage.getItem(profileStorageKey);
-    if (savedProfile) {
-      const parsedProfile = JSON.parse(savedProfile) as CandidateProfile;
-      setProfile(parsedProfile);
-      setProfilePictureDataUrl(parsedProfile.profilePictureDataUrl ?? account.profilePictureDataUrl ?? "");
-    } else {
-      setProfilePictureDataUrl(account.profilePictureDataUrl ?? "");
-    }
-
-    setIsReady(true);
   }, []);
 
   function handleProfilePictureChange(file: File | null) {
@@ -78,23 +84,25 @@ export function CandidateProfileForm() {
     reader.readAsDataURL(file);
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const formData = new FormData(event.currentTarget);
-    const activeEmail = localStorage.getItem(activeEmailKey) ?? "";
-    const account =
-      (activeEmail ? findAccountByEmail(accountsStorageKey, accountStorageKey, activeEmail) : null) ??
-      readAccounts(accountsStorageKey, accountStorageKey)[0] ??
-      null;
+    const { data: sessionData } = await supabase.auth.getSession();
+    const user = sessionData.session?.user ?? null;
+    if (!user) {
+      window.location.href = "/candidate/login";
+      return;
+    }
+
     const nextProfile: CandidateProfile = {
-      candidateEmail: activeEmail,
-      streetAddress: account?.streetAddress ?? profile?.streetAddress ?? "",
-      city: account?.city ?? profile?.city ?? "",
-      state: account?.state ?? profile?.state ?? "",
+      candidateEmail: user.email ?? "",
+      streetAddress: profile?.streetAddress ?? "",
+      city: profile?.city ?? "",
+      state: profile?.state ?? "",
       profilePictureDataUrl,
       fullName: String(formData.get("fullName") ?? "").trim(),
-      zipCode: account?.zipCode ?? profile?.zipCode ?? "",
+      zipCode: profile?.zipCode ?? "",
       desiredJobType: String(formData.get("desiredJobType") ?? "").trim(),
       workPreference: String(formData.get("workPreference") ?? "open"),
       capabilitySummary: String(formData.get("capabilitySummary") ?? "").trim(),
@@ -104,16 +112,20 @@ export function CandidateProfileForm() {
       updatedAt: new Date().toISOString()
     };
 
-    localStorage.setItem(profileStorageKey, JSON.stringify(nextProfile));
-
-    if (account) {
-      updateStoredAccount(accountsStorageKey, accountStorageKey, {
-        ...account,
-        displayName: nextProfile.fullName || account.displayName,
-        profilePictureDataUrl,
-        profileComplete: true
-      });
-    }
+    await supabase.from("candidate_profiles").upsert(
+      {
+        user_id: user.id,
+        display_name: nextProfile.fullName,
+        zip_code: nextProfile.zipCode,
+        job_types: nextProfile.desiredJobType ? [nextProfile.desiredJobType] : [],
+        work_preference: nextProfile.workPreference,
+        capability_tags: nextProfile.topSkills,
+        experience_level: nextProfile.experienceLevel,
+        summary: nextProfile.capabilitySummary,
+        visibility: "private"
+      },
+      { onConflict: "user_id" }
+    );
 
     window.location.href = "/candidate/dashboard";
   }

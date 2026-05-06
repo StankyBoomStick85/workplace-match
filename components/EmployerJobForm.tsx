@@ -3,10 +3,12 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { logAdminEvent } from "../lib/adminEvents";
 import { getCityStateForZip, normalizeStateValue, normalizeZipCode } from "../lib/addressHelpers";
+import { supabase } from "../lib/supabase";
 import { StateAbbreviationSelect } from "./StateAbbreviationSelect";
 
 type EmployerAccount = {
   email: string;
+  id?: string;
 };
 
 type CompanyProfile = {
@@ -39,10 +41,6 @@ type PayRangeDraft = {
   payType: "per-hour" | "annual";
 };
 
-const employerAccountKey = "workplace_match_employer";
-const employerJobsKey = "workplace_match_employer_jobs";
-const activeRoleKey = "workplace_match_active_role";
-const companyProfileKey = "workplace_match_employer_company_profile";
 const jobFieldClassName =
   "w-full rounded-md border border-line bg-white px-3.5 py-2.5 text-base outline-none transition focus:border-moss focus:ring-2 focus:ring-moss/20";
 const lockedJobFieldClassName = `${jobFieldClassName} disabled:bg-gray-100 disabled:text-zinc-600`;
@@ -88,6 +86,45 @@ function joinSkills(skills: string[]) {
   return skills.join("\n");
 }
 
+function parsePayValues(value: string) {
+  const numbers = value.match(/\d[\d,]*/g)?.map((part) => Number(part.replace(/,/g, ""))) ?? [];
+  return {
+    min: numbers[0] ?? null,
+    max: numbers[1] ?? numbers[0] ?? null
+  };
+}
+
+function mapSupabaseJob(job: any, employerEmail: string): JobListing {
+  const zipMatch = getCityStateForZip(job.location_zip ?? "");
+  return {
+    id: job.id,
+    employerEmail,
+    title: job.title ?? "",
+    locationStreet: "",
+    locationCity: zipMatch?.city ?? "",
+    locationState: zipMatch?.state ?? "",
+    locationZip: job.location_zip ?? "",
+    payRange: formatStoredPay(job.pay_min, job.pay_max, job.pay_type),
+    jobType: job.job_type ?? "",
+    schedule: job.shift ?? "",
+    requiredSkills: job.required_capabilities ?? [],
+    description: job.summary ?? "",
+    status: job.active ? "Active" : "Active",
+    createdAt: job.created_at ?? ""
+  };
+}
+
+function formatStoredPay(payMin?: number | null, payMax?: number | null, payType?: string | null) {
+  const suffix = payType === "annual" ? "/year" : "/hr";
+  if (payMin && payMax && payMax !== payMin) {
+    return `$${payMin}-$${payMax}${suffix}`;
+  }
+  if (payMin) {
+    return `$${payMin}${suffix}`;
+  }
+  return "";
+}
+
 export function EmployerJobForm() {
   const [account, setAccount] = useState<EmployerAccount | null>(null);
   const [companyProfile, setCompanyProfile] = useState<CompanyProfile | null>(null);
@@ -105,40 +142,58 @@ export function EmployerJobForm() {
   );
 
   useEffect(() => {
-    const saved = localStorage.getItem(employerAccountKey);
-    const activeRole = localStorage.getItem(activeRoleKey);
-    if (!saved || activeRole !== "employer") {
-      window.location.href = "/employer/login";
-      return;
-    }
+    loadJobForm();
 
-    const parsedAccount = JSON.parse(saved) as EmployerAccount;
-    setAccount(parsedAccount);
-
-    const savedCompanyProfile = localStorage.getItem(companyProfileKey);
-    if (savedCompanyProfile) {
-      const parsedCompanyProfile = JSON.parse(savedCompanyProfile) as CompanyProfile;
-      if (parsedCompanyProfile.employerEmail === parsedAccount.email) {
-        setCompanyProfile(parsedCompanyProfile);
+    async function loadJobForm() {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const user = sessionData.session?.user ?? null;
+      if (!user) {
+        window.location.href = "/employer/login";
+        return;
       }
-    }
 
-    const editJobId = new URLSearchParams(window.location.search).get("edit");
-    if (editJobId) {
-      const savedJobs = localStorage.getItem(employerJobsKey);
-      const jobs = savedJobs ? (JSON.parse(savedJobs) as JobListing[]) : [];
-      const jobToEdit = jobs.find((job) => job.id === editJobId && job.employerEmail === parsedAccount.email) ?? null;
+      const { data: userRecord } = await supabase.from("users").select("role").eq("id", user.id).maybeSingle();
+      if (userRecord?.role !== "employer") {
+        window.location.href = "/employer/login";
+        return;
+      }
 
-      if (jobToEdit) {
-        const parsedPayRange = parsePayRange(jobToEdit.payRange);
-        setEditingJob(jobToEdit);
-        setPayType(parsedPayRange.payType);
-        setWorkLocation({
-          street: jobToEdit.locationStreet ?? "",
-          city: jobToEdit.locationCity,
-          state: jobToEdit.locationState,
-          zip: jobToEdit.locationZip ?? ""
+      const nextAccount = { id: user.id, email: user.email ?? "" };
+      setAccount(nextAccount);
+
+      const { data: profile } = await supabase.from("employer_profiles").select("*").eq("user_id", user.id).maybeSingle();
+      if (profile) {
+        const zipMatch = getCityStateForZip(profile.location_zip ?? "");
+        setCompanyProfile({
+          employerEmail: user.email ?? "",
+          streetAddress: "",
+          city: zipMatch?.city ?? "",
+          state: zipMatch?.state ?? "",
+          zipCode: profile.location_zip ?? ""
         });
+      }
+
+      const editJobId = new URLSearchParams(window.location.search).get("edit");
+      if (editJobId) {
+        const { data: jobToEdit } = await supabase
+          .from("job_posts")
+          .select("*")
+          .eq("id", editJobId)
+          .eq("employer_id", user.id)
+          .maybeSingle();
+
+        if (jobToEdit) {
+          const mappedJob = mapSupabaseJob(jobToEdit, user.email ?? "");
+          const parsedPayRange = parsePayRange(mappedJob.payRange);
+          setEditingJob(mappedJob);
+          setPayType(parsedPayRange.payType);
+          setWorkLocation({
+            street: mappedJob.locationStreet ?? "",
+            city: mappedJob.locationCity,
+            state: mappedJob.locationState,
+            zip: mappedJob.locationZip ?? ""
+          });
+        }
       }
     }
   }, []);
@@ -178,7 +233,7 @@ export function EmployerJobForm() {
     }
   }
 
-  function saveJob(event: FormEvent<HTMLFormElement>) {
+  async function saveJob(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!account) {
@@ -186,8 +241,6 @@ export function EmployerJobForm() {
     }
 
     const formData = new FormData(event.currentTarget);
-    const savedJobs = localStorage.getItem(employerJobsKey);
-    const jobs = savedJobs ? (JSON.parse(savedJobs) as JobListing[]) : [];
     const jobData = {
       title: String(formData.get("title") ?? "").trim(),
       locationStreet: workLocation.street.trim(),
@@ -204,39 +257,41 @@ export function EmployerJobForm() {
       description: String(formData.get("description") ?? "").trim()
     };
 
-    if (editingJob) {
-      const updatedJobs = jobs.map((job) =>
-        job.id === editingJob.id && job.employerEmail === account.email
-          ? {
-              ...job,
-              ...jobData,
-              id: job.id,
-              employerEmail: job.employerEmail,
-              createdAt: job.createdAt,
-              status: job.status
-            }
-          : job
-      );
+    if (!account.id) {
+      return;
+    }
 
-      localStorage.setItem(employerJobsKey, JSON.stringify(updatedJobs));
+    const payValues = parsePayValues(jobData.payRange);
+    const payload = {
+      employer_id: account.id,
+      title: jobData.title,
+      location_zip: jobData.locationZip,
+      pay_min: payValues.min,
+      pay_max: payValues.max,
+      pay_type: payType === "annual" ? "annual" : "per-hour",
+      job_type: jobData.jobType,
+      shift: jobData.schedule,
+      work_setting: [jobData.locationStreet, jobData.locationCity, jobData.locationState].filter(Boolean).join(", "),
+      required_capabilities: jobData.requiredSkills,
+      preferred_capabilities: [],
+      experience_level: "",
+      summary: jobData.description,
+      active: true
+    };
+
+    if (editingJob) {
+      await supabase.from("job_posts").update(payload).eq("id", editingJob.id).eq("employer_id", account.id);
       window.location.href = "/employer/jobs";
       return;
     }
 
-    const nextJob: JobListing = {
-      id: crypto.randomUUID(),
-      employerEmail: account.email,
-      ...jobData,
-      status: "Active",
-      createdAt: new Date().toISOString()
-    };
+    const { data: nextJob } = await supabase.from("job_posts").insert(payload).select("id").single();
 
-    localStorage.setItem(employerJobsKey, JSON.stringify([nextJob, ...jobs]));
     logAdminEvent({
       type: "job_created",
       userRole: "employer",
-      jobId: nextJob.id,
-      employerId: account.email
+      jobId: nextJob?.id,
+      employerId: account.id
     });
     window.location.href = "/employer/jobs";
   }

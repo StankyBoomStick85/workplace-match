@@ -1,11 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import L from "leaflet";
 import { MapContainer, Marker, Popup, TileLayer } from "react-leaflet";
-import { adminSessionKey } from "../lib/adminAuth";
-import { readAdminEvents, type AdminEvent } from "../lib/adminEvents";
+import { clearAdminSession, hasAdminSession } from "../lib/adminAuth";
+import { refreshAdminEvents, type AdminEvent } from "../lib/adminEvents";
 import { zipCityStateLookup } from "../lib/addressHelpers";
+import {
+  getAllCandidateProfiles,
+  getAllEmployerProfiles,
+  getAllJobs,
+  getCandidateInterests,
+  getEmployerInterests,
+  getMutualMatches
+} from "../lib/supabaseMvpData";
+import { supabase } from "../lib/supabase";
 
 type LocalAccount = {
   email: string;
@@ -83,19 +92,6 @@ type LatLng = {
   lng: number;
 };
 
-const candidateAccountKey = "workplace_match_candidate";
-const candidateAccountsKey = "workplace_match_candidate_accounts";
-const candidateProfileKey = "workplace_match_candidate_profile";
-const employerAccountKey = "workplace_match_employer";
-const employerAccountsKey = "workplace_match_employer_accounts";
-const companyProfileKey = "workplace_match_employer_company_profile";
-const employerJobsKey = "workplace_match_employer_jobs";
-const employerInterestsKey = "workplace_match_employer_interests";
-const candidateInterestsKey = "workplace_match_candidate_interests";
-const mutualMatchesKey = "workplace_match_mutual_matches";
-const notificationsKey = "workplace_match_contact_notifications";
-const messagesKey = "workplace_match_match_messages";
-
 const zipCoordinateLookup: Record<string, LatLng> = {
   "63026": { lat: 38.5131, lng: -90.4359 },
   "63077": { lat: 38.3453, lng: -90.9807 },
@@ -139,7 +135,7 @@ export function AdminDashboard() {
   const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
-    if (localStorage.getItem(adminSessionKey) !== "true") {
+    if (!hasAdminSession()) {
       window.location.href = "/admin/login";
       return;
     }
@@ -150,23 +146,26 @@ export function AdminDashboard() {
       setRefreshToken((current) => current + 1);
     }
 
-    window.addEventListener("storage", refreshAdminData);
     window.addEventListener("workplace-match-admin-events-updated", refreshAdminData);
     window.addEventListener("workplace-match-notifications-updated", refreshAdminData);
     window.addEventListener("workplace-match-messages-updated", refreshAdminData);
 
     return () => {
-      window.removeEventListener("storage", refreshAdminData);
       window.removeEventListener("workplace-match-admin-events-updated", refreshAdminData);
       window.removeEventListener("workplace-match-notifications-updated", refreshAdminData);
       window.removeEventListener("workplace-match-messages-updated", refreshAdminData);
     };
   }, []);
 
-  const data = useMemo(
-    () => (isSessionChecked ? buildAdminData() : emptyAdminData),
-    [refreshToken, isSessionChecked]
-  );
+  const [data, setData] = useState(emptyAdminData);
+
+  useEffect(() => {
+    if (!isSessionChecked) {
+      return;
+    }
+
+    buildAdminData().then(setData);
+  }, [refreshToken, isSessionChecked]);
 
   if (!isSessionChecked) {
     return (
@@ -183,13 +182,13 @@ export function AdminDashboard() {
           <p className="text-sm font-bold uppercase tracking-[0.16em] text-red-800">Admin</p>
           <h1 className="mt-2 text-3xl font-bold text-zinc-950">Beta testing dashboard</h1>
           <p className="mt-2 text-sm text-zinc-600">
-            LocalStorage-only review tools. Applicant map markers are generalized to ZIP areas.
+            Supabase-backed review tools. Applicant map markers are generalized to ZIP areas.
           </p>
         </div>
         <button
           type="button"
           onClick={() => {
-            localStorage.removeItem(adminSessionKey);
+            clearAdminSession();
             window.location.href = "/admin/login";
           }}
           className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-gray-50"
@@ -367,57 +366,56 @@ export function AdminDashboard() {
   );
 }
 
-function buildAdminData() {
-  const candidateAccounts = readAccounts(candidateAccountsKey, candidateAccountKey);
-  const employerAccounts = readAccounts(employerAccountsKey, employerAccountKey);
-  const candidateProfiles = readCandidateProfiles();
-  const companyProfiles = readCompanyProfiles();
-  const employerInterests = readArray<InterestRecord>(employerInterestsKey);
-  const candidateInterests = readArray<InterestRecord>(candidateInterestsKey);
-  const mutualMatches = readArray<InterestRecord>(mutualMatchesKey);
-  const messages = readArray<MessageRecord>(messagesKey);
-  const notifications = readArray<NotificationRecord>(notificationsKey);
-  const events = readAdminEvents().sort((first, second) => new Date(second.timestamp).getTime() - new Date(first.timestamp).getTime());
+async function buildAdminData() {
+  const [candidateProfiles, employerProfiles, allJobs, employerInterests, candidateInterests, mutualMatches, events, messageResult, notificationResult] =
+    await Promise.all([
+      getAllCandidateProfiles(),
+      getAllEmployerProfiles(),
+      getAllJobs(),
+      getEmployerInterests(),
+      getCandidateInterests(),
+      getMutualMatches(),
+      refreshAdminEvents(),
+      supabase.from("match_messages").select("job_id"),
+      supabase.from("notifications").select("type")
+    ]);
 
-  const employers = employerAccounts;
-  const jobs = readArray<JobListing>(employerJobsKey)
-    .filter((job) => job?.id && !isSeedJob(job))
-    .map((job) => {
-      const employerAccount = employerAccounts.find((account) => normalizeEmail(account.email) === normalizeEmail(job.employerEmail));
-      const companyProfile = companyProfiles.find((profile) => normalizeEmail(profile.employerEmail ?? "") === normalizeEmail(job.employerEmail));
-      return {
-        ...job,
-        companyName: getCompanyName(employerAccount, companyProfile),
-        matchCount: mutualMatches.filter((match) => match.jobId === job.id).length,
-        interestCount: [...employerInterests, ...candidateInterests].filter((interest) => interest.jobId === job.id).length,
-        position: getZipPosition(job.locationZip)
-      };
-    });
+  const employers = employerProfiles.map((profile) => ({
+    email: profile.employerEmail,
+    companyName: profile.companyName,
+    zipCode: profile.zipCode
+  }));
+  const jobs = allJobs.map((job) => {
+    const companyProfile = employerProfiles.find((profile) => profile.userId === job.employerId);
+    return {
+      ...job,
+      companyName: companyProfile?.companyName || "Employer",
+      matchCount: mutualMatches.filter((match) => match.jobId === job.id).length,
+      interestCount: [...employerInterests, ...candidateInterests].filter((interest) => interest.jobId === job.id).length,
+      position: getZipPosition(job.locationZip)
+    };
+  });
 
-  const candidates = candidateAccounts.map((account, index) => {
-    const matchingProfile =
-      candidateProfiles.find((profile) => normalizeEmail(profile.candidateEmail ?? "") === normalizeEmail(account.email)) ??
-      (candidateProfiles.length === 1 ? candidateProfiles[0] : null);
-    const zipCode = matchingProfile?.zipCode || account.zipCode || "";
+  const candidates = candidateProfiles.map((profile) => {
+    const zipCode = profile.zipCode || "";
     const cityState = zipCityStateLookup[zipCode] ?? null;
-    const city = cityState?.city || matchingProfile?.city || account.city || "";
-    const state = cityState?.state || matchingProfile?.state || account.state || "";
-    const candidateId = account.email || matchingProfile?.candidateEmail || `candidate-${index}`;
-    const skillsCount = Array.isArray(matchingProfile?.topSkills) ? matchingProfile.topSkills.length : 0;
+    const candidateId = profile.userId;
+    const skillsCount = Array.isArray(profile.topSkills) ? profile.topSkills.length : 0;
 
     return {
       id: candidateId,
-      city,
-      state,
+      city: cityState?.city || "",
+      state: cityState?.state || "",
       zipCode,
       skillsCount,
-      matchCount: mutualMatches.filter((match) => normalizeEmail(match.candidateId) === normalizeEmail(candidateId)).length,
-      interestCount: [...employerInterests, ...candidateInterests].filter(
-        (interest) => normalizeEmail(interest.candidateId) === normalizeEmail(candidateId)
-      ).length,
+      matchCount: mutualMatches.filter((match) => match.candidateId === candidateId).length,
+      interestCount: [...employerInterests, ...candidateInterests].filter((interest) => interest.candidateId === candidateId).length,
       position: getZipPosition(zipCode)
     };
   });
+
+  const notifications = notificationResult.data ?? [];
+  const messages = messageResult.data ?? [];
 
   return {
     candidates,
@@ -427,74 +425,15 @@ function buildAdminData() {
     candidateInterests,
     totalInterests: employerInterests.length + candidateInterests.length,
     mutualMatches,
-    messages,
-    scheduleRequests: notifications.filter((notification) => notification.type === "schedule_request").length,
+    messages: (messages as Array<{ job_id: string }>).map((message) => ({ jobId: message.job_id })),
+    scheduleRequests: notifications.filter((notification: NotificationRecord) => notification.type === "schedule_request").length,
     reachOutAttempts: events.filter((event) => event.type === "reach_out_clicked").length,
     events
   };
 }
 
-function readAccounts(accountsKey: string, legacyKey: string) {
-  const accounts = readArray<LocalAccount>(accountsKey);
-  const legacy = readObject<LocalAccount>(legacyKey);
-  const byEmail = new Map<string, LocalAccount>();
-  [...accounts, ...(legacy ? [legacy] : [])].forEach((account) => {
-    if (account?.email) {
-      byEmail.set(normalizeEmail(account.email), account);
-    }
-  });
-  return Array.from(byEmail.values());
-}
-
-function readCandidateProfiles() {
-  const profile = readObject<CandidateProfile>(candidateProfileKey);
-  return profile ? [profile] : [];
-}
-
-function readCompanyProfiles() {
-  const profile = readObject<CompanyProfile>(companyProfileKey);
-  return profile ? [profile] : [];
-}
-
-function readArray<T>(key: string) {
-  const saved = localStorage.getItem(key);
-  if (!saved) {
-    return [] as T[];
-  }
-
-  try {
-    const parsed = JSON.parse(saved) as T[] | T;
-    return Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
-  } catch {
-    return [] as T[];
-  }
-}
-
-function readObject<T>(key: string) {
-  const saved = localStorage.getItem(key);
-  if (!saved) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(saved) as T;
-    return parsed && typeof parsed === "object" ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
 function getZipPosition(zipCode?: string) {
   return zipCode ? zipCoordinateLookup[zipCode] ?? null : null;
-}
-
-function getCompanyName(account?: LocalAccount, profile?: CompanyProfile) {
-  const companyName = profile?.companyName?.trim() || account?.companyName?.trim() || account?.displayName?.trim();
-  return companyName || "Employer";
-}
-
-function normalizeEmail(email: string) {
-  return email.trim().toLowerCase();
 }
 
 function formatLocation(city?: string, state?: string, zipCode?: string) {

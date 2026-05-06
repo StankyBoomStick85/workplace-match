@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect } from "react";
-import { adminSessionKey } from "../../lib/adminAuth";
+import { hasAdminSession } from "../../lib/adminAuth";
 
 export default function AdminIndexPage() {
   useEffect(() => {
-    window.location.href = localStorage.getItem(adminSessionKey) === "true" ? "/admin/dashboard" : "/admin/login";
+    window.location.href = hasAdminSession() ? "/admin/dashboard" : "/admin/login";
   }, []);
 
   return (

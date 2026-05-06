@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { adminSessionKey } from "../lib/adminAuth";
+import { setAdminSession } from "../lib/adminAuth";
 
 const adminEmail = "admin@workplacematch.local";
 const adminPassword = "workplace-admin";
@@ -23,7 +23,7 @@ export function AdminLoginForm() {
       return;
     }
 
-    localStorage.setItem(adminSessionKey, "true");
+    setAdminSession();
     window.location.href = "/admin/dashboard";
   }
 

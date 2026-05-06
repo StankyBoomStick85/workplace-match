@@ -24,22 +24,10 @@ export type AdminEvent = {
 };
 
 export const adminEventsKey = "workplace_match_admin_events";
+let adminEventCache: AdminEvent[] = [];
 
 export function readAdminEvents() {
-  if (typeof window === "undefined") {
-    return [];
-  }
-
-  const savedEvents = localStorage.getItem(adminEventsKey);
-  if (!savedEvents) {
-    return [];
-  }
-
-  try {
-    return JSON.parse(savedEvents) as AdminEvent[];
-  } catch {
-    return [];
-  }
+  return adminEventCache;
 }
 
 export function logAdminEvent(event: Omit<AdminEvent, "id" | "timestamp">) {
@@ -62,9 +50,39 @@ export function logAdminEvent(event: Omit<AdminEvent, "id" | "timestamp">) {
     timestamp: new Date().toISOString()
   };
 
-  localStorage.setItem(adminEventsKey, JSON.stringify([nextEvent, ...events].slice(0, 500)));
-  window.dispatchEvent(new Event("workplace-match-admin-events-updated"));
+  adminEventCache = [nextEvent, ...events].slice(0, 500);
+  supabase.from("admin_activity_events").insert({
+    type: nextEvent.type,
+    user_role: nextEvent.userRole,
+    job_id: normalizeUuid(nextEvent.jobId),
+    applicant_id: normalizeUuid(nextEvent.applicantId),
+    employer_id: normalizeUuid(nextEvent.employerId),
+    metadata: nextEvent.metadata ?? {},
+    dedupe_key: nextEvent.dedupeKey
+  }).then(() => {
+    window.dispatchEvent(new Event("workplace-match-admin-events-updated"));
+  });
   return nextEvent;
+}
+
+export async function refreshAdminEvents() {
+  const { data } = await supabase
+    .from("admin_activity_events")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(500);
+  adminEventCache = (data ?? []).map((event: any) => ({
+    id: event.id,
+    type: event.type,
+    timestamp: event.created_at,
+    userRole: event.user_role,
+    jobId: event.job_id,
+    applicantId: event.applicant_id,
+    employerId: event.employer_id,
+    dedupeKey: event.dedupe_key,
+    metadata: event.metadata ?? {}
+  }));
+  return adminEventCache;
 }
 
 function safeIdentifier(value: string, prefix: string) {
@@ -84,3 +102,10 @@ function stableHash(value: string) {
 
   return hash.toString(36);
 }
+
+function normalizeUuid(value?: string) {
+  return value && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+    ? value
+    : null;
+}
+import { supabase } from "./supabase";

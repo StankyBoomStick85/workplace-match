@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { getCityStateForZip } from "../lib/addressHelpers";
+import { supabase } from "../lib/supabase";
 
 type EmployerAccount = {
   email: string;
@@ -24,28 +26,35 @@ type JobListing = {
   createdAt: string;
 };
 
-const employerAccountKey = "workplace_match_employer";
-const employerJobsKey = "workplace_match_employer_jobs";
-const activeRoleKey = "workplace_match_active_role";
-
 export function EmployerJobsBoard() {
   const [account, setAccount] = useState<EmployerAccount | null>(null);
   const [jobs, setJobs] = useState<JobListing[]>([]);
 
   useEffect(() => {
-    const savedAccount = localStorage.getItem(employerAccountKey);
-    const activeRole = localStorage.getItem(activeRoleKey);
-    if (!savedAccount || activeRole !== "employer") {
-      window.location.href = "/employer/login";
-      return;
+    loadJobs();
+
+    async function loadJobs() {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const user = sessionData.session?.user ?? null;
+      if (!user) {
+        window.location.href = "/employer/login";
+        return;
+      }
+
+      const { data: userRecord } = await supabase.from("users").select("role").eq("id", user.id).maybeSingle();
+      if (userRecord?.role !== "employer") {
+        window.location.href = "/employer/login";
+        return;
+      }
+
+      setAccount({ email: user.email ?? "" });
+      const { data } = await supabase
+        .from("job_posts")
+        .select("*")
+        .eq("employer_id", user.id)
+        .order("created_at", { ascending: false });
+      setJobs((data ?? []).map((job) => mapSupabaseJob(job, user.email ?? "")));
     }
-
-    const parsedAccount = JSON.parse(savedAccount) as EmployerAccount;
-    setAccount(parsedAccount);
-
-    const savedJobs = localStorage.getItem(employerJobsKey);
-    const parsedJobs = savedJobs ? (JSON.parse(savedJobs) as JobListing[]) : [];
-    setJobs(parsedJobs.filter((job) => job.employerEmail === parsedAccount.email));
   }, []);
 
   if (!account) {
@@ -138,6 +147,36 @@ function formatJobLocation(job: JobListing) {
     .join(", ");
 
   return [job.locationStreet, cityStateZip].filter(Boolean).join(", ");
+}
+
+function mapSupabaseJob(job: any, employerEmail: string): JobListing {
+  const zipMatch = getCityStateForZip(job.location_zip ?? "");
+  return {
+    id: job.id,
+    employerEmail,
+    title: job.title ?? "",
+    locationCity: zipMatch?.city ?? "",
+    locationState: zipMatch?.state ?? "",
+    locationZip: job.location_zip ?? "",
+    payRange: formatStoredPay(job.pay_min, job.pay_max, job.pay_type),
+    jobType: job.job_type ?? "",
+    schedule: job.shift ?? "",
+    requiredSkills: job.required_capabilities ?? [],
+    description: job.summary ?? "",
+    status: "Active",
+    createdAt: job.created_at ?? ""
+  };
+}
+
+function formatStoredPay(payMin?: number | null, payMax?: number | null, payType?: string | null) {
+  const suffix = payType === "annual" ? "/year" : "/hr";
+  if (payMin && payMax && payMax !== payMin) {
+    return `$${payMin}-$${payMax}${suffix}`;
+  }
+  if (payMin) {
+    return `$${payMin}${suffix}`;
+  }
+  return "";
 }
 
 function JobDetail({ label, value }: { label: string; value: string }) {

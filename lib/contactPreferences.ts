@@ -1,4 +1,9 @@
 import type { LocalAccount } from "./localAccounts";
+import {
+  addNotification,
+  markNotificationsReadForEmail,
+  readNotificationsForEmail
+} from "./supabaseMvpData";
 
 export type ContactMethod = "email" | "text" | "call";
 
@@ -20,6 +25,7 @@ export type ContactNotification = {
 
 export const defaultContactPreference: ContactMethod[] = ["email", "text", "call"];
 export const contactNotificationsKey = "workplace_match_contact_notifications";
+let notificationCache: ContactNotification[] = [];
 
 export function getPreferredContactMethods(account: Partial<LocalAccount> | null | undefined) {
   const storedPreference = account?.preferredContactMethods;
@@ -75,14 +81,6 @@ export function addContactNotification(
   notification: Omit<ContactNotification, "id" | "createdAt" | "status" | "type" | "title"> &
     Partial<Pick<ContactNotification, "type" | "title">>
 ) {
-  const notifications = readContactNotifications();
-  if (notification.dedupeKey) {
-    const existingNotification = notifications.find((storedNotification) => storedNotification.dedupeKey === notification.dedupeKey);
-    if (existingNotification) {
-      return existingNotification;
-    }
-  }
-
   const nextNotification: ContactNotification = {
     ...notification,
     type: notification.type ?? "missed_contact",
@@ -92,8 +90,10 @@ export function addContactNotification(
     status: "unread"
   };
 
-  localStorage.setItem(contactNotificationsKey, JSON.stringify([nextNotification, ...notifications]));
-  window.dispatchEvent(new Event("workplace-match-notifications-updated"));
+  notificationCache = [nextNotification, ...notificationCache];
+  addNotification(nextNotification).then(() => {
+    window.dispatchEvent(new Event("workplace-match-notifications-updated"));
+  });
   return nextNotification;
 }
 
@@ -123,16 +123,7 @@ export function addScheduleRequestNotification(notification: Omit<ContactNotific
 }
 
 export function readContactNotifications() {
-  const savedNotifications = localStorage.getItem(contactNotificationsKey);
-  if (!savedNotifications) {
-    return [];
-  }
-
-  try {
-    return JSON.parse(savedNotifications) as ContactNotification[];
-  } catch {
-    return [];
-  }
+  return notificationCache;
 }
 
 export function getUnreadContactNotifications(recipientEmail: string) {
@@ -153,16 +144,23 @@ export function getNotificationsForRecipient(recipientEmail: string) {
 
 export function markNotificationsRead(recipientEmail: string) {
   const normalizedRecipientEmail = recipientEmail.trim().toLowerCase();
-  const notifications = readContactNotifications();
-  const updatedNotifications = notifications.map((notification) =>
+  const updatedNotifications = notificationCache.map((notification) =>
     notification.recipientEmail.trim().toLowerCase() === normalizedRecipientEmail
       ? { ...notification, status: "read" as const }
       : notification
   );
 
-  localStorage.setItem(contactNotificationsKey, JSON.stringify(updatedNotifications));
-  window.dispatchEvent(new Event("workplace-match-notifications-updated"));
+  notificationCache = updatedNotifications;
+  markNotificationsReadForEmail(recipientEmail).then((notifications) => {
+    notificationCache = notifications;
+    window.dispatchEvent(new Event("workplace-match-notifications-updated"));
+  });
   return updatedNotifications;
+}
+
+export async function refreshContactNotifications(recipientEmail: string) {
+  notificationCache = await readNotificationsForEmail(recipientEmail);
+  return getNotificationsForRecipient(recipientEmail);
 }
 
 function isContactMethod(value: unknown): value is ContactMethod {

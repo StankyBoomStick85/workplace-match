@@ -2,22 +2,12 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import {
-  findAccountByEmail,
-  normalizeEmail,
-  saveNewAccount,
-  setActiveAccount
-} from "../lib/localAccounts";
 import { logAdminEvent } from "../lib/adminEvents";
+import { supabase } from "../lib/supabase";
 
 type CandidateAuthFormProps = {
   mode: "login" | "signup";
 };
-
-const storageKey = "workplace_match_candidate";
-const accountsStorageKey = "workplace_match_candidate_accounts";
-const activeRoleKey = "workplace_match_active_role";
-const activeEmailKey = "workplace_match_active_email";
 
 export function CandidateAuthForm({ mode }: CandidateAuthFormProps) {
   const isSignup = mode === "signup";
@@ -40,12 +30,12 @@ export function CandidateAuthForm({ mode }: CandidateAuthFormProps) {
     }
   }
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
 
     const formData = new FormData(event.currentTarget);
-    const email = normalizeEmail(String(formData.get("email") ?? ""));
+    const email = String(formData.get("email") ?? "").trim().toLowerCase();
 
     if (!email || !password || (isSignup && !confirmPassword)) {
       setError("Enter an email and password.");
@@ -58,41 +48,50 @@ export function CandidateAuthForm({ mode }: CandidateAuthFormProps) {
         return;
       }
 
-      const savedAccount = saveNewAccount(accountsStorageKey, storageKey, {
+      const { data, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
-        profileComplete: false,
-        createdAt: new Date().toISOString()
+        options: { data: { role: "candidate" } }
       });
 
-      if (!savedAccount.ok) {
-        setError("An account already exists with that email.");
+      if (signUpError || !data.user) {
+        setError(signUpError?.message ?? "Unable to create account.");
         return;
       }
 
-      setActiveAccount(storageKey, activeRoleKey, activeEmailKey, "candidate", savedAccount.account);
+      await supabase.from("users").upsert({
+        id: data.user.id,
+        email,
+        role: "candidate"
+      });
       logAdminEvent({
         type: "signup_created",
         userRole: "candidate",
-        applicantId: savedAccount.account.email,
-        dedupeKey: `signup_created:candidate:${savedAccount.account.email}`
+        applicantId: data.user.id,
+        dedupeKey: `signup_created:candidate:${data.user.id}`
       });
       window.location.href = "/candidate/dashboard";
       return;
     }
 
-    const account = findAccountByEmail(accountsStorageKey, storageKey, email);
-    if (!account) {
-      setError("No account found. Create an account first.");
-      return;
-    }
-
-    if (account.password !== password) {
+    const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+    if (signInError || !data.user) {
       setError("Email or password does not match.");
       return;
     }
 
-    setActiveAccount(storageKey, activeRoleKey, activeEmailKey, "candidate", account);
+    const { data: userRecord } = await supabase
+      .from("users")
+      .select("role")
+      .eq("id", data.user.id)
+      .maybeSingle();
+
+    if (userRecord?.role !== "candidate") {
+      await supabase.auth.signOut();
+      setError("This account is not an applicant account.");
+      return;
+    }
+
     window.location.href = "/candidate/dashboard";
   }
 

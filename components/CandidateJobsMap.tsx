@@ -17,9 +17,21 @@ import {
   type MatchThreadContext
 } from "../lib/matchMessages";
 import { logAdminEvent } from "../lib/adminEvents";
+import {
+  addInterest as addSupabaseInterest,
+  addMutualMatch as addSupabaseMutualMatch,
+  getAllJobs,
+  getCandidateInterests,
+  getCandidateProfile,
+  getCurrentMvpUser,
+  getEmployerInterests,
+  getMutualMatches,
+  removeInterest as removeSupabaseInterest
+} from "../lib/supabaseMvpData";
 import { RemoveInterestConfirmationModal } from "./RemoveInterestConfirmationModal";
 
 type CandidateAccount = {
+  id?: string;
   email: string;
   displayName?: string;
   streetAddress?: string;
@@ -53,6 +65,7 @@ type CandidateProfile = {
 type JobListing = {
   id: string;
   employerEmail: string;
+  employerId?: string;
   title: string;
   locationStreet?: string;
   locationCity: string;
@@ -244,31 +257,33 @@ export function CandidateJobsMap() {
   const suppressClusterReopenRef = useRef(false);
 
   useEffect(() => {
-    const savedAccount = localStorage.getItem(candidateAccountKey);
-    const activeRole = localStorage.getItem(activeRoleKey);
-    if (!savedAccount || activeRole !== "candidate") {
-      window.location.href = "/candidate/login";
-      return;
-    }
+    loadMapData();
 
-    const savedProfile = readLocalStorageObject<CandidateProfile>(candidateProfileKey);
-    const savedJobs = readLocalStorageArray<JobListing>(employerJobsKey);
-    const savedCandidateInterests = readLocalStorageArray<CandidateInterest>(candidateInterestsKey);
-    const savedEmployerInterests = readLocalStorageArray<EmployerInterest>(employerInterestsKey);
-    const savedMutualMatches = readLocalStorageArray<MutualMatch>(mutualMatchesKey);
-    const savedFilters = readLocalStorageObject<JobFilters>(savedFiltersKey);
+    async function loadMapData() {
+      const user = await getCurrentMvpUser("candidate");
+      if (!user) {
+        window.location.href = "/candidate/login";
+        return;
+      }
 
-    const parsedAccount = JSON.parse(savedAccount) as CandidateAccount;
-    setAccount(parsedAccount);
-    setProfile(savedProfile ?? getCandidateMapProfileFromAccount(parsedAccount));
-    setHasAcknowledgedPrivacyNotice(hasPrivacyNoticeAcknowledgement(parsedAccount.email));
-    setJobs(getEmployerCreatedJobs(savedJobs));
-    setCompanyProfile(readLocalStorageObject<CompanyProfile>(employerCompanyProfileKey));
-    setCandidateInterests(savedCandidateInterests);
-    setEmployerInterests(savedEmployerInterests);
-    setMutualMatches(savedMutualMatches);
-    if (savedFilters) {
-      applySavedFilters(savedFilters);
+      const [savedProfile, savedJobs, savedCandidateInterests, savedEmployerInterests, savedMutualMatches] =
+        await Promise.all([
+          getCandidateProfile(user.id),
+          getAllJobs(),
+          getCandidateInterests(),
+          getEmployerInterests(),
+          getMutualMatches()
+        ]);
+
+      const parsedAccount = { id: user.id, email: user.email };
+      setAccount(parsedAccount);
+      setProfile(savedProfile ?? getCandidateMapProfileFromAccount(parsedAccount));
+      setHasAcknowledgedPrivacyNotice(true);
+      setJobs(getEmployerCreatedJobs(savedJobs as JobListing[]));
+      setCompanyProfile(null);
+      setCandidateInterests(savedCandidateInterests as CandidateInterest[]);
+      setEmployerInterests(savedEmployerInterests as EmployerInterest[]);
+      setMutualMatches(savedMutualMatches as MutualMatch[]);
     }
   }, []);
 
@@ -462,7 +477,11 @@ export function CandidateJobsMap() {
       }
 
       const updated = [nextInterest, ...current];
-      localStorage.setItem(candidateInterestsKey, JSON.stringify(updated));
+      addSupabaseInterest({
+        fromUserId: nextInterest.candidateId,
+        toUserId: job.employerId ?? nextInterest.employerId,
+        jobId: nextInterest.jobId
+      });
       logAdminEvent({
         type: "interest_selected",
         userRole: "candidate",
@@ -492,7 +511,12 @@ export function CandidateJobsMap() {
         }
 
         const updated = [nextMutualMatch, ...current];
-        localStorage.setItem(mutualMatchesKey, JSON.stringify(updated));
+        addSupabaseMutualMatch({
+          candidateId: nextMutualMatch.candidateId,
+          employerId: job.employerId ?? nextMutualMatch.employerId,
+          jobId: nextMutualMatch.jobId,
+          matchPercent: nextMutualMatch.matchPercent
+        });
         logAdminEvent({
           type: "mutual_match_created",
           userRole: "candidate",
@@ -538,7 +562,11 @@ export function CandidateJobsMap() {
             interest.candidateId === candidateId
           )
       );
-      localStorage.setItem(candidateInterestsKey, JSON.stringify(updated));
+      removeSupabaseInterest({
+        fromUserId: candidateId,
+        toUserId: job.employerId ?? job.employerEmail,
+        jobId: job.id
+      });
       if (updated.length !== current.length) {
         logAdminEvent({
           type: "interest_removed",
@@ -560,7 +588,6 @@ export function CandidateJobsMap() {
             match.candidateId === candidateId
           )
       );
-      localStorage.setItem(mutualMatchesKey, JSON.stringify(updated));
       return updated;
     });
   }
@@ -824,7 +851,6 @@ export function CandidateJobsMap() {
     setMinHourlyPay(null);
     setInterestStatusFilter("all");
     setFilterSaveMessage("");
-    localStorage.removeItem(savedFiltersKey);
   }
 
   function openFilters() {
@@ -842,7 +868,6 @@ export function CandidateJobsMap() {
   }
 
   function saveFilters() {
-    localStorage.setItem(savedFiltersKey, JSON.stringify(filters));
     setIsFiltersExpanded(false);
     setFilterSaveMessage("Filters saved");
   }
@@ -1824,40 +1849,8 @@ function FreehandSearchAreaTool({
   return null;
 }
 
-function readLocalStorageArray<T>(key: string) {
-  const value = localStorage.getItem(key);
-  if (!value) {
-    return [];
-  }
-
-  try {
-    return JSON.parse(value) as T[];
-  } catch {
-    return [];
-  }
-}
-
-function readLocalStorageObject<T>(key: string) {
-  const value = localStorage.getItem(key);
-  if (!value) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return null;
-  }
-}
-
 function findEmployerAccount(email: string) {
-  const normalizedEmail = email.trim().toLowerCase();
-  const accounts = [
-    ...readLocalStorageArray<EmployerAccount>(employerAccountsKey),
-    readLocalStorageObject<EmployerAccount>(employerAccountKey)
-  ].filter(Boolean) as EmployerAccount[];
-
-  return accounts.find((account) => account.email.trim().toLowerCase() === normalizedEmail) ?? null;
+  return { email, availabilityWindows: [] };
 }
 
 function getEmployerCreatedJobs(jobs: JobListing[]) {
@@ -1995,14 +1988,7 @@ function getApplicantExactAddressMapPosition(profile: CandidateProfile | Candida
 }
 
 function updateCandidateAccountInAccountsArray(updatedAccount: CandidateAccount) {
-  const accounts = readLocalStorageArray<CandidateAccount>(candidateAccountsKey);
-  const activeEmail = localStorage.getItem(activeEmailKey) ?? updatedAccount.email;
-  const normalizedActiveEmail = normalizeEmail(activeEmail);
-  const nextAccounts = accounts.some((account) => normalizeEmail(account.email) === normalizedActiveEmail)
-    ? accounts.map((account) => (normalizeEmail(account.email) === normalizedActiveEmail ? updatedAccount : account))
-    : [updatedAccount, ...accounts];
-
-  localStorage.setItem(candidateAccountsKey, JSON.stringify(nextAccounts));
+  void updatedAccount;
 }
 
 function normalizeEmail(email: string) {
@@ -2010,14 +1996,11 @@ function normalizeEmail(email: string) {
 }
 
 function hasPrivacyNoticeAcknowledgement(email: string) {
-  const acknowledgements = readLocalStorageObject<Record<string, boolean>>(jobsMapPrivacyAcknowledgementKey) ?? {};
-  return Boolean(acknowledgements[normalizeEmail(email)]);
+  return true;
 }
 
 function savePrivacyNoticeAcknowledgement(email: string) {
-  const acknowledgements = readLocalStorageObject<Record<string, boolean>>(jobsMapPrivacyAcknowledgementKey) ?? {};
-  acknowledgements[normalizeEmail(email)] = true;
-  localStorage.setItem(jobsMapPrivacyAcknowledgementKey, JSON.stringify(acknowledgements));
+  void email;
 }
 
 function normalizeSavedFilters(filters: JobFilters) {

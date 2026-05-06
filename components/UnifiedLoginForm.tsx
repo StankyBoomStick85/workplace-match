@@ -2,43 +2,45 @@
 
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
-import { findAccountByEmail, normalizeEmail, setActiveAccount } from "../lib/localAccounts";
+import { supabase } from "../lib/supabase";
 import { PasswordVisibilityField } from "./PasswordVisibilityField";
-
-const candidateAccountKey = "workplace_match_candidate";
-const candidateAccountsKey = "workplace_match_candidate_accounts";
-const employerAccountKey = "workplace_match_employer";
-const employerAccountsKey = "workplace_match_employer_accounts";
-const activeRoleKey = "workplace_match_active_role";
-const activeEmailKey = "workplace_match_active_email";
 
 export function UnifiedLoginForm() {
   const [error, setError] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
 
     const formData = new FormData(event.currentTarget);
-    const email = normalizeEmail(String(formData.get("email") ?? ""));
+    const email = String(formData.get("email") ?? "").trim().toLowerCase();
 
-    const candidate = findAccountByEmail(candidateAccountsKey, candidateAccountKey, email);
-    if (candidate?.password === password) {
-      setActiveAccount(candidateAccountKey, activeRoleKey, activeEmailKey, "candidate", candidate);
+    const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+    if (signInError || !data.user) {
+      setError("No account found with that email and password.");
+      return;
+    }
+
+    const { data: userRecord } = await supabase
+      .from("users")
+      .select("role")
+      .eq("id", data.user.id)
+      .maybeSingle();
+
+    if (userRecord?.role === "candidate") {
       window.location.href = "/candidate/dashboard";
       return;
     }
 
-    const employer = findAccountByEmail(employerAccountsKey, employerAccountKey, email);
-    if (employer?.password === password) {
-      setActiveAccount(employerAccountKey, activeRoleKey, activeEmailKey, "employer", employer);
+    if (userRecord?.role === "employer") {
       window.location.href = "/employer/dashboard";
       return;
     }
 
-    setError("No account found with that email and password.");
+    await supabase.auth.signOut();
+    setError("No applicant or employer role found for this account.");
   }
 
   return (
