@@ -1,24 +1,27 @@
-import { cookies } from "next/headers";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
-  const cookieStore = cookies();
+  let supabaseResponse = NextResponse.next({
+    request: {
+      headers: request.headers
+    }
+  });
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
     {
       cookies: {
         get(name: string) {
-          return cookieStore.get(name)?.value;
+          return request.cookies.get(name)?.value;
         },
         set(name: string, value: string, options: Record<string, unknown>) {
-          cookieStore.set({ name, value, ...options });
+          supabaseResponse.cookies.set({ name, value, ...options });
         },
         remove(name: string, options: Record<string, unknown>) {
-          cookieStore.set({ name, value: "", ...options });
+          supabaseResponse.cookies.set({ name, value: "", ...options });
         }
       }
     }
@@ -28,11 +31,12 @@ export async function GET(request: Request) {
     await supabase.auth.exchangeCodeForSession(code);
   }
 
-  const { data: sessionData } = await supabase.auth.getSession();
-  const user = sessionData.session?.user ?? null;
+  const {
+    data: { user }
+  } = await supabase.auth.getUser();
 
   if (!user) {
-    return NextResponse.redirect(new URL("/login", requestUrl.origin));
+    return redirectWithSupabaseCookies("/login", requestUrl, supabaseResponse);
   }
 
   const { data: existingUser } = await supabase
@@ -40,25 +44,24 @@ export async function GET(request: Request) {
     .select("role")
     .eq("id", user.id)
     .maybeSingle();
-  const intendedRole = cookieStore.get("workplace_match_oauth_role")?.value;
   const role =
-    existingUser?.role === "candidate" || existingUser?.role === "employer"
-      ? existingUser.role
-      : intendedRole === "candidate" || intendedRole === "employer"
-        ? intendedRole
-        : null;
+    existingUser?.role === "candidate" || existingUser?.role === "employer" ? existingUser.role : null;
+  const destination =
+    role === "employer" ? "/employer/dashboard" : role === "candidate" ? "/candidate/dashboard" : "/onboarding";
 
-  if (role) {
-    await supabase.from("users").upsert({
-      id: user.id,
-      email: user.email ?? "",
-      role
-    });
-  }
-
-  const response = NextResponse.redirect(
-    new URL(role === "employer" ? "/employer/dashboard" : role === "candidate" ? "/candidate/dashboard" : "/get-started", requestUrl.origin)
-  );
+  const response = redirectWithSupabaseCookies(destination, requestUrl, supabaseResponse);
   response.cookies.delete("workplace_match_oauth_role");
+  return response;
+}
+
+function redirectWithSupabaseCookies(
+  pathname: string,
+  requestUrl: URL,
+  supabaseResponse: NextResponse
+) {
+  const response = NextResponse.redirect(new URL(pathname, requestUrl.origin));
+  supabaseResponse.cookies.getAll().forEach((cookie) => {
+    response.cookies.set(cookie);
+  });
   return response;
 }

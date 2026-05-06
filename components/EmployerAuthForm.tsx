@@ -65,6 +65,13 @@ export function EmployerAuthForm({ mode }: EmployerAuthFormProps) {
         email,
         role: "employer"
       });
+      if (!data.session) {
+        const { error: sessionError } = await supabase.auth.signInWithPassword({ email, password });
+        if (sessionError) {
+          setError("Account created. Log in to continue.");
+          return;
+        }
+      }
       logAdminEvent({
         type: "signup_created",
         userRole: "employer",
