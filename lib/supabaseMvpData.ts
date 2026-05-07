@@ -1,6 +1,4 @@
-import { createSupabaseDirectClient } from "./supabase";
-
-const supabase = createSupabaseDirectClient();
+import { supabase } from "./supabase";
 
 export type MvpRole = "candidate" | "employer" | "admin";
 
