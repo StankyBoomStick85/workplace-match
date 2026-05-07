@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   getAllJobs,
   getCurrentMvpUser,
@@ -50,6 +50,7 @@ export function CandidateDashboard() {
   const [matchedJobs, setMatchedJobs] = useState<Array<{ job: MvpJobListing; match: MvpMatch }>>([]);
   const [isReady, setIsReady] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const isEditingRef = useRef(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -71,7 +72,9 @@ export function CandidateDashboard() {
       const { data } = await profileResponse.json();
       const nextProfile = mapProfileData(data);
       setProfile(nextProfile);
-      setDraftProfile(nextProfile);
+      if (!isEditingRef.current) {
+        setDraftProfile(nextProfile);
+      }
       setMatchedJobs(
         matches
           .filter((match) => match.candidateId === user.id)
@@ -106,11 +109,13 @@ export function CandidateDashboard() {
     }
 
     setProfile(draftProfile);
+    isEditingRef.current = false;
     setIsEditing(false);
     setMessage("Profile saved.");
   }
 
   function startEditing() {
+    isEditingRef.current = true;
     setDraftProfile(profile);
     setMessage("");
     setError("");
@@ -161,28 +166,28 @@ export function CandidateDashboard() {
             <div className="mt-6 space-y-5">
               <ProfileSection title="Personal Info">
                 <ProfileField label="Full name" id="fullName">
-                  <input id="fullName" value={draftProfile.fullName} onChange={(event) => updateDraft("fullName", event.target.value)} className="field" />
+                  <input id="fullName" value={draftProfile.fullName} onChange={(event) => updateDraft("fullName", event.target.value)} readOnly={!isEditing} className="field" />
                 </ProfileField>
                 <ProfileField label="ZIP code" id="zipCode">
-                  <input id="zipCode" value={draftProfile.zipCode} onChange={(event) => updateDraft("zipCode", event.target.value)} className="field" />
+                  <input id="zipCode" value={draftProfile.zipCode} onChange={(event) => updateDraft("zipCode", event.target.value)} readOnly={!isEditing} className="field" />
                 </ProfileField>
                 <ProfileField label="Search radius" id="searchRadius">
-                  <input id="searchRadius" type="number" min="0" value={draftProfile.searchRadius} onChange={(event) => updateDraft("searchRadius", event.target.value)} className="field" />
+                  <input id="searchRadius" type="number" min="0" value={draftProfile.searchRadius} onChange={(event) => updateDraft("searchRadius", event.target.value)} readOnly={!isEditing} className="field" />
                 </ProfileField>
               </ProfileSection>
 
               <ProfileSection title="Work Preferences">
                 <ProfileField label="Desired pay minimum" id="desiredPayMin">
-                  <input id="desiredPayMin" type="number" min="0" value={draftProfile.desiredPayMin} onChange={(event) => updateDraft("desiredPayMin", event.target.value)} className="field" />
+                  <input id="desiredPayMin" type="number" min="0" value={draftProfile.desiredPayMin} onChange={(event) => updateDraft("desiredPayMin", event.target.value)} readOnly={!isEditing} className="field" />
                 </ProfileField>
                 <ProfileField label="Pay type" id="payType">
-                  <select id="payType" value={draftProfile.payType} onChange={(event) => updateDraft("payType", event.target.value)} className="field">
+                  <select id="payType" value={draftProfile.payType} onChange={(event) => updateDraft("payType", event.target.value)} disabled={!isEditing} className="field">
                     <option value="hourly">Hourly</option>
                     <option value="salary">Salary</option>
                   </select>
                 </ProfileField>
                 <ProfileField label="Job type" id="jobType">
-                  <select id="jobType" value={draftProfile.jobType} onChange={(event) => updateDraft("jobType", event.target.value)} className="field">
+                  <select id="jobType" value={draftProfile.jobType} onChange={(event) => updateDraft("jobType", event.target.value)} disabled={!isEditing} className="field">
                     <option value="">Select type</option>
                     <option value="full-time">Full-time</option>
                     <option value="part-time">Part-time</option>
@@ -191,7 +196,7 @@ export function CandidateDashboard() {
                   </select>
                 </ProfileField>
                 <ProfileField label="Shift preference" id="shiftPreference">
-                  <select id="shiftPreference" value={draftProfile.shiftPreference} onChange={(event) => updateDraft("shiftPreference", event.target.value)} className="field">
+                  <select id="shiftPreference" value={draftProfile.shiftPreference} onChange={(event) => updateDraft("shiftPreference", event.target.value)} disabled={!isEditing} className="field">
                     <option value="">Select shift</option>
                     <option value="days">Days</option>
                     <option value="nights">Nights</option>
@@ -201,7 +206,7 @@ export function CandidateDashboard() {
                   </select>
                 </ProfileField>
                 <ProfileField label="Work setting" id="workSetting">
-                  <select id="workSetting" value={draftProfile.workSetting} onChange={(event) => updateDraft("workSetting", event.target.value)} className="field">
+                  <select id="workSetting" value={draftProfile.workSetting} onChange={(event) => updateDraft("workSetting", event.target.value)} disabled={!isEditing} className="field">
                     <option value="">Select setting</option>
                     <option value="on-site">On-site</option>
                     <option value="hybrid">Hybrid</option>
@@ -212,13 +217,13 @@ export function CandidateDashboard() {
 
               <ProfileSection title="Capability Profile">
                 <ProfileField label="Capability summary" id="capabilitySummary" fullWidth>
-                  <textarea id="capabilitySummary" rows={4} value={draftProfile.capabilitySummary} onChange={(event) => updateDraft("capabilitySummary", event.target.value)} className="field" />
+                  <textarea id="capabilitySummary" rows={4} value={draftProfile.capabilitySummary} onChange={(event) => updateDraft("capabilitySummary", event.target.value)} readOnly={!isEditing} className="field" />
                 </ProfileField>
                 <ProfileField label="Top skills" id="topSkills">
-                  <input id="topSkills" value={draftProfile.topSkills} onChange={(event) => updateDraft("topSkills", event.target.value)} className="field" />
+                  <input id="topSkills" value={draftProfile.topSkills} onChange={(event) => updateDraft("topSkills", event.target.value)} readOnly={!isEditing} className="field" />
                 </ProfileField>
                 <ProfileField label="Experience level" id="experienceLevel">
-                  <select id="experienceLevel" value={draftProfile.experienceLevel} onChange={(event) => updateDraft("experienceLevel", event.target.value)} className="field">
+                  <select id="experienceLevel" value={draftProfile.experienceLevel} onChange={(event) => updateDraft("experienceLevel", event.target.value)} disabled={!isEditing} className="field">
                     <option value="">Select level</option>
                     <option value="entry">Entry</option>
                     <option value="skilled">Skilled</option>
@@ -228,16 +233,16 @@ export function CandidateDashboard() {
                   </select>
                 </ProfileField>
                 <ProfileField label="Industries of interest" id="industriesOfInterest">
-                  <input id="industriesOfInterest" value={draftProfile.industriesOfInterest} onChange={(event) => updateDraft("industriesOfInterest", event.target.value)} className="field" />
+                  <input id="industriesOfInterest" value={draftProfile.industriesOfInterest} onChange={(event) => updateDraft("industriesOfInterest", event.target.value)} readOnly={!isEditing} className="field" />
                 </ProfileField>
               </ProfileSection>
 
               <ProfileSection title="Additional">
                 <ProfileField label="Available start date" id="availableStartDate">
-                  <input id="availableStartDate" type="date" value={draftProfile.availableStartDate} onChange={(event) => updateDraft("availableStartDate", event.target.value)} className="field" />
+                  <input id="availableStartDate" type="date" value={draftProfile.availableStartDate} onChange={(event) => updateDraft("availableStartDate", event.target.value)} readOnly={!isEditing} className="field" />
                 </ProfileField>
                 <ProfileField label="Willing to relocate" id="willingToRelocate">
-                  <select id="willingToRelocate" value={draftProfile.willingToRelocate} onChange={(event) => updateDraft("willingToRelocate", event.target.value)} className="field">
+                  <select id="willingToRelocate" value={draftProfile.willingToRelocate} onChange={(event) => updateDraft("willingToRelocate", event.target.value)} disabled={!isEditing} className="field">
                     <option value="">Select option</option>
                     <option value="yes">Yes</option>
                     <option value="no">No</option>
