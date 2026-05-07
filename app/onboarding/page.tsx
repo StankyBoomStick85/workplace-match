@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { logAdminEvent } from "../../lib/adminEvents";
 import { supabase } from "../../lib/supabase";
 
 type OnboardingRole = "candidate" | "employer";
 
 export default function OnboardingPage() {
+  const router = useRouter();
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState<OnboardingRole | null>(null);
 
@@ -82,7 +84,7 @@ export default function OnboardingPage() {
       dedupeKey: `signup_created:${role}:${user.id}`
     });
 
-    window.location.href = role === "candidate" ? "/candidate/dashboard" : "/employer/dashboard";
+    router.push(role === "candidate" ? "/candidate/dashboard" : "/employer/dashboard");
   }
 
   return (
