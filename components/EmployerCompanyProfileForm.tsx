@@ -38,21 +38,22 @@ export function EmployerCompanyProfileForm() {
     loadProfile();
 
     async function loadProfile() {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const user = sessionData.session?.user ?? null;
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         window.location.href = "/employer/login";
         return;
       }
 
-      const { data: userRecord } = await supabase.from("users").select("role").eq("id", user.id).maybeSingle();
+      const userResponse = await fetch("/api/user/me");
+      const userRecord = await userResponse.json();
       if (userRecord?.role !== "employer") {
         window.location.href = "/employer/login";
         return;
       }
 
       setAccount({ email: user.email ?? "" });
-      const { data } = await supabase.from("employer_profiles").select("*").eq("user_id", user.id).maybeSingle();
+      const profileResponse = await fetch(`/api/mvp/read?resource=employer-profile&userId=${encodeURIComponent(user.id)}`);
+      const { data } = await profileResponse.json();
       if (data) {
         const nextProfile: CompanyProfile = {
           employerEmail: user.email ?? "",
@@ -113,8 +114,7 @@ export function EmployerCompanyProfileForm() {
     }
 
     const formData = new FormData(event.currentTarget);
-    const { data: sessionData } = await supabase.auth.getSession();
-    const user = sessionData.session?.user ?? null;
+    const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       window.location.href = "/employer/login";
       return;

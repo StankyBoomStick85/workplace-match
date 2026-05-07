@@ -43,11 +43,9 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
 
   async function openNotification(notification: ContactNotification) {
     setIsOpen(false);
-    const { data: sessionData } = await supabase.auth.getSession();
-    const userId = sessionData.session?.user.id;
-    const { data: userRecord } = userId
-      ? await supabase.from("users").select("role").eq("id", userId).maybeSingle()
-      : { data: null };
+    const { data: { user } } = await supabase.auth.getUser();
+    const response = user ? await fetch("/api/user/me") : null;
+    const userRecord = response?.ok ? await response.json() : null;
     const activeRole = userRecord?.role;
 
     logAdminEvent({

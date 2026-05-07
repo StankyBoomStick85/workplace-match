@@ -24,11 +24,8 @@ export function UnifiedLoginForm() {
       return;
     }
 
-    const { data: userRecord } = await supabase
-      .from("users")
-      .select("role")
-      .eq("id", data.user.id)
-      .maybeSingle();
+    const response = await fetch("/api/user/me");
+    const userRecord = await response.json();
 
     if (userRecord?.role === "candidate") {
       window.location.href = "/candidate/dashboard";

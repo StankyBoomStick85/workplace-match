@@ -58,14 +58,14 @@ export function AccountSettings() {
 
     async function loadSettings() {
       const resolvedRole = resolveRole(searchParams.get("role"));
-      const { data: sessionData } = await supabase.auth.getSession();
-      const user = sessionData.session?.user ?? null;
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         window.location.href = resolvedRole === "employer" ? "/employer/login" : "/candidate/login";
         return;
       }
 
-      const { data: userRecord } = await supabase.from("users").select("role").eq("id", user.id).maybeSingle();
+      const userResponse = await fetch("/api/user/me");
+      const userRecord = await userResponse.json();
       if (userRecord?.role !== resolvedRole) {
         window.location.href = resolvedRole === "employer" ? "/employer/login" : "/candidate/login";
         return;
@@ -75,7 +75,8 @@ export function AccountSettings() {
       setUserId(user.id);
 
       if (resolvedRole === "candidate") {
-        const { data } = await supabase.from("candidate_profiles").select("*").eq("user_id", user.id).maybeSingle();
+        const profileResponse = await fetch(`/api/mvp/read?resource=candidate-profile&userId=${encodeURIComponent(user.id)}`);
+        const { data } = await profileResponse.json();
         const zipMatch = getCityStateForZip(data?.zip_code ?? "");
         setSettings({
           ...initialSettings,
@@ -87,7 +88,8 @@ export function AccountSettings() {
           preferredContactMethods: defaultContactPreference
         });
       } else {
-        const { data } = await supabase.from("employer_profiles").select("*").eq("user_id", user.id).maybeSingle();
+        const profileResponse = await fetch(`/api/mvp/read?resource=employer-profile&userId=${encodeURIComponent(user.id)}`);
+        const { data } = await profileResponse.json();
         const zipMatch = getCityStateForZip(data?.location_zip ?? "");
         setSettings({
           ...initialSettings,

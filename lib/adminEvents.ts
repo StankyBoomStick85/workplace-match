@@ -66,11 +66,8 @@ export function logAdminEvent(event: Omit<AdminEvent, "id" | "timestamp">) {
 }
 
 export async function refreshAdminEvents() {
-  const { data } = await supabase
-    .from("admin_activity_events")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(500);
+  const response = await fetch("/api/mvp/read?resource=admin-events");
+  const { data } = await response.json();
   adminEventCache = (data ?? []).map((event: any) => ({
     id: event.id,
     type: event.type,

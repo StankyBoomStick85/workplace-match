@@ -34,26 +34,23 @@ export function EmployerJobsBoard() {
     loadJobs();
 
     async function loadJobs() {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const user = sessionData.session?.user ?? null;
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         window.location.href = "/employer/login";
         return;
       }
 
-      const { data: userRecord } = await supabase.from("users").select("role").eq("id", user.id).maybeSingle();
+      const userResponse = await fetch("/api/user/me");
+      const userRecord = await userResponse.json();
       if (userRecord?.role !== "employer") {
         window.location.href = "/employer/login";
         return;
       }
 
       setAccount({ email: user.email ?? "" });
-      const { data } = await supabase
-        .from("job_posts")
-        .select("*")
-        .eq("employer_id", user.id)
-        .order("created_at", { ascending: false });
-      setJobs((data ?? []).map((job) => mapSupabaseJob(job, user.email ?? "")));
+      const jobsResponse = await fetch(`/api/mvp/read?resource=employer-jobs&employerId=${encodeURIComponent(user.id)}`);
+      const { data } = await jobsResponse.json();
+      setJobs((data ?? []).map((job: any) => mapSupabaseJob(job, user.email ?? "")));
     }
   }, []);
 

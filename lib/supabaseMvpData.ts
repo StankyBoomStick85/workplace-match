@@ -94,11 +94,7 @@ export async function getCurrentMvpUser(requiredRole?: MvpRole) {
     return null;
   }
 
-  const { data } = await supabase
-    .from("users")
-    .select("id,email,role")
-    .eq("id", authUser.id)
-    .maybeSingle();
+  const data = await fetchMvpData<MvpUser | null>("current-user");
   const user = data as MvpUser | null;
   if (!user || (requiredRole && user.role !== requiredRole)) {
     return null;
@@ -108,7 +104,7 @@ export async function getCurrentMvpUser(requiredRole?: MvpRole) {
 }
 
 export async function getCandidateProfile(userId: string) {
-  const { data } = await supabase.from("candidate_profiles").select("*").eq("user_id", userId).maybeSingle();
+  const data = await fetchMvpData<any | null>("candidate-profile", { userId });
   if (!data) {
     return null;
   }
@@ -117,41 +113,33 @@ export async function getCandidateProfile(userId: string) {
 }
 
 export async function getAllCandidateProfiles() {
-  const { data } = await supabase.from("candidate_profiles").select("*, users!candidate_profiles_user_id_fkey(email)");
-  return (data ?? []).map(mapCandidateProfile);
+  const data = await fetchMvpData<any[]>("candidate-profiles");
+  return data.map(mapCandidateProfile);
 }
 
 export async function getEmployerProfile(userId: string) {
-  const { data } = await supabase.from("employer_profiles").select("*, users!employer_profiles_user_id_fkey(email)").eq("user_id", userId).maybeSingle();
+  const data = await fetchMvpData<any | null>("employer-profile", { userId });
   return data ? mapEmployerProfile(data) : null;
 }
 
 export async function getAllEmployerProfiles() {
-  const { data } = await supabase.from("employer_profiles").select("*, users!employer_profiles_user_id_fkey(email)");
-  return (data ?? []).map(mapEmployerProfile);
+  const data = await fetchMvpData<any[]>("employer-profiles");
+  return data.map(mapEmployerProfile);
 }
 
 export async function getAllJobs() {
-  const { data } = await supabase.from("job_posts").select("*, users!job_posts_employer_id_fkey(email)").eq("active", true);
-  return (data ?? []).map(mapJob);
+  const data = await fetchMvpData<any[]>("jobs");
+  return data.map(mapJob);
 }
 
 export async function getEmployerJobs(employerId: string) {
-  const { data } = await supabase
-    .from("job_posts")
-    .select("*, users!job_posts_employer_id_fkey(email)")
-    .eq("employer_id", employerId)
-    .eq("active", true)
-    .order("created_at", { ascending: false });
-  return (data ?? []).map(mapJob);
+  const data = await fetchMvpData<any[]>("employer-jobs", { employerId });
+  return data.map(mapJob);
 }
 
 export async function getCandidateInterests() {
-  const { data } = await supabase
-    .from("interests")
-    .select("id,from_user_id,to_user_id,job_id,status,created_at")
-    .eq("status", "pending");
-  return (data ?? []).map((interest: any) => ({
+  const data = await fetchMvpData<any[]>("candidate-interests");
+  return data.map((interest: any) => ({
     id: interest.id,
     candidateId: interest.from_user_id,
     employerId: interest.to_user_id,
@@ -162,11 +150,8 @@ export async function getCandidateInterests() {
 }
 
 export async function getEmployerInterests() {
-  const { data } = await supabase
-    .from("interests")
-    .select("id,from_user_id,to_user_id,job_id,status,created_at")
-    .eq("status", "pending");
-  return (data ?? []).map((interest: any) => ({
+  const data = await fetchMvpData<any[]>("employer-interests");
+  return data.map((interest: any) => ({
     id: interest.id,
     employerId: interest.from_user_id,
     candidateId: interest.to_user_id,
@@ -221,8 +206,8 @@ export async function removeInterest({
 }
 
 export async function getMutualMatches() {
-  const { data } = await supabase.from("matches").select("*").eq("status", "mutual_match");
-  return (data ?? []).map(mapMatch);
+  const data = await fetchMvpData<any[]>("mutual-matches");
+  return data.map(mapMatch);
 }
 
 export async function addMutualMatch(match: {
@@ -231,13 +216,11 @@ export async function addMutualMatch(match: {
   jobId: string;
   matchPercent: number;
 }) {
-  const { data: existingMatch } = await supabase
-    .from("matches")
-    .select("id")
-    .eq("candidate_id", match.candidateId)
-    .eq("employer_id", match.employerId)
-    .eq("job_id", match.jobId)
-    .maybeSingle();
+  const existingMatch = await fetchMvpData<{ id: string } | null>("match-exists", {
+    candidateId: match.candidateId,
+    employerId: match.employerId,
+    jobId: match.jobId
+  });
 
   await supabase.from("matches").upsert(
     {
@@ -266,17 +249,13 @@ export async function addMutualMatch(match: {
 }
 
 export async function readNotificationsForEmail(email: string) {
-  const user = await getUserByEmail(email);
-  if (!user) {
+  const result = await fetchMvpPayload<any[]>("notifications", { email });
+  const recipient = result.recipient as MvpUser | null | undefined;
+  if (!recipient) {
     return [];
   }
 
-  const { data } = await supabase
-    .from("notifications")
-    .select("*")
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false });
-  return (data ?? []).map((notification: any) => mapNotification(notification, user.email));
+  return (result.data ?? []).map((notification: any) => mapNotification(notification, recipient.email));
 }
 
 export async function addNotification(notification: Omit<MvpNotification, "id" | "createdAt" | "status"> & { status?: "unread" | "read" }) {
@@ -297,29 +276,30 @@ export async function addNotification(notification: Omit<MvpNotification, "id" |
   });
 
   if (notification.dedupeKey) {
-    const { data: existing } = await supabase
-      .from("notifications")
-      .select("*")
-      .eq("user_id", recipient.id)
-      .eq("related_id", stableRelatedId(notification.dedupeKey))
-      .maybeSingle();
+    const existing = (await readNotificationsForEmail(notification.recipientEmail)).find(
+      (storedNotification) => storedNotification.dedupeKey === notification.dedupeKey
+    );
     if (existing) {
-      return mapNotification(existing, recipient.email);
+      return existing;
     }
   }
 
-  const { data } = await supabase
-    .from("notifications")
-    .insert({
-      user_id: recipient.id,
-      type: notification.type,
-      message,
-      read: notification.status === "read",
-      related_id: notification.dedupeKey ? stableRelatedId(notification.dedupeKey) : null
-    })
-    .select("*")
-    .single();
-  return data ? mapNotification(data, recipient.email) : null;
+  const nextNotification: MvpNotification = {
+    ...notification,
+    id: crypto.randomUUID(),
+    createdAt: new Date().toISOString(),
+    status: notification.status ?? "unread"
+  };
+
+  await supabase.from("notifications").insert({
+    user_id: recipient.id,
+    type: notification.type,
+    message,
+    read: notification.status === "read",
+    related_id: notification.dedupeKey ? stableRelatedId(notification.dedupeKey) : null
+  });
+
+  return nextNotification;
 }
 
 export async function markNotificationsReadForEmail(email: string) {
@@ -337,7 +317,7 @@ export async function getUserByEmail(email: string) {
     return null;
   }
 
-  const { data } = await supabase.from("users").select("id,email,role").eq("email", normalizedEmail).maybeSingle();
+  const data = await fetchMvpData<MvpUser | null>("user-by-email", { email: normalizedEmail });
   return data as MvpUser | null;
 }
 
@@ -463,4 +443,21 @@ function triggerTransactionalEmail({
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ type, recipientUserId, jobId })
   }).catch(() => undefined);
+}
+
+async function fetchMvpData<T>(resource: string, params: Record<string, string> = {}) {
+  const payload = await fetchMvpPayload<T>(resource, params);
+  return payload.data as T;
+}
+
+async function fetchMvpPayload<T>(resource: string, params: Record<string, string> = {}) {
+  const searchParams = new URLSearchParams({ resource, ...params });
+  const response = await fetch(`/api/mvp/read?${searchParams.toString()}`);
+  const payload = (await response.json()) as { data: T; error?: string; [key: string]: unknown };
+
+  if (!response.ok) {
+    throw new Error(payload.error ?? "Unable to load data.");
+  }
+
+  return payload;
 }

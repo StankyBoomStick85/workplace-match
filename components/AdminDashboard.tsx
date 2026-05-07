@@ -14,7 +14,6 @@ import {
   getEmployerInterests,
   getMutualMatches
 } from "../lib/supabaseMvpData";
-import { supabase } from "../lib/supabase";
 
 type LocalAccount = {
   email: string;
@@ -367,7 +366,7 @@ export function AdminDashboard() {
 }
 
 async function buildAdminData() {
-  const [candidateProfiles, employerProfiles, allJobs, employerInterests, candidateInterests, mutualMatches, events, messageResult, notificationResult] =
+  const [candidateProfiles, employerProfiles, allJobs, employerInterests, candidateInterests, mutualMatches, events, messageResult] =
     await Promise.all([
       getAllCandidateProfiles(),
       getAllEmployerProfiles(),
@@ -376,8 +375,7 @@ async function buildAdminData() {
       getCandidateInterests(),
       getMutualMatches(),
       refreshAdminEvents(),
-      supabase.from("match_messages").select("job_id"),
-      supabase.from("notifications").select("type")
+      fetch("/api/mvp/read?resource=admin-summary").then((response) => response.json())
     ]);
 
   const employers = employerProfiles.map((profile) => ({
@@ -414,8 +412,8 @@ async function buildAdminData() {
     };
   });
 
-  const notifications = notificationResult.data ?? [];
-  const messages = messageResult.data ?? [];
+  const notifications = messageResult.data?.notifications ?? [];
+  const messages = messageResult.data?.messages ?? [];
 
   return {
     candidates,

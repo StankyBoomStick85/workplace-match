@@ -138,19 +138,13 @@ function getLoggedOutNav(): NavItem[] {
 
 async function getRoleLabel(role: Role, userId: string) {
   if (role === "candidate") {
-    const { data } = await supabase
-      .from("candidate_profiles")
-      .select("display_name")
-      .eq("user_id", userId)
-      .maybeSingle();
+    const response = await fetch(`/api/mvp/read?resource=header-label&role=candidate&userId=${encodeURIComponent(userId)}`);
+    const { data } = await response.json();
     return data?.display_name?.trim() || "Profile";
   }
 
-  const { data } = await supabase
-    .from("employer_profiles")
-    .select("company_name")
-    .eq("user_id", userId)
-    .maybeSingle();
+  const response = await fetch(`/api/mvp/read?resource=header-label&role=employer&userId=${encodeURIComponent(userId)}`);
+  const { data } = await response.json();
   return data?.company_name?.trim() || "Dashboard";
 }
 

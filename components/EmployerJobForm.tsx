@@ -145,14 +145,14 @@ export function EmployerJobForm() {
     loadJobForm();
 
     async function loadJobForm() {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const user = sessionData.session?.user ?? null;
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         window.location.href = "/employer/login";
         return;
       }
 
-      const { data: userRecord } = await supabase.from("users").select("role").eq("id", user.id).maybeSingle();
+      const userResponse = await fetch("/api/user/me");
+      const userRecord = await userResponse.json();
       if (userRecord?.role !== "employer") {
         window.location.href = "/employer/login";
         return;
@@ -161,7 +161,8 @@ export function EmployerJobForm() {
       const nextAccount = { id: user.id, email: user.email ?? "" };
       setAccount(nextAccount);
 
-      const { data: profile } = await supabase.from("employer_profiles").select("*").eq("user_id", user.id).maybeSingle();
+      const profileResponse = await fetch(`/api/mvp/read?resource=employer-profile&userId=${encodeURIComponent(user.id)}`);
+      const { data: profile } = await profileResponse.json();
       if (profile) {
         const zipMatch = getCityStateForZip(profile.location_zip ?? "");
         setCompanyProfile({
@@ -175,12 +176,8 @@ export function EmployerJobForm() {
 
       const editJobId = new URLSearchParams(window.location.search).get("edit");
       if (editJobId) {
-        const { data: jobToEdit } = await supabase
-          .from("job_posts")
-          .select("*")
-          .eq("id", editJobId)
-          .eq("employer_id", user.id)
-          .maybeSingle();
+        const jobResponse = await fetch(`/api/mvp/read?resource=job&jobId=${encodeURIComponent(editJobId)}&employerId=${encodeURIComponent(user.id)}`);
+        const { data: jobToEdit } = await jobResponse.json();
 
         if (jobToEdit) {
           const mappedJob = mapSupabaseJob(jobToEdit, user.email ?? "");
@@ -285,12 +282,11 @@ export function EmployerJobForm() {
       return;
     }
 
-    const { data: nextJob } = await supabase.from("job_posts").insert(payload).select("id").single();
+    await supabase.from("job_posts").insert(payload);
 
     logAdminEvent({
       type: "job_created",
       userRole: "employer",
-      jobId: nextJob?.id,
       employerId: account.id
     });
     window.location.href = "/employer/jobs";

@@ -37,20 +37,21 @@ export function CandidateProfileForm() {
     loadProfile();
 
     async function loadProfile() {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const user = sessionData.session?.user ?? null;
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         window.location.href = "/candidate/login";
         return;
       }
 
-      const { data: userRecord } = await supabase.from("users").select("role").eq("id", user.id).maybeSingle();
+      const userResponse = await fetch("/api/user/me");
+      const userRecord = await userResponse.json();
       if (userRecord?.role !== "candidate") {
         window.location.href = "/candidate/login";
         return;
       }
 
-      const { data } = await supabase.from("candidate_profiles").select("*").eq("user_id", user.id).maybeSingle();
+      const profileResponse = await fetch(`/api/mvp/read?resource=candidate-profile&userId=${encodeURIComponent(user.id)}`);
+      const { data } = await profileResponse.json();
       if (data) {
         setProfile({
           candidateEmail: user.email ?? "",
@@ -88,8 +89,7 @@ export function CandidateProfileForm() {
     event.preventDefault();
 
     const formData = new FormData(event.currentTarget);
-    const { data: sessionData } = await supabase.auth.getSession();
-    const user = sessionData.session?.user ?? null;
+    const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       window.location.href = "/candidate/login";
       return;

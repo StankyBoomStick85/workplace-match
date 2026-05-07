@@ -68,13 +68,14 @@ export function addMatchThreadMessage(message: Omit<MatchMessage, "id" | "create
 }
 
 export async function refreshMatchThreadMessages(thread: MatchThreadContext) {
-  const { data } = await supabase
-    .from("match_messages")
-    .select("*")
-    .eq("applicant_id", thread.applicantId)
-    .eq("employer_id", thread.employerId)
-    .eq("job_id", thread.jobId)
-    .order("created_at", { ascending: true });
+  const params = new URLSearchParams({
+    resource: "match-messages",
+    applicantId: thread.applicantId,
+    employerId: thread.employerId,
+    jobId: thread.jobId
+  });
+  const response = await fetch(`/api/mvp/read?${params.toString()}`);
+  const { data } = await response.json();
 
   const threadMessages = (data ?? []).map((message: any) => ({
     id: message.id,
