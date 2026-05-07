@@ -61,14 +61,36 @@ export async function POST(request: Request) {
     }
 
     if (resource === "candidate-profile") {
+      const topSkills = Array.isArray(data.topSkills)
+        ? data.topSkills
+            .filter((skill: unknown): skill is string => typeof skill === "string")
+            .map((skill: string) => skill.trim())
+            .filter(Boolean)
+        : [];
+      const jobTypes = typeof data.jobType === "string" && data.jobType.trim() ? [data.jobType.trim()] : [];
+      const shifts = typeof data.shiftPreference === "string" && data.shiftPreference.trim() ? [data.shiftPreference.trim()] : [];
+      const searchRadius = typeof data.searchRadius === "number" ? data.searchRadius : Number(data.searchRadius);
+      const desiredPayMin = typeof data.desiredPayMin === "number" ? data.desiredPayMin : Number(data.desiredPayMin);
       const { error } = await adminClient.from("candidate_profiles").upsert(
         {
           user_id: user.id,
-          display_name: typeof data.displayName === "string" ? data.displayName.trim() : "",
+          display_name: typeof data.fullName === "string" ? data.fullName.trim() : typeof data.displayName === "string" ? data.displayName.trim() : "",
           zip_code: typeof data.zipCode === "string" ? data.zipCode.trim() : "",
-          work_preference: "open",
-          capability_tags: [],
-          visibility: "private"
+          search_radius: Number.isFinite(searchRadius) ? searchRadius : null,
+          desired_pay_min: Number.isFinite(desiredPayMin) ? desiredPayMin : null,
+          pay_type: typeof data.payType === "string" ? data.payType : "",
+          job_types: jobTypes,
+          shifts,
+          work_preference: typeof data.workSetting === "string" ? data.workSetting : "",
+          capability_tags: topSkills,
+          experience_level: typeof data.experienceLevel === "string" ? data.experienceLevel : "",
+          summary: typeof data.capabilitySummary === "string" ? data.capabilitySummary.trim() : "",
+          visibility: JSON.stringify({
+            visibility: "private",
+            industriesOfInterest: typeof data.industriesOfInterest === "string" ? data.industriesOfInterest : "",
+            availableStartDate: typeof data.availableStartDate === "string" ? data.availableStartDate : "",
+            willingToRelocate: typeof data.willingToRelocate === "string" ? data.willingToRelocate : ""
+          })
         },
         { onConflict: "user_id" }
       );
