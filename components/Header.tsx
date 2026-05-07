@@ -35,8 +35,7 @@ export function Header() {
     };
 
     async function refreshSessionNav() {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const user = sessionData.session?.user ?? null;
+      const { data: { user } } = await supabase.auth.getUser();
 
       if (!user) {
         if (!isMounted) return;
@@ -46,11 +45,8 @@ export function Header() {
         return;
       }
 
-      const { data: userRecord } = await supabase
-        .from("users")
-        .select("role")
-        .eq("id", user.id)
-        .maybeSingle();
+      const response = await fetch("/api/user/me");
+      const userRecord = await response.json();
       const role = userRecord?.role === "candidate" || userRecord?.role === "employer" ? userRecord.role : null;
       const label = role ? await getRoleLabel(role, user.id) : "";
 
