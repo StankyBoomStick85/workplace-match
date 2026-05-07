@@ -62,13 +62,13 @@ export default function OnboardingPage() {
       return;
     }
 
-    const { error: saveError } = await supabase.from("users").upsert({
-      id: user.id,
-      email: user.email ?? "",
-      role
+    const saveResponse = await fetch("/api/user/set-role", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role })
     });
 
-    if (saveError) {
+    if (!saveResponse.ok) {
       setError("Unable to save your account type. Please try again.");
       setIsSaving(null);
       return;
