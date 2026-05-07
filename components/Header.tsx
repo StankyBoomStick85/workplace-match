@@ -119,7 +119,7 @@ function getRoleAwareNav(role: Role, label: string): NavItem[] {
     return [
       { href: "/employer/dashboard", label: label || "Dashboard" },
       { href: "/employer/find-applicants", label: "Find applicants" },
-      { href: "/employer/matches", label: "My Matches" },
+      { href: "/employer/matches", label: "Dashboard" },
       { href: "/account/settings?role=employer", label: "Account" }
     ];
   }
@@ -127,7 +127,7 @@ function getRoleAwareNav(role: Role, label: string): NavItem[] {
   return [
     { href: "/candidate/dashboard", label: label || "Profile" },
     { href: "/jobs", label: "See jobs" },
-    { href: "/candidate/matches", label: "My Matches" },
+    { href: "/candidate/matches", label: "Dashboard" },
     { href: "/account/settings?role=candidate", label: "Account" }
   ];
 }

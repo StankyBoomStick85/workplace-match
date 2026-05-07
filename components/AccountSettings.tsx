@@ -45,6 +45,7 @@ const initialSettings: SettingsState = {
 
 export function AccountSettings() {
   const searchParams = useSearchParams();
+  const roleParam = searchParams.get("role");
   const [role, setRole] = useState<Role>("candidate");
   const [userId, setUserId] = useState("");
   const [settings, setSettings] = useState<SettingsState>(initialSettings);
@@ -57,7 +58,7 @@ export function AccountSettings() {
     loadSettings();
 
     async function loadSettings() {
-      const resolvedRole = resolveRole(searchParams.get("role"));
+      const resolvedRole = resolveRole(roleParam);
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         window.location.href = resolvedRole === "employer" ? "/employer/login" : "/candidate/login";
@@ -103,7 +104,7 @@ export function AccountSettings() {
         });
       }
     }
-  }, [searchParams]);
+  }, [roleParam]);
 
   async function saveSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
