@@ -140,32 +140,32 @@ export function AccountSettings() {
         setError(emailError.message);
         return;
       }
-      await supabase.from("users").update({ email: normalizedEmail }).eq("id", userId);
+      const accountResponse = await writeMvpData("account-settings", { email: normalizedEmail });
+      if (!accountResponse.ok) {
+        setError(accountResponse.error);
+        return;
+      }
     }
 
     if (role === "candidate") {
-      await supabase.from("candidate_profiles").upsert(
-        {
-          user_id: userId,
-          display_name: settings.displayName.trim(),
-          zip_code: settings.zipCode.trim(),
-          work_preference: "open",
-          capability_tags: [],
-          visibility: "private"
-        },
-        { onConflict: "user_id" }
-      );
+      const profileResponse = await writeMvpData("candidate-profile", {
+        displayName: settings.displayName,
+        zipCode: settings.zipCode
+      });
+      if (!profileResponse.ok) {
+        setError(profileResponse.error);
+        return;
+      }
     } else {
-      await supabase.from("employer_profiles").upsert(
-        {
-          user_id: userId,
-          company_name: settings.displayName.trim(),
-          contact_email: normalizedEmail,
-          location_zip: settings.zipCode.trim(),
-          member_status: "beta"
-        },
-        { onConflict: "user_id" }
-      );
+      const profileResponse = await writeMvpData("employer-profile", {
+        displayName: settings.displayName,
+        email: normalizedEmail,
+        zipCode: settings.zipCode
+      });
+      if (!profileResponse.ok) {
+        setError(profileResponse.error);
+        return;
+      }
     }
 
     setSettings((current) => ({
@@ -355,6 +355,20 @@ export function AccountSettings() {
       </form>
     </section>
   );
+}
+
+async function writeMvpData(resource: "account-settings" | "candidate-profile" | "employer-profile", data: Record<string, string>) {
+  const response = await fetch("/api/mvp/write", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ resource, data })
+  });
+  const payload = await response.json().catch(() => ({}));
+
+  return {
+    ok: response.ok,
+    error: typeof payload.error === "string" ? payload.error : "Unable to save account settings."
+  };
 }
 
 function resolveRole(value: string | null): Role {
