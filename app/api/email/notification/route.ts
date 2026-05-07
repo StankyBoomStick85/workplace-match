@@ -4,7 +4,7 @@ import {
   matchNotificationTemplate,
   sendEmail
 } from "../../../../lib/email";
-import { supabase } from "../../../../lib/supabase";
+import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
 
@@ -44,11 +44,20 @@ export async function POST(request: Request) {
 }
 
 async function getUserEmail(userId: string) {
+  const supabase = createEmailRouteClient();
   const { data } = await supabase.from("users").select("email").eq("id", userId).maybeSingle();
   return typeof data?.email === "string" ? data.email : "";
 }
 
 async function getJobTitle(jobId: string) {
+  const supabase = createEmailRouteClient();
   const { data } = await supabase.from("job_posts").select("title").eq("id", jobId).maybeSingle();
   return typeof data?.title === "string" ? data.title : "";
+}
+
+function createEmailRouteClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
 }
