@@ -6,6 +6,8 @@ import {
 } from "../../../../lib/email";
 import { supabase } from "../../../../lib/supabase";
 
+export const dynamic = "force-dynamic";
+
 type NotificationEmailType = "match_notification" | "interest_notification";
 
 export async function POST(request: Request) {
