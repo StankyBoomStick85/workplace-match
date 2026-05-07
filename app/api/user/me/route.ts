@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -50,11 +52,16 @@ export async function GET() {
     .maybeSingle();
 
   if (userRecordError) {
+    console.error("[api/user/me] users lookup failed", userRecordError);
     return NextResponse.json({ error: userRecordError.message }, { status: 500 });
   }
 
   if (!userRecord) {
-    return NextResponse.json({ error: "User role not found." }, { status: 404 });
+    return NextResponse.json({
+      id: user.id,
+      email: user.email ?? "",
+      role: "pending"
+    });
   }
 
   return NextResponse.json({

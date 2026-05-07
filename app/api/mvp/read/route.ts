@@ -3,42 +3,56 @@ import { NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const resource = requestUrl.searchParams.get("resource") ?? "";
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey) {
-    return NextResponse.json({ error: "Supabase server configuration is missing." }, { status: 500 });
-  }
-
-  const cookieStore = cookies();
-  const authClient = createServerClient(supabaseUrl, supabaseAnonKey, {
-    cookies: {
-      get(name: string) {
-        return cookieStore.get(name)?.value;
-      },
-      set(name: string, value: string, options: CookieOptions) {
-        cookieStore.set(name, value, options);
-      },
-      remove(name: string, options: CookieOptions) {
-        cookieStore.set(name, "", options);
-      }
-    }
-  });
-  const {
-    data: { user }
-  } = await authClient.auth.getUser();
-  const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false
-    }
-  });
 
   try {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey) {
+      console.error("[api/mvp/read] Missing Supabase env configuration", {
+        resource,
+        hasUrl: Boolean(supabaseUrl),
+        hasAnonKey: Boolean(supabaseAnonKey),
+        hasServiceRoleKey: Boolean(supabaseServiceRoleKey)
+      });
+      return NextResponse.json({ error: "Supabase server configuration is missing." }, { status: 500 });
+    }
+
+    const cookieStore = cookies();
+    const authClient = createServerClient(supabaseUrl, supabaseAnonKey, {
+      cookies: {
+        get(name: string) {
+          return cookieStore.get(name)?.value;
+        },
+        set(name: string, value: string, options: CookieOptions) {
+          cookieStore.set(name, value, options);
+        },
+        remove(name: string, options: CookieOptions) {
+          cookieStore.set(name, "", options);
+        }
+      }
+    });
+    const {
+      data: { user },
+      error: userError
+    } = await authClient.auth.getUser();
+    if (userError) {
+      console.error("[api/mvp/read] Auth user lookup failed", { resource, error: userError.message });
+    }
+
+    const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    });
+
     if (resource === "current-user") {
       if (!user) return NextResponse.json({ data: null });
       const { data, error } = await adminClient.from("users").select("id,email,role").eq("id", user.id).maybeSingle();
@@ -55,7 +69,7 @@ export async function GET(request: Request) {
     }
 
     if (resource === "candidate-profiles") {
-      const { data, error } = await adminClient.from("candidate_profiles").select("*, users!candidate_profiles_user_id_fkey(email)");
+      const { data, error } = await adminClient.from("candidate_profiles").select("*");
       if (error) throw error;
       return NextResponse.json({ data: data ?? [] });
     }
@@ -63,19 +77,19 @@ export async function GET(request: Request) {
     if (resource === "employer-profile") {
       const userId = requestUrl.searchParams.get("userId") || user?.id;
       if (!userId) return NextResponse.json({ data: null });
-      const { data, error } = await adminClient.from("employer_profiles").select("*, users!employer_profiles_user_id_fkey(email)").eq("user_id", userId).maybeSingle();
+      const { data, error } = await adminClient.from("employer_profiles").select("*").eq("user_id", userId).maybeSingle();
       if (error) throw error;
       return NextResponse.json({ data });
     }
 
     if (resource === "employer-profiles") {
-      const { data, error } = await adminClient.from("employer_profiles").select("*, users!employer_profiles_user_id_fkey(email)");
+      const { data, error } = await adminClient.from("employer_profiles").select("*");
       if (error) throw error;
       return NextResponse.json({ data: data ?? [] });
     }
 
     if (resource === "jobs") {
-      const { data, error } = await adminClient.from("job_posts").select("*, users!job_posts_employer_id_fkey(email)").eq("active", true);
+      const { data, error } = await adminClient.from("job_posts").select("*").eq("active", true);
       if (error) throw error;
       return NextResponse.json({ data: data ?? [] });
     }
@@ -85,7 +99,7 @@ export async function GET(request: Request) {
       if (!employerId) return NextResponse.json({ data: [] });
       const { data, error } = await adminClient
         .from("job_posts")
-        .select("*, users!job_posts_employer_id_fkey(email)")
+        .select("*")
         .eq("employer_id", employerId)
         .eq("active", true)
         .order("created_at", { ascending: false });
@@ -215,7 +229,13 @@ export async function GET(request: Request) {
       return NextResponse.json({ data: data ?? [] });
     }
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to load data." }, { status: 500 });
+    const message = error instanceof Error ? error.message : "Unable to load data.";
+    console.error("[api/mvp/read] Request failed", {
+      resource,
+      message,
+      error
+    });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 
   return NextResponse.json({ error: "Unknown resource." }, { status: 400 });
