@@ -40,8 +40,7 @@ export function UnifiedLoginForm() {
       return;
     }
 
-    await supabase.auth.signOut();
-    setError("No applicant or employer role found for this account.");
+    window.location.href = "/onboarding";
   }
 
   return (

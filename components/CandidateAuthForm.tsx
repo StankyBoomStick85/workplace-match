@@ -95,13 +95,17 @@ export function CandidateAuthForm({ mode }: CandidateAuthFormProps) {
       .eq("id", data.user.id)
       .maybeSingle();
 
-    if (userRecord?.role !== "candidate") {
-      await supabase.auth.signOut();
-      setError("This account is not an applicant account.");
+    if (userRecord?.role === "candidate") {
+      window.location.href = "/candidate/dashboard";
       return;
     }
 
-    window.location.href = "/candidate/dashboard";
+    if (userRecord?.role === "employer") {
+      window.location.href = "/employer/dashboard";
+      return;
+    }
+
+    window.location.href = "/onboarding";
   }
 
   return (

@@ -95,13 +95,17 @@ export function EmployerAuthForm({ mode }: EmployerAuthFormProps) {
       .eq("id", data.user.id)
       .maybeSingle();
 
-    if (userRecord?.role !== "employer") {
-      await supabase.auth.signOut();
-      setError("This account is not an employer account.");
+    if (userRecord?.role === "candidate") {
+      window.location.href = "/candidate/dashboard";
       return;
     }
 
-    window.location.href = "/employer/dashboard";
+    if (userRecord?.role === "employer") {
+      window.location.href = "/employer/dashboard";
+      return;
+    }
+
+    window.location.href = "/onboarding";
   }
 
   return (
