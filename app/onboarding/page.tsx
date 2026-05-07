@@ -1,9 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { logAdminEvent } from "../../lib/adminEvents";
-import { supabase } from "../../lib/supabase";
 
 type OnboardingRole = "candidate" | "employer";
 
@@ -12,57 +10,9 @@ export default function OnboardingPage() {
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState<OnboardingRole | null>(null);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    async function checkExistingRole() {
-      const {
-        data: { user }
-      } = await supabase.auth.getUser();
-
-      if (!isMounted) {
-        return;
-      }
-
-      if (!user) {
-        window.location.href = "/login";
-        return;
-      }
-
-      const { data: userRecord } = await supabase
-        .from("users")
-        .select("role")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      if (userRecord?.role === "candidate") {
-        window.location.href = "/candidate/dashboard";
-      }
-
-      if (userRecord?.role === "employer") {
-        window.location.href = "/employer/dashboard";
-      }
-    }
-
-    checkExistingRole();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
   async function chooseRole(role: OnboardingRole) {
     setError("");
     setIsSaving(role);
-
-    const {
-      data: { user }
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      window.location.href = "/login";
-      return;
-    }
 
     const saveResponse = await fetch("/api/user/set-role", {
       method: "POST",
@@ -75,14 +25,6 @@ export default function OnboardingPage() {
       setIsSaving(null);
       return;
     }
-
-    logAdminEvent({
-      type: "signup_created",
-      userRole: role,
-      applicantId: role === "candidate" ? user.id : undefined,
-      employerId: role === "employer" ? user.id : undefined,
-      dedupeKey: `signup_created:${role}:${user.id}`
-    });
 
     router.push(role === "candidate" ? "/candidate/dashboard" : "/employer/dashboard");
   }

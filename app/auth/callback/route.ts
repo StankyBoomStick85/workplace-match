@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { createClient } from "@supabase/supabase-js";
 
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
@@ -36,7 +37,17 @@ export async function GET(request: Request) {
     return NextResponse.redirect(new URL("/login", requestUrl.origin));
   }
 
-  const { data: userRecord } = await supabase
+  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const adminClient = supabaseServiceRoleKey
+    ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, supabaseServiceRoleKey, {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false
+        }
+      })
+    : supabase;
+
+  const { data: userRecord } = await adminClient
     .from("users")
     .select("role")
     .eq("id", user.id)
