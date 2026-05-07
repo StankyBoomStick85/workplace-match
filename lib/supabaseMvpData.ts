@@ -89,8 +89,7 @@ export type MvpNotification = {
 };
 
 export async function getCurrentMvpUser(requiredRole?: MvpRole) {
-  const { data: sessionData } = await supabase.auth.getSession();
-  const authUser = sessionData.session?.user ?? null;
+  const { data: { user: authUser } } = await supabase.auth.getUser();
   if (!authUser) {
     return null;
   }
