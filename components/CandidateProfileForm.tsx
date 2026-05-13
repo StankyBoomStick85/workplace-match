@@ -218,6 +218,16 @@ export function CandidateProfileForm() {
         return;
       }
 
+      // Push the access_token into the client's internal auth state so that
+      // all subsequent PostgREST queries include the Authorization: Bearer header.
+      // The singleton client may have been created before the session cookie was
+      // readable, leaving its internal state empty even though getSession() works.
+      await supabase.auth.setSession({
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+      });
+      console.log("[CandidateProfileForm] setSession complete — client auth state synced");
+
       const user = session.user;
 
       const userResponse = await fetch("/api/user/me", { cache: "no-store" });
