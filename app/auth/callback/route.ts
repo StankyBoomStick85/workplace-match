@@ -57,7 +57,7 @@ export async function GET(request: Request) {
     userRecord?.role === "candidate" || userRecord?.role === "employer" ? userRecord.role : null;
   const destination =
     role === "candidate"
-      ? "/candidate/dashboard"
+      ? "/candidate/profile"
       : role === "employer"
         ? "/employer/dashboard"
         : "/onboarding";

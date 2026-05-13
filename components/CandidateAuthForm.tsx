@@ -79,7 +79,7 @@ export function CandidateAuthForm({ mode }: CandidateAuthFormProps) {
         dedupeKey: `signup_created:candidate:${data.user.id}`
       });
       await sendWelcomeEmail(email, "candidate");
-      window.location.href = "/candidate/dashboard";
+      window.location.href = "/candidate/profile";
       return;
     }
 
@@ -93,7 +93,7 @@ export function CandidateAuthForm({ mode }: CandidateAuthFormProps) {
     const userRecord = await response.json();
 
     if (userRecord?.role === "candidate") {
-      window.location.href = "/candidate/dashboard";
+      window.location.href = "/candidate/profile";
       return;
     }
 
