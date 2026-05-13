@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 
 type CandidateProfile = {
   candidateEmail?: string;
@@ -26,70 +26,7 @@ type CandidateProfile = {
   employerSummary?: string;
 };
 
-function SkeletonBlock({ className }: { className: string }) {
-  return <div className={`animate-pulse rounded bg-gray-200 ${className}`} />;
-}
 
-function ProfilePageSkeleton() {
-  return (
-    <section className="mx-auto max-w-3xl space-y-6 px-4 py-14">
-      {/* Profile form card */}
-      <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
-        <SkeletonBlock className="h-3 w-14" />
-        <SkeletonBlock className="mt-3 h-8 w-52" />
-        <SkeletonBlock className="mt-3 h-4 w-full max-w-sm" />
-
-        <div className="mt-6 grid gap-4 md:grid-cols-2">
-          <div className="space-y-2 md:col-span-2">
-            <SkeletonBlock className="h-3 w-16" />
-            <SkeletonBlock className="h-10 w-full" />
-          </div>
-          <div className="space-y-2 md:col-span-2">
-            <SkeletonBlock className="h-3 w-24" />
-            <SkeletonBlock className="h-24 w-full" />
-          </div>
-          <div className="space-y-2">
-            <SkeletonBlock className="h-3 w-24" />
-            <SkeletonBlock className="h-10 w-full" />
-          </div>
-          <div className="space-y-2">
-            <SkeletonBlock className="h-3 w-24" />
-            <SkeletonBlock className="h-10 w-full" />
-          </div>
-          <div className="space-y-2">
-            <SkeletonBlock className="h-3 w-24" />
-            <SkeletonBlock className="h-10 w-full" />
-          </div>
-          <div className="space-y-2 md:col-span-2">
-            <SkeletonBlock className="h-3 w-36" />
-            <SkeletonBlock className="h-24 w-full" />
-          </div>
-          <div className="space-y-2">
-            <SkeletonBlock className="h-3 w-20" />
-            <SkeletonBlock className="h-10 w-full" />
-          </div>
-          <div className="space-y-2">
-            <SkeletonBlock className="h-3 w-24" />
-            <SkeletonBlock className="h-10 w-full" />
-          </div>
-          <div className="md:col-span-2">
-            <SkeletonBlock className="h-10 w-36" />
-          </div>
-        </div>
-      </div>
-
-      {/* AI Capability card */}
-      <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
-        <SkeletonBlock className="h-3 w-20" />
-        <SkeletonBlock className="mt-3 h-8 w-48" />
-        <SkeletonBlock className="mt-3 h-4 w-full max-w-lg" />
-        <SkeletonBlock className="mt-1 h-4 w-3/4 max-w-md" />
-        <SkeletonBlock className="mt-5 h-10 w-56" />
-        <SkeletonBlock className="mt-6 h-28 w-full" />
-      </div>
-    </section>
-  );
-}
 
 function splitSkills(value: string) {
   return value
@@ -190,71 +127,40 @@ function GeneratedSection({ title, content }: { title: string; content: string }
   );
 }
 
-export function CandidateProfileForm() {
-  const [profile, setProfile] = useState<CandidateProfile | null>(null);
+type ProfileRow = Record<string, unknown> | null;
+
+type Props = {
+  userEmail: string;
+  initialProfile: ProfileRow;
+};
+
+function mapProfileRow(userEmail: string, row: NonNullable<ProfileRow>): CandidateProfile {
+  return {
+    candidateEmail: userEmail,
+    fullName: (row.display_name as string) ?? "",
+    zipCode: (row.zip_code as string) ?? "",
+    desiredJobType: Array.isArray(row.job_types) ? ((row.job_types[0] as string) ?? "") : "",
+    workPreference: (row.work_preference as string) ?? "open",
+    capabilitySummary: (row.summary as string) ?? "",
+    topSkills: Array.isArray(row.capability_tags) ? (row.capability_tags as string[]) : [],
+    experienceLevel: (row.experience_level as string) ?? "",
+    educationLevel: "",
+    updatedAt: (row.created_at as string) ?? "",
+    capabilityProfile: (row.capability_summary as string) ?? "",
+    recommendedPosition: (row.recommended_position as string) ?? "",
+    futurePositions: (row.future_positions as string) ?? "",
+    employerSummary: (row.employer_summary as string) ?? "",
+  };
+}
+
+export function CandidateProfileForm({ userEmail, initialProfile }: Props) {
+  const [profile, setProfile] = useState<CandidateProfile | null>(
+    initialProfile ? mapProfileRow(userEmail, initialProfile) : null
+  );
   const [profilePictureDataUrl, setProfilePictureDataUrl] = useState("");
-  const [isReady, setIsReady] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState("");
   const [saveError, setSaveError] = useState("");
-
-  useEffect(() => {
-    console.log("[CandidateProfileForm] mount — starting profile load");
-    loadProfile();
-
-    async function loadProfile() {
-      // Use server-side /api/user/me for auth — it reads HttpOnly cookies via
-      // Next.js cookieStore, which the browser-side Supabase client cannot access
-      // via getSession(). This resolves correctly on the very first visit after login.
-      console.log("[CandidateProfileForm] fetching identity from server...");
-      const meResponse = await fetch("/api/user/me", { cache: "no-store" });
-      const userRecord = await meResponse.json();
-      console.log("[CandidateProfileForm] /api/user/me — id:", userRecord?.id ?? "none", "role:", userRecord?.role ?? "none");
-
-      if (!userRecord?.id || userRecord.role !== "candidate") {
-        console.log("[CandidateProfileForm] not authenticated as candidate — redirecting to login");
-        window.location.href = "/candidate/login";
-        return;
-      }
-
-      console.log("[CandidateProfileForm] fetching profile — userId:", userRecord.id);
-      const profileResponse = await fetch(
-        `/api/mvp/read?resource=candidate-profile&userId=${encodeURIComponent(userRecord.id)}`,
-        { cache: "no-store" }
-      );
-      const { data } = await profileResponse.json();
-
-      console.log("[CandidateProfileForm] profile response — row found:", !!data);
-      if (data) {
-        console.log("[CandidateProfileForm] AI columns — capability_summary:", !!data.capability_summary, "recommended_position:", !!data.recommended_position, "future_positions:", !!data.future_positions, "employer_summary:", !!data.employer_summary);
-        // Single setProfile call so all fields — including AI sections — land in
-        // one atomic state update. This prevents an intermediate render where the
-        // form fields are populated but the AI states are still empty strings.
-        setProfile({
-          candidateEmail: userRecord.email ?? "",
-          fullName: data.display_name ?? "",
-          zipCode: data.zip_code ?? "",
-          desiredJobType: Array.isArray(data.job_types) ? data.job_types[0] ?? "" : "",
-          workPreference: data.work_preference ?? "open",
-          capabilitySummary: data.summary ?? "",
-          topSkills: data.capability_tags ?? [],
-          experienceLevel: data.experience_level ?? "",
-          educationLevel: "",
-          updatedAt: data.created_at ?? "",
-          capabilityProfile: data.capability_summary ?? "",
-          recommendedPosition: data.recommended_position ?? "",
-          futurePositions: data.future_positions ?? "",
-          employerSummary: data.employer_summary ?? "",
-        });
-        console.log("[CandidateProfileForm] profile and AI state populated");
-      } else {
-        console.log("[CandidateProfileForm] no profile row found for userId:", userRecord.id);
-      }
-
-      setIsReady(true);
-      console.log("[CandidateProfileForm] isReady = true");
-    }
-  }, []);
 
   function handleProfilePictureChange(file: File | null) {
     if (!file) {
@@ -352,10 +258,6 @@ export function CandidateProfileForm() {
     } finally {
       setIsGenerating(false);
     }
-  }
-
-  if (!isReady) {
-    return <ProfilePageSkeleton />;
   }
 
   const hasGeneratedContent = Boolean(profile?.capabilityProfile || profile?.recommendedPosition || profile?.futurePositions || profile?.employerSummary);
