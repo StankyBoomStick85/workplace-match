@@ -201,27 +201,48 @@ export function CandidateProfileForm() {
   const isEditing = Boolean(profile);
 
   useEffect(() => {
-    loadProfile();
+    console.log("[CandidateProfileForm] mount — registering auth state listener");
+    let fetched = false;
 
-    async function loadProfile() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log("[CandidateProfileForm] onAuthStateChange:", event, "userId:", session?.user?.id ?? "none");
+
+      if ((event === "INITIAL_SESSION" || event === "SIGNED_IN") && session?.user && !fetched) {
+        fetched = true;
+        loadProfile(session.user);
+      } else if (event === "INITIAL_SESSION" && !session?.user) {
+        console.log("[CandidateProfileForm] INITIAL_SESSION with no user — redirecting to login");
         window.location.href = "/candidate/login";
-        return;
       }
+    });
 
-      const userResponse = await fetch("/api/user/me");
+    return () => {
+      console.log("[CandidateProfileForm] unmount — unsubscribing auth listener");
+      subscription.unsubscribe();
+    };
+
+    async function loadProfile(user: { id: string; email?: string | undefined }) {
+      console.log("[CandidateProfileForm] loadProfile start — userId:", user.id);
+
+      const userResponse = await fetch("/api/user/me", { cache: "no-store" });
       const userRecord = await userResponse.json();
+      console.log("[CandidateProfileForm] role check result:", userRecord?.role);
       if (userRecord?.role !== "candidate") {
+        console.log("[CandidateProfileForm] not a candidate — redirecting to login");
         window.location.href = "/candidate/login";
         return;
       }
 
-      const { data } = await supabase
+      console.log("[CandidateProfileForm] querying candidate_profiles for userId:", user.id);
+      const { data, error } = await supabase
         .from("candidate_profiles")
         .select("*")
         .eq("user_id", user.id)
         .maybeSingle();
+
+      console.log("[CandidateProfileForm] DB result — error:", error, "data keys:", data ? Object.keys(data) : "null");
+      console.log("[CandidateProfileForm] AI columns — capability_summary:", !!data?.capability_summary, "recommended_position:", !!data?.recommended_position, "future_positions:", !!data?.future_positions, "employer_summary:", !!data?.employer_summary);
+
       if (data) {
         setProfile({
           candidateEmail: user.email ?? "",
@@ -239,9 +260,13 @@ export function CandidateProfileForm() {
         setRecommendedPosition(data.recommended_position ?? "");
         setFuturePositions(data.future_positions ?? "");
         setEmployerSummary(data.employer_summary ?? "");
+        console.log("[CandidateProfileForm] state set — profile and AI fields populated");
+      } else {
+        console.log("[CandidateProfileForm] no profile row found for this user");
       }
 
       setIsReady(true);
+      console.log("[CandidateProfileForm] isReady = true");
     }
   }, []);
 
