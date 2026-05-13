@@ -46,6 +46,7 @@ export function CandidateProfileForm() {
   // AI-generated capability fields
   const [capabilityProfile, setCapabilityProfile] = useState("");
   const [predictedAlignment, setPredictedAlignment] = useState("");
+  const [realisticEntryPoint, setRealisticEntryPoint] = useState("");
   const [employerSummary, setEmployerSummary] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState("");
@@ -87,6 +88,7 @@ export function CandidateProfileForm() {
         });
         setCapabilityProfile(data.capability_summary ?? "");
         setPredictedAlignment(data.predicted_alignment ?? "");
+        setRealisticEntryPoint(data.realistic_entry_point ?? "");
         setEmployerSummary(data.employer_summary ?? "");
       }
 
@@ -181,6 +183,7 @@ export function CandidateProfileForm() {
 
       setCapabilityProfile(result.capabilitySummary ?? "");
       setPredictedAlignment(result.predictedAlignment ?? "");
+      setRealisticEntryPoint(result.realisticEntryPoint ?? "");
       setEmployerSummary(result.employerSummary ?? "");
     } catch {
       setGenerateError("An unexpected error occurred. Please try again.");
@@ -197,7 +200,7 @@ export function CandidateProfileForm() {
     );
   }
 
-  const hasGeneratedContent = capabilityProfile || predictedAlignment || employerSummary;
+  const hasGeneratedContent = capabilityProfile || predictedAlignment || realisticEntryPoint || employerSummary;
 
   return (
     <section className="mx-auto max-w-3xl space-y-6 px-4 py-14">
@@ -447,6 +450,12 @@ export function CandidateProfileForm() {
               <GeneratedSection
                 title="Predicted Capability Alignment"
                 content={predictedAlignment}
+              />
+            )}
+            {realisticEntryPoint && (
+              <GeneratedSection
+                title="Realistic Entry Point"
+                content={realisticEntryPoint}
               />
             )}
             {employerSummary && (
