@@ -147,6 +147,9 @@ export function CandidateDashboard() {
               <Link href="/jobs" className="rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950">
                 See Jobs
               </Link>
+              <Link href="/candidate/profile" className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-gray-50">
+                Full Profile
+              </Link>
               {isEditing ? (
                 <button key="save" type="submit" className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-gray-50">
                   Save
