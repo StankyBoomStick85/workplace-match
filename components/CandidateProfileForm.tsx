@@ -50,6 +50,7 @@ export function CandidateProfileForm() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState("");
 
+  const [saveError, setSaveError] = useState("");
   const isEditing = Boolean(profile);
 
   useEffect(() => {
@@ -109,6 +110,7 @@ export function CandidateProfileForm() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setSaveError("");
 
     const formData = new FormData(event.currentTarget);
     const { data: { user } } = await supabase.auth.getUser();
@@ -134,20 +136,32 @@ export function CandidateProfileForm() {
       updatedAt: new Date().toISOString()
     };
 
-    await supabase.from("candidate_profiles").upsert(
-      {
-        user_id: user.id,
-        display_name: nextProfile.fullName,
-        zip_code: nextProfile.zipCode,
-        job_types: nextProfile.desiredJobType ? [nextProfile.desiredJobType] : [],
-        work_preference: nextProfile.workPreference,
-        capability_tags: nextProfile.topSkills,
-        experience_level: nextProfile.experienceLevel,
-        summary: nextProfile.capabilitySummary,
-        visibility: "private"
-      },
-      { onConflict: "user_id" }
-    );
+    try {
+      const response = await fetch("/api/mvp/write", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          resource: "candidate-profile",
+          data: {
+            fullName: nextProfile.fullName,
+            zipCode: nextProfile.zipCode,
+            jobType: nextProfile.desiredJobType,
+            workSetting: nextProfile.workPreference,
+            capabilitySummary: nextProfile.capabilitySummary,
+            topSkills: nextProfile.topSkills,
+            experienceLevel: nextProfile.experienceLevel
+          }
+        })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setSaveError(result.error ?? "Unable to save profile. Please try again.");
+        return;
+      }
+    } catch {
+      setSaveError("An unexpected error occurred. Please try again.");
+      return;
+    }
 
     window.location.href = "/candidate/dashboard";
   }
@@ -356,13 +370,16 @@ export function CandidateProfileForm() {
             </select>
           </div>
 
-          <div className="md:col-span-2">
+          <div className="md:col-span-2 space-y-3">
             <button
               type="submit"
               className="inline-flex items-center justify-center rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
             >
               {isEditing ? "Update profile" : "Save profile"}
             </button>
+            {saveError && (
+              <p className="text-sm text-red-700">{saveError}</p>
+            )}
           </div>
         </form>
       </div>

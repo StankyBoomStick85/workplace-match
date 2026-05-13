@@ -61,39 +61,62 @@ export async function POST(request: Request) {
     }
 
     if (resource === "candidate-profile") {
-      const topSkills = Array.isArray(data.topSkills)
-        ? data.topSkills
-            .filter((skill: unknown): skill is string => typeof skill === "string")
-            .map((skill: string) => skill.trim())
-            .filter(Boolean)
-        : [];
-      const jobTypes = typeof data.jobType === "string" && data.jobType.trim() ? [data.jobType.trim()] : [];
-      const shifts = typeof data.shiftPreference === "string" && data.shiftPreference.trim() ? [data.shiftPreference.trim()] : [];
-      const searchRadius = typeof data.searchRadius === "number" ? data.searchRadius : Number(data.searchRadius);
-      const desiredPayMin = typeof data.desiredPayMin === "number" ? data.desiredPayMin : Number(data.desiredPayMin);
-      const { error } = await adminClient.from("candidate_profiles").upsert(
-        {
-          user_id: user.id,
-          display_name: typeof data.fullName === "string" ? data.fullName.trim() : typeof data.displayName === "string" ? data.displayName.trim() : "",
-          zip_code: typeof data.zipCode === "string" ? data.zipCode.trim() : "",
-          search_radius: Number.isFinite(searchRadius) ? searchRadius : null,
-          desired_pay_min: Number.isFinite(desiredPayMin) ? desiredPayMin : null,
-          pay_type: typeof data.payType === "string" ? data.payType : "",
-          job_types: jobTypes,
-          shifts,
-          work_preference: typeof data.workSetting === "string" ? data.workSetting : "",
-          capability_tags: topSkills,
-          experience_level: typeof data.experienceLevel === "string" ? data.experienceLevel : "",
-          summary: typeof data.capabilitySummary === "string" ? data.capabilitySummary.trim() : "",
-          visibility: JSON.stringify({
-            visibility: "private",
-            industriesOfInterest: typeof data.industriesOfInterest === "string" ? data.industriesOfInterest : "",
-            availableStartDate: typeof data.availableStartDate === "string" ? data.availableStartDate : "",
-            willingToRelocate: typeof data.willingToRelocate === "string" ? data.willingToRelocate : ""
-          })
-        },
-        { onConflict: "user_id" }
-      );
+      const upsertData: Record<string, unknown> = { user_id: user.id };
+
+      if ("fullName" in data || "displayName" in data) {
+        upsertData.display_name = typeof data.fullName === "string"
+          ? data.fullName.trim()
+          : typeof data.displayName === "string" ? data.displayName.trim() : "";
+      }
+      if ("zipCode" in data) {
+        upsertData.zip_code = typeof data.zipCode === "string" ? data.zipCode.trim() : "";
+      }
+      if ("searchRadius" in data) {
+        const r = Number(data.searchRadius);
+        upsertData.search_radius = Number.isFinite(r) ? r : null;
+      }
+      if ("desiredPayMin" in data) {
+        const p = Number(data.desiredPayMin);
+        upsertData.desired_pay_min = Number.isFinite(p) ? p : null;
+      }
+      if ("payType" in data) {
+        upsertData.pay_type = typeof data.payType === "string" ? data.payType : "";
+      }
+      if ("jobType" in data) {
+        upsertData.job_types = typeof data.jobType === "string" && data.jobType.trim()
+          ? [data.jobType.trim()] : [];
+      }
+      if ("shiftPreference" in data) {
+        upsertData.shifts = typeof data.shiftPreference === "string" && data.shiftPreference.trim()
+          ? [data.shiftPreference.trim()] : [];
+      }
+      if ("workSetting" in data) {
+        upsertData.work_preference = typeof data.workSetting === "string" ? data.workSetting : "";
+      }
+      if ("topSkills" in data) {
+        upsertData.capability_tags = Array.isArray(data.topSkills)
+          ? data.topSkills
+              .filter((s: unknown): s is string => typeof s === "string")
+              .map((s: string) => s.trim())
+              .filter(Boolean)
+          : [];
+      }
+      if ("experienceLevel" in data) {
+        upsertData.experience_level = typeof data.experienceLevel === "string" ? data.experienceLevel : "";
+      }
+      if ("capabilitySummary" in data) {
+        upsertData.summary = typeof data.capabilitySummary === "string" ? data.capabilitySummary.trim() : "";
+      }
+      if ("industriesOfInterest" in data || "willingToRelocate" in data || "availableStartDate" in data) {
+        upsertData.visibility = JSON.stringify({
+          visibility: "private",
+          industriesOfInterest: typeof data.industriesOfInterest === "string" ? data.industriesOfInterest : "",
+          availableStartDate: typeof data.availableStartDate === "string" ? data.availableStartDate : "",
+          willingToRelocate: typeof data.willingToRelocate === "string" ? data.willingToRelocate : ""
+        });
+      }
+
+      const { error } = await adminClient.from("candidate_profiles").upsert(upsertData, { onConflict: "user_id" });
       if (error) throw error;
       return NextResponse.json({ success: true });
     }
