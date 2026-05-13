@@ -20,6 +20,71 @@ type CandidateProfile = {
   updatedAt: string;
 };
 
+function SkeletonBlock({ className }: { className: string }) {
+  return <div className={`animate-pulse rounded bg-gray-200 ${className}`} />;
+}
+
+function ProfilePageSkeleton() {
+  return (
+    <section className="mx-auto max-w-3xl space-y-6 px-4 py-14">
+      {/* Profile form card */}
+      <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
+        <SkeletonBlock className="h-3 w-14" />
+        <SkeletonBlock className="mt-3 h-8 w-52" />
+        <SkeletonBlock className="mt-3 h-4 w-full max-w-sm" />
+
+        <div className="mt-6 grid gap-4 md:grid-cols-2">
+          <div className="space-y-2 md:col-span-2">
+            <SkeletonBlock className="h-3 w-16" />
+            <SkeletonBlock className="h-10 w-full" />
+          </div>
+          <div className="space-y-2 md:col-span-2">
+            <SkeletonBlock className="h-3 w-24" />
+            <SkeletonBlock className="h-24 w-full" />
+          </div>
+          <div className="space-y-2">
+            <SkeletonBlock className="h-3 w-24" />
+            <SkeletonBlock className="h-10 w-full" />
+          </div>
+          <div className="space-y-2">
+            <SkeletonBlock className="h-3 w-24" />
+            <SkeletonBlock className="h-10 w-full" />
+          </div>
+          <div className="space-y-2">
+            <SkeletonBlock className="h-3 w-24" />
+            <SkeletonBlock className="h-10 w-full" />
+          </div>
+          <div className="space-y-2 md:col-span-2">
+            <SkeletonBlock className="h-3 w-36" />
+            <SkeletonBlock className="h-24 w-full" />
+          </div>
+          <div className="space-y-2">
+            <SkeletonBlock className="h-3 w-20" />
+            <SkeletonBlock className="h-10 w-full" />
+          </div>
+          <div className="space-y-2">
+            <SkeletonBlock className="h-3 w-24" />
+            <SkeletonBlock className="h-10 w-full" />
+          </div>
+          <div className="md:col-span-2">
+            <SkeletonBlock className="h-10 w-36" />
+          </div>
+        </div>
+      </div>
+
+      {/* AI Capability card */}
+      <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
+        <SkeletonBlock className="h-3 w-20" />
+        <SkeletonBlock className="mt-3 h-8 w-48" />
+        <SkeletonBlock className="mt-3 h-4 w-full max-w-lg" />
+        <SkeletonBlock className="mt-1 h-4 w-3/4 max-w-md" />
+        <SkeletonBlock className="mt-5 h-10 w-56" />
+        <SkeletonBlock className="mt-6 h-28 w-full" />
+      </div>
+    </section>
+  );
+}
+
 function splitSkills(value: string) {
   return value
     .split(",")
@@ -274,11 +339,7 @@ export function CandidateProfileForm() {
   }
 
   if (!isReady) {
-    return (
-      <section className="mx-auto max-w-3xl px-4 py-14">
-        <p className="text-sm text-zinc-600">Loading profile...</p>
-      </section>
-    );
+    return <ProfilePageSkeleton />;
   }
 
   const hasGeneratedContent = Boolean(capabilityProfile || recommendedPosition || futurePositions || employerSummary);
