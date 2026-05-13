@@ -197,7 +197,6 @@ export function CandidateProfileForm() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState("");
   const [saveError, setSaveError] = useState("");
-  const isEditing = Boolean(profile);
 
   useEffect(() => {
     console.log("[CandidateProfileForm] mount — starting profile load");
@@ -369,7 +368,7 @@ export function CandidateProfileForm() {
           Profile
         </p>
         <h1 className="mt-2 text-3xl font-bold text-zinc-950">
-          {isEditing ? "Edit your profile" : "Create your profile"}
+          Your profile
         </h1>
         <p className="mt-3 text-sm leading-6 text-zinc-600">
           Add the basic signals employers need to understand capability and fit.
@@ -537,7 +536,7 @@ export function CandidateProfileForm() {
               type="submit"
               className="inline-flex items-center justify-center rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
             >
-              {isEditing ? "Update profile" : "Save profile"}
+              Save profile
             </button>
             {saveError && (
               <p className="text-sm text-red-700">{saveError}</p>
