@@ -201,49 +201,44 @@ export function CandidateProfileForm() {
   const isEditing = Boolean(profile);
 
   useEffect(() => {
-    console.log("[CandidateProfileForm] mount — registering auth state listener");
-    let fetched = false;
+    console.log("[CandidateProfileForm] mount — starting profile load");
+    loadProfile();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      console.log("[CandidateProfileForm] onAuthStateChange:", event, "userId:", session?.user?.id ?? "none");
+    async function loadProfile() {
+      // getSession() reads from local storage/cookies without a server round-trip,
+      // so it resolves immediately even on first mount after a login redirect.
+      // getUser() makes a network call to validate the JWT, which can return null
+      // before the session is fully hydrated on the client.
+      const { data: { session } } = await supabase.auth.getSession();
+      console.log("[CandidateProfileForm] getSession — userId:", session?.user?.id ?? "none");
 
-      if ((event === "INITIAL_SESSION" || event === "SIGNED_IN") && session?.user && !fetched) {
-        fetched = true;
-        loadProfile(session.user);
-      } else if (event === "INITIAL_SESSION" && !session?.user) {
-        console.log("[CandidateProfileForm] INITIAL_SESSION with no user — redirecting to login");
-        window.location.href = "/candidate/login";
-      }
-    });
-
-    return () => {
-      console.log("[CandidateProfileForm] unmount — unsubscribing auth listener");
-      subscription.unsubscribe();
-    };
-
-    async function loadProfile(user: { id: string; email?: string | undefined }) {
-      console.log("[CandidateProfileForm] loadProfile start — userId:", user.id);
-
-      const userResponse = await fetch("/api/user/me", { cache: "no-store" });
-      const userRecord = await userResponse.json();
-      console.log("[CandidateProfileForm] role check result:", userRecord?.role);
-      if (userRecord?.role !== "candidate") {
-        console.log("[CandidateProfileForm] not a candidate — redirecting to login");
+      if (!session?.user) {
+        console.log("[CandidateProfileForm] no session found — redirecting to login");
         window.location.href = "/candidate/login";
         return;
       }
 
-      console.log("[CandidateProfileForm] querying candidate_profiles for userId:", user.id);
+      const user = session.user;
+
+      const userResponse = await fetch("/api/user/me", { cache: "no-store" });
+      const userRecord = await userResponse.json();
+      console.log("[CandidateProfileForm] role check:", userRecord?.role);
+      if (userRecord?.role !== "candidate") {
+        console.log("[CandidateProfileForm] role is not candidate — redirecting to login");
+        window.location.href = "/candidate/login";
+        return;
+      }
+
+      console.log("[CandidateProfileForm] querying candidate_profiles — userId:", user.id);
       const { data, error } = await supabase
         .from("candidate_profiles")
         .select("*")
         .eq("user_id", user.id)
         .maybeSingle();
 
-      console.log("[CandidateProfileForm] DB result — error:", error, "data keys:", data ? Object.keys(data) : "null");
-      console.log("[CandidateProfileForm] AI columns — capability_summary:", !!data?.capability_summary, "recommended_position:", !!data?.recommended_position, "future_positions:", !!data?.future_positions, "employer_summary:", !!data?.employer_summary);
-
+      console.log("[CandidateProfileForm] DB query complete — error:", error, "row found:", !!data);
       if (data) {
+        console.log("[CandidateProfileForm] AI columns present — capability_summary:", !!data.capability_summary, "recommended_position:", !!data.recommended_position, "future_positions:", !!data.future_positions, "employer_summary:", !!data.employer_summary);
         setProfile({
           candidateEmail: user.email ?? "",
           fullName: data.display_name ?? "",
@@ -260,9 +255,9 @@ export function CandidateProfileForm() {
         setRecommendedPosition(data.recommended_position ?? "");
         setFuturePositions(data.future_positions ?? "");
         setEmployerSummary(data.employer_summary ?? "");
-        console.log("[CandidateProfileForm] state set — profile and AI fields populated");
+        console.log("[CandidateProfileForm] profile and AI state populated");
       } else {
-        console.log("[CandidateProfileForm] no profile row found for this user");
+        console.log("[CandidateProfileForm] no profile row found for userId:", user.id);
       }
 
       setIsReady(true);
