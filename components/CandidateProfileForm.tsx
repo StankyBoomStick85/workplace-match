@@ -27,6 +27,87 @@ function splitSkills(value: string) {
     .filter(Boolean);
 }
 
+function parseAccordionItems(text: string): Array<{ title: string; content: string }> {
+  return text
+    .split(/\n(?=\*\*)/)
+    .flatMap((part) => {
+      const match = part.match(/^\*\*(.+?)\*\*[:\s]*([\s\S]*)$/);
+      if (!match) return [];
+      const title = match[1].trim();
+      const content = match[2].trim();
+      return title && content ? [{ title, content }] : [];
+    });
+}
+
+function AccordionItem({ title, content }: { title: string; content: string }) {
+  const [isOpen, setIsOpen] = useState(false);
+  return (
+    <div className="rounded-md border border-gray-200">
+      <button
+        type="button"
+        onClick={() => setIsOpen((v) => !v)}
+        className="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-gray-50"
+      >
+        <span className="text-sm font-semibold text-zinc-900">{title}</span>
+        <svg
+          className={`h-4 w-4 shrink-0 text-zinc-400 transition-transform ${isOpen ? "rotate-180" : ""}`}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          aria-hidden="true"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {isOpen && (
+        <div className="border-t border-gray-200 px-4 py-3 text-sm leading-7 text-zinc-700 whitespace-pre-wrap">
+          {content}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AccordionSection({ title, text }: { title: string; text: string }) {
+  const items = parseAccordionItems(text);
+  if (items.length === 0) {
+    return (
+      <div>
+        <h3 className="text-sm font-semibold text-zinc-900">{title}</h3>
+        <div className="mt-2 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm leading-7 text-zinc-700 whitespace-pre-wrap">
+          {text}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <h3 className="text-sm font-semibold text-zinc-900">{title}</h3>
+      <div className="mt-2 space-y-1">
+        {items.map((item, i) => (
+          <AccordionItem key={i} title={item.title} content={item.content} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RecommendedPositionCard({ content }: { content: string }) {
+  const match = content.match(/^\*\*(.+?)\*\*[:\s]*([\s\S]*)$/);
+  const title = match ? match[1].trim() : "";
+  const body = match ? match[2].trim() : content;
+  return (
+    <div>
+      <h3 className="text-sm font-semibold text-zinc-900">Recommended Position</h3>
+      <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-4">
+        {title && <p className="font-bold text-red-900">{title}</p>}
+        <p className={`text-sm leading-7 text-zinc-700 whitespace-pre-wrap${title ? " mt-2" : ""}`}>{body}</p>
+      </div>
+    </div>
+  );
+}
+
 function GeneratedSection({ title, content }: { title: string; content: string }) {
   return (
     <div>
@@ -45,8 +126,8 @@ export function CandidateProfileForm() {
 
   // AI-generated capability fields
   const [capabilityProfile, setCapabilityProfile] = useState("");
-  const [predictedAlignment, setPredictedAlignment] = useState("");
-  const [realisticEntryPoint, setRealisticEntryPoint] = useState("");
+  const [recommendedPosition, setRecommendedPosition] = useState("");
+  const [futurePositions, setFuturePositions] = useState("");
   const [employerSummary, setEmployerSummary] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState("");
@@ -87,8 +168,8 @@ export function CandidateProfileForm() {
           updatedAt: data.created_at ?? ""
         });
         setCapabilityProfile(data.capability_summary ?? "");
-        setPredictedAlignment(data.predicted_alignment ?? "");
-        setRealisticEntryPoint(data.realistic_entry_point ?? "");
+        setRecommendedPosition(data.recommended_position ?? "");
+        setFuturePositions(data.future_positions ?? "");
         setEmployerSummary(data.employer_summary ?? "");
       }
 
@@ -182,8 +263,8 @@ export function CandidateProfileForm() {
       }
 
       setCapabilityProfile(result.capabilitySummary ?? "");
-      setPredictedAlignment(result.predictedAlignment ?? "");
-      setRealisticEntryPoint(result.realisticEntryPoint ?? "");
+      setRecommendedPosition(result.recommendedPosition ?? "");
+      setFuturePositions(result.futurePositions ?? "");
       setEmployerSummary(result.employerSummary ?? "");
     } catch {
       setGenerateError("An unexpected error occurred. Please try again.");
@@ -200,7 +281,7 @@ export function CandidateProfileForm() {
     );
   }
 
-  const hasGeneratedContent = capabilityProfile || predictedAlignment || realisticEntryPoint || employerSummary;
+  const hasGeneratedContent = capabilityProfile || recommendedPosition || futurePositions || employerSummary;
 
   return (
     <section className="mx-auto max-w-3xl space-y-6 px-4 py-14">
@@ -387,14 +468,14 @@ export function CandidateProfileForm() {
         </form>
       </div>
 
-      {/* AI Capability Profile — visible in both create and edit mode */}
+      {/* AI Capability Profile */}
       <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
         <p className="text-sm font-semibold uppercase tracking-[0.16em] text-red-800">
           AI-Powered
         </p>
         <h2 className="mt-2 text-2xl font-bold text-zinc-950">Capability Profile</h2>
         <p className="mt-3 text-sm leading-6 text-zinc-600">
-          Generate a full capability translation of your background—including concrete operational skills, role alignment, and a plain-language employer summary. Save your profile first, then generate.
+          Generate a full capability translation of your background—including concrete operational skills, the best role to target now, future position recommendations, and a plain-language employer summary. Save your profile first, then generate.
         </p>
 
         <div className="mt-5">
@@ -441,28 +522,16 @@ export function CandidateProfileForm() {
         {hasGeneratedContent && (
           <div className="mt-6 space-y-6">
             {capabilityProfile && (
-              <GeneratedSection
-                title="Capability Profile"
-                content={capabilityProfile}
-              />
+              <AccordionSection title="Capability Profile" text={capabilityProfile} />
             )}
-            {predictedAlignment && (
-              <GeneratedSection
-                title="Predicted Capability Alignment"
-                content={predictedAlignment}
-              />
+            {recommendedPosition && (
+              <RecommendedPositionCard content={recommendedPosition} />
             )}
-            {realisticEntryPoint && (
-              <GeneratedSection
-                title="Realistic Entry Point"
-                content={realisticEntryPoint}
-              />
+            {futurePositions && (
+              <AccordionSection title="Future Position Recommendations" text={futurePositions} />
             )}
             {employerSummary && (
-              <GeneratedSection
-                title="Employer-Facing Summary"
-                content={employerSummary}
-              />
+              <GeneratedSection title="Employer-Facing Summary" content={employerSummary} />
             )}
           </div>
         )}

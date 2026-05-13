@@ -82,16 +82,26 @@ export async function POST() {
 Based on this information, generate exactly four sections with these exact headings:
 
 ## CAPABILITY_PROFILE
-A full capability profile that interprets the actual skills required to perform the roles implied by their experience and background. Do NOT output generic traits like "leadership" or "communication" without specifics. Instead, describe concrete operational skills: what decisions they made, what systems they managed, what environments they operated in, what constraints they worked under, and what results they produced. This should read like a senior recruiter's internal capability brief—specific, credible, and grounded in what the role actually demands.
+List each distinct capability as a separate item using this exact format. Do not use numbered lists, bullet points, or any other structure — only the bold-title format below:
 
-## PREDICTED_ALIGNMENT
-A clear mapping of their interpreted capabilities to civilian job categories and realistic seniority levels. For each alignment, state: the job category, the appropriate level (entry/mid/senior/director), and why their background qualifies them—including the specific transferable skill. Flag any mismatches to avoid (roles they are over or underqualified for). Write this as actionable guidance for a recruiter building a shortlist.
+**[Capability Name]**: [Detailed description of this specific capability grounded in their background — what decisions they made, what systems they managed, what constraints they worked under, what results they produced. Do not use generic traits without specifics.]
 
-## REALISTIC_ENTRY_POINT
-Acknowledge that while this candidate has the capability ceiling identified in the alignment section, transitioning from a military or non-traditional background into civilian roles often requires a bridge position to build sector credibility. Identify the single most realistic first civilian role title they should target. Explain specifically why that entry point makes sense given their background—what about their experience maps directly to that role's day-to-day demands. Then describe a concrete 12–24 month growth path from that entry point to their capability ceiling: what they need to demonstrate, what language or context they need to acquire, and what the promotion trigger looks like. Frame this as a strategic transition plan, not a limitation. The tone must be honest, direct, and empowering—not apologetic. Example pattern: capability ceiling is Director of Operations, realistic entry point is Operations Manager or Senior Program Manager, with a defined path to director level as they build civilian sector credibility and organizational context.
+List between 4 and 7 capabilities.
+
+## RECOMMENDED_POSITION
+State the single best job title this candidate should target right now based on their full background. Use this exact format:
+
+**[Job Title]**: [Two to three sentences explaining specifically why this role is the right fit — what in their background maps to what this role demands day-to-day.]
+
+## FUTURE_POSITIONS
+List each role this candidate is realistically on track for as they build civilian sector experience. Use this exact format. Do not use numbered lists, bullet points, or any other structure — only the bold-title format below:
+
+**[Role Title]**: [Brief explanation of why they are on track for this role and what experience or context positions them for it.]
+
+List only roles that genuinely fit. No minimum or maximum number.
 
 ## EMPLOYER_SUMMARY
-A plain-language, employer-facing paragraph (200–300 words) that a hiring manager can read in 60 seconds to understand exactly what level of operator they are looking at and what roles align. Write it to close the knowledge gap between non-traditional backgrounds and corporate expectations. Do not use jargon the candidate used—translate it into business impact language the employer already knows.
+A plain-language, employer-facing paragraph (200–300 words) that a hiring manager can read in 60 seconds to understand exactly what level of operator they are looking at and what roles align. Write it to close the knowledge gap between non-traditional backgrounds and corporate expectations. Do not use jargon the candidate used — translate it into business impact language the employer already knows.
 
 Respond with only the four sections above. No preamble, no closing remarks.`;
 
@@ -113,17 +123,17 @@ Respond with only the four sections above. No preamble, no closing remarks.`;
     return NextResponse.json({ error: `AI generation failed: ${message}` }, { status: 500 });
   }
 
-  const capabilitySummary = extractSection(text, "CAPABILITY_PROFILE", "PREDICTED_ALIGNMENT");
-  const predictedAlignment = extractSection(text, "PREDICTED_ALIGNMENT", "REALISTIC_ENTRY_POINT");
-  const realisticEntryPoint = extractSection(text, "REALISTIC_ENTRY_POINT", "EMPLOYER_SUMMARY");
+  const capabilitySummary = extractSection(text, "CAPABILITY_PROFILE", "RECOMMENDED_POSITION");
+  const recommendedPosition = extractSection(text, "RECOMMENDED_POSITION", "FUTURE_POSITIONS");
+  const futurePositions = extractSection(text, "FUTURE_POSITIONS", "EMPLOYER_SUMMARY");
   const employerSummary = extractSection(text, "EMPLOYER_SUMMARY");
 
   const { error: updateError } = await adminClient
     .from("candidate_profiles")
     .update({
       capability_summary: capabilitySummary,
-      predicted_alignment: predictedAlignment,
-      realistic_entry_point: realisticEntryPoint,
+      recommended_position: recommendedPosition,
+      future_positions: futurePositions,
       employer_summary: employerSummary
     })
     .eq("user_id", user.id);
@@ -133,5 +143,5 @@ Respond with only the four sections above. No preamble, no closing remarks.`;
     return NextResponse.json({ error: "Failed to save generated profile." }, { status: 500 });
   }
 
-  return NextResponse.json({ success: true, capabilitySummary, predictedAlignment, realisticEntryPoint, employerSummary });
+  return NextResponse.json({ success: true, capabilitySummary, recommendedPosition, futurePositions, employerSummary });
 }
