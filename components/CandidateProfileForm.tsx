@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { supabase } from "../lib/supabase";
 
 type CandidateProfile = {
   candidateEmail?: string;
@@ -205,42 +204,32 @@ export function CandidateProfileForm() {
     loadProfile();
 
     async function loadProfile() {
-      // getSession() reads from local storage/cookies without a server round-trip,
-      // so it resolves immediately even on first mount after a login redirect.
-      // getUser() makes a network call to validate the JWT, which can return null
-      // before the session is fully hydrated on the client.
-      const { data: { session } } = await supabase.auth.getSession();
-      console.log("[CandidateProfileForm] getSession — userId:", session?.user?.id ?? "none");
+      // Use server-side /api/user/me for auth — it reads HttpOnly cookies via
+      // Next.js cookieStore, which the browser-side Supabase client cannot access
+      // via getSession(). This resolves correctly on the very first visit after login.
+      console.log("[CandidateProfileForm] fetching identity from server...");
+      const meResponse = await fetch("/api/user/me", { cache: "no-store" });
+      const userRecord = await meResponse.json();
+      console.log("[CandidateProfileForm] /api/user/me — id:", userRecord?.id ?? "none", "role:", userRecord?.role ?? "none");
 
-      if (!session?.user) {
-        console.log("[CandidateProfileForm] no session found — redirecting to login");
+      if (!userRecord?.id || userRecord.role !== "candidate") {
+        console.log("[CandidateProfileForm] not authenticated as candidate — redirecting to login");
         window.location.href = "/candidate/login";
         return;
       }
 
-      const user = session.user;
-
-      const userResponse = await fetch("/api/user/me", { cache: "no-store" });
-      const userRecord = await userResponse.json();
-      console.log("[CandidateProfileForm] role check:", userRecord?.role);
-      if (userRecord?.role !== "candidate") {
-        console.log("[CandidateProfileForm] role is not candidate — redirecting to login");
-        window.location.href = "/candidate/login";
-        return;
-      }
-
-      console.log("[CandidateProfileForm] fetching profile via API route — userId:", user.id);
+      console.log("[CandidateProfileForm] fetching profile — userId:", userRecord.id);
       const profileResponse = await fetch(
-        `/api/mvp/read?resource=candidate-profile&userId=${encodeURIComponent(user.id)}`,
+        `/api/mvp/read?resource=candidate-profile&userId=${encodeURIComponent(userRecord.id)}`,
         { cache: "no-store" }
       );
       const { data } = await profileResponse.json();
 
-      console.log("[CandidateProfileForm] API response — row found:", !!data);
+      console.log("[CandidateProfileForm] profile response — row found:", !!data);
       if (data) {
-        console.log("[CandidateProfileForm] AI columns present — capability_summary:", !!data.capability_summary, "recommended_position:", !!data.recommended_position, "future_positions:", !!data.future_positions, "employer_summary:", !!data.employer_summary);
+        console.log("[CandidateProfileForm] AI columns — capability_summary:", !!data.capability_summary, "recommended_position:", !!data.recommended_position, "future_positions:", !!data.future_positions, "employer_summary:", !!data.employer_summary);
         setProfile({
-          candidateEmail: user.email ?? "",
+          candidateEmail: userRecord.email ?? "",
           fullName: data.display_name ?? "",
           zipCode: data.zip_code ?? "",
           desiredJobType: Array.isArray(data.job_types) ? data.job_types[0] ?? "" : "",
@@ -257,7 +246,7 @@ export function CandidateProfileForm() {
         setEmployerSummary(data.employer_summary ?? "");
         console.log("[CandidateProfileForm] profile and AI state populated");
       } else {
-        console.log("[CandidateProfileForm] no profile row found for userId:", user.id);
+        console.log("[CandidateProfileForm] no profile row found for userId:", userRecord.id);
       }
 
       setIsReady(true);
@@ -284,14 +273,9 @@ export function CandidateProfileForm() {
     setSaveError("");
 
     const formData = new FormData(event.currentTarget);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      window.location.href = "/candidate/login";
-      return;
-    }
 
     const nextProfile: CandidateProfile = {
-      candidateEmail: user.email ?? "",
+      candidateEmail: profile?.candidateEmail ?? "",
       streetAddress: profile?.streetAddress ?? "",
       city: profile?.city ?? "",
       state: profile?.state ?? "",
