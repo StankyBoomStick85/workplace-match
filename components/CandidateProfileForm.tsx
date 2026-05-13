@@ -27,10 +27,29 @@ function splitSkills(value: string) {
     .filter(Boolean);
 }
 
+function GeneratedSection({ title, content }: { title: string; content: string }) {
+  return (
+    <div>
+      <h3 className="text-sm font-semibold text-zinc-900">{title}</h3>
+      <div className="mt-2 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm leading-7 text-zinc-700 whitespace-pre-wrap">
+        {content}
+      </div>
+    </div>
+  );
+}
+
 export function CandidateProfileForm() {
   const [profile, setProfile] = useState<CandidateProfile | null>(null);
   const [profilePictureDataUrl, setProfilePictureDataUrl] = useState("");
   const [isReady, setIsReady] = useState(false);
+
+  // AI-generated capability fields
+  const [capabilityProfile, setCapabilityProfile] = useState("");
+  const [predictedAlignment, setPredictedAlignment] = useState("");
+  const [employerSummary, setEmployerSummary] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState("");
+
   const isEditing = Boolean(profile);
 
   useEffect(() => {
@@ -65,6 +84,9 @@ export function CandidateProfileForm() {
           educationLevel: "",
           updatedAt: data.created_at ?? ""
         });
+        setCapabilityProfile(data.capability_summary ?? "");
+        setPredictedAlignment(data.predicted_alignment ?? "");
+        setEmployerSummary(data.employer_summary ?? "");
       }
 
       setIsReady(true);
@@ -130,6 +152,29 @@ export function CandidateProfileForm() {
     window.location.href = "/candidate/dashboard";
   }
 
+  async function handleGenerate() {
+    setIsGenerating(true);
+    setGenerateError("");
+
+    try {
+      const response = await fetch("/api/candidate/generate-capability", { method: "POST" });
+      const result = await response.json();
+
+      if (!response.ok) {
+        setGenerateError(result.error ?? "Generation failed. Please try again.");
+        return;
+      }
+
+      setCapabilityProfile(result.capabilitySummary ?? "");
+      setPredictedAlignment(result.predictedAlignment ?? "");
+      setEmployerSummary(result.employerSummary ?? "");
+    } catch {
+      setGenerateError("An unexpected error occurred. Please try again.");
+    } finally {
+      setIsGenerating(false);
+    }
+  }
+
   if (!isReady) {
     return (
       <section className="mx-auto max-w-3xl px-4 py-14">
@@ -138,8 +183,11 @@ export function CandidateProfileForm() {
     );
   }
 
+  const hasGeneratedContent = capabilityProfile || predictedAlignment || employerSummary;
+
   return (
-    <section className="mx-auto max-w-3xl px-4 py-14">
+    <section className="mx-auto max-w-3xl space-y-6 px-4 py-14">
+      {/* Profile form */}
       <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
         <p className="text-sm font-semibold uppercase tracking-[0.16em] text-red-800">
           Profile
@@ -317,6 +365,81 @@ export function CandidateProfileForm() {
             </button>
           </div>
         </form>
+      </div>
+
+      {/* AI Capability Profile — visible in both create and edit mode */}
+      <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
+        <p className="text-sm font-semibold uppercase tracking-[0.16em] text-red-800">
+          AI-Powered
+        </p>
+        <h2 className="mt-2 text-2xl font-bold text-zinc-950">Capability Profile</h2>
+        <p className="mt-3 text-sm leading-6 text-zinc-600">
+          Generate a full capability translation of your background—including concrete operational skills, role alignment, and a plain-language employer summary. Save your profile first, then generate.
+        </p>
+
+        <div className="mt-5">
+          <button
+            type="button"
+            onClick={handleGenerate}
+            disabled={isGenerating}
+            className="inline-flex items-center gap-2 rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950 disabled:opacity-60"
+          >
+            {isGenerating ? (
+              <>
+                <svg
+                  className="h-4 w-4 animate-spin"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                  />
+                </svg>
+                Generating…
+              </>
+            ) : (
+              "Generate My Capability Profile"
+            )}
+          </button>
+        </div>
+
+        {generateError && (
+          <p className="mt-3 text-sm text-red-700">{generateError}</p>
+        )}
+
+        {hasGeneratedContent && (
+          <div className="mt-6 space-y-6">
+            {capabilityProfile && (
+              <GeneratedSection
+                title="Capability Profile"
+                content={capabilityProfile}
+              />
+            )}
+            {predictedAlignment && (
+              <GeneratedSection
+                title="Predicted Capability Alignment"
+                content={predictedAlignment}
+              />
+            )}
+            {employerSummary && (
+              <GeneratedSection
+                title="Employer-Facing Summary"
+                content={employerSummary}
+              />
+            )}
+          </div>
+        )}
       </div>
     </section>
   );
