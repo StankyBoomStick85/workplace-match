@@ -281,7 +281,7 @@ export function CandidateProfileForm() {
     );
   }
 
-  const hasGeneratedContent = capabilityProfile || recommendedPosition || futurePositions || employerSummary;
+  const hasGeneratedContent = Boolean(capabilityProfile || recommendedPosition || futurePositions || employerSummary);
 
   return (
     <section className="mx-auto max-w-3xl space-y-6 px-4 py-14">
@@ -519,22 +519,31 @@ export function CandidateProfileForm() {
           <p className="mt-3 text-sm text-red-700">{generateError}</p>
         )}
 
-        {hasGeneratedContent && (
-          <div className="mt-6 space-y-6">
-            {capabilityProfile && (
-              <AccordionSection title="Capability Profile" text={capabilityProfile} />
-            )}
-            {recommendedPosition && (
-              <RecommendedPositionCard content={recommendedPosition} />
-            )}
-            {futurePositions && (
-              <AccordionSection title="Future Position Recommendations" text={futurePositions} />
-            )}
-            {employerSummary && (
-              <GeneratedSection title="Employer-Facing Summary" content={employerSummary} />
-            )}
-          </div>
-        )}
+        <div className="mt-6">
+          {hasGeneratedContent ? (
+            <div className="space-y-6">
+              {capabilityProfile && (
+                <AccordionSection title="Capability Profile" text={capabilityProfile} />
+              )}
+              {recommendedPosition && (
+                <RecommendedPositionCard content={recommendedPosition} />
+              )}
+              {futurePositions && (
+                <AccordionSection title="Future Position Recommendations" text={futurePositions} />
+              )}
+              {employerSummary && (
+                <GeneratedSection title="Employer-Facing Summary" content={employerSummary} />
+              )}
+            </div>
+          ) : (
+            <div className="rounded-md border border-gray-200 bg-gray-50 p-6 text-center">
+              <p className="text-sm font-semibold text-zinc-700">No capability profile generated yet.</p>
+              <p className="mt-1 text-sm text-zinc-500">
+                Save your profile above, then click &ldquo;Generate My Capability Profile&rdquo; to get your full capability translation, recommended position, future role roadmap, and employer-facing summary.
+              </p>
+            </div>
+          )}
+        </div>
       </div>
     </section>
   );
