@@ -20,10 +20,10 @@ type CandidateProfile = {
   // AI-generated fields — kept in the same object so all data lands in one
   // atomic setProfile() call, preventing intermediate renders where form fields
   // are populated but AI sections are still empty.
-  capabilityProfile: string;
-  recommendedPosition: string;
-  futurePositions: string;
-  employerSummary: string;
+  capabilityProfile?: string;
+  recommendedPosition?: string;
+  futurePositions?: string;
+  employerSummary?: string;
 };
 
 function SkeletonBlock({ className }: { className: string }) {
@@ -291,7 +291,11 @@ export function CandidateProfileForm() {
       topSkills: splitSkills(String(formData.get("topSkills") ?? "")),
       experienceLevel: String(formData.get("experienceLevel") ?? ""),
       educationLevel: String(formData.get("educationLevel") ?? ""),
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      capabilityProfile: profile?.capabilityProfile ?? "",
+      recommendedPosition: profile?.recommendedPosition ?? "",
+      futurePositions: profile?.futurePositions ?? "",
+      employerSummary: profile?.employerSummary ?? "",
     };
 
     try {
