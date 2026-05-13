@@ -14,7 +14,7 @@ export default async function CandidateProfilePage() {
   const cookieStore = cookies();
   const authClient = createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
-      get(name) { return cookieStore.get(name)?.value; },
+      get(name: string) { return cookieStore.get(name)?.value; },
       set() {},
       remove() {},
     },
