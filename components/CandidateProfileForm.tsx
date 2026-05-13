@@ -217,8 +217,11 @@ export function CandidateProfileForm() {
         return;
       }
 
-      const profileResponse = await fetch(`/api/mvp/read?resource=candidate-profile&userId=${encodeURIComponent(user.id)}`);
-      const { data } = await profileResponse.json();
+      const { data } = await supabase
+        .from("candidate_profiles")
+        .select("*")
+        .eq("user_id", user.id)
+        .maybeSingle();
       if (data) {
         setProfile({
           candidateEmail: user.email ?? "",
