@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getCityStateForZip, normalizeStateValue, normalizeZipCode } from "../lib/addressHelpers";
 import {
   defaultContactPreference,
@@ -114,8 +114,7 @@ export function AccountSettings() {
     }
   }, [roleParam]);
 
-  async function saveSettings(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function handleSave() {
     setError("");
     setMessage("");
 
@@ -221,7 +220,7 @@ export function AccountSettings() {
 
   return (
     <section className="mx-auto max-w-5xl px-4 py-12">
-      <form onSubmit={saveSettings} className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
+      <form onSubmit={(e) => e.preventDefault()} className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-sm font-bold uppercase tracking-[0.16em] text-red-800">Account</p>
@@ -232,7 +231,7 @@ export function AccountSettings() {
           <div className="flex gap-2">
             {isEditing ? (
               <>
-                <button type="submit" className="rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950">
+                <button type="button" onClick={handleSave} className="rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950">
                   Save
                 </button>
                 <button
