@@ -94,15 +94,21 @@ Respond with only the three sections above. No preamble, no closing remarks.`;
 
   const anthropic = new Anthropic({ apiKey });
 
-  const message = await anthropic.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 2048,
-    system:
-      "You are a veteran career counselor and hiring specialist who translates non-traditional, military, and blue-collar backgrounds into civilian corporate language that hiring managers can immediately understand and act on. You are precise, specific, and never use filler language.",
-    messages: [{ role: "user", content: userPrompt }]
-  });
-
-  const text = message.content.find((b) => b.type === "text")?.text ?? "";
+  let text = "";
+  try {
+    const message = await anthropic.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 2048,
+      system:
+        "You are a veteran career counselor and hiring specialist who translates non-traditional, military, and blue-collar backgrounds into civilian corporate language that hiring managers can immediately understand and act on. You are precise, specific, and never use filler language.",
+      messages: [{ role: "user", content: userPrompt }]
+    });
+    text = message.content.find((b) => b.type === "text")?.text ?? "";
+  } catch (err) {
+    console.error("[generate-capability] Anthropic API error", err);
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: `AI generation failed: ${message}` }, { status: 500 });
+  }
 
   const capabilitySummary = extractSection(text, "CAPABILITY_PROFILE", "PREDICTED_ALIGNMENT");
   const predictedAlignment = extractSection(text, "PREDICTED_ALIGNMENT", "EMPLOYER_SUMMARY");
