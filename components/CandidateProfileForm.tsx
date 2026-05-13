@@ -218,16 +218,6 @@ export function CandidateProfileForm() {
         return;
       }
 
-      // Push the access_token into the client's internal auth state so that
-      // all subsequent PostgREST queries include the Authorization: Bearer header.
-      // The singleton client may have been created before the session cookie was
-      // readable, leaving its internal state empty even though getSession() works.
-      await supabase.auth.setSession({
-        access_token: session.access_token,
-        refresh_token: session.refresh_token,
-      });
-      console.log("[CandidateProfileForm] setSession complete — client auth state synced");
-
       const user = session.user;
 
       const userResponse = await fetch("/api/user/me", { cache: "no-store" });
@@ -239,14 +229,14 @@ export function CandidateProfileForm() {
         return;
       }
 
-      console.log("[CandidateProfileForm] querying candidate_profiles — userId:", user.id);
-      const { data, error } = await supabase
-        .from("candidate_profiles")
-        .select("*")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      console.log("[CandidateProfileForm] fetching profile via API route — userId:", user.id);
+      const profileResponse = await fetch(
+        `/api/mvp/read?resource=candidate-profile&userId=${encodeURIComponent(user.id)}`,
+        { cache: "no-store" }
+      );
+      const { data } = await profileResponse.json();
 
-      console.log("[CandidateProfileForm] DB query complete — error:", error, "row found:", !!data);
+      console.log("[CandidateProfileForm] API response — row found:", !!data);
       if (data) {
         console.log("[CandidateProfileForm] AI columns present — capability_summary:", !!data.capability_summary, "recommended_position:", !!data.recommended_position, "future_positions:", !!data.future_positions, "employer_summary:", !!data.employer_summary);
         setProfile({
