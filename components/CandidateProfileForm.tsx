@@ -17,6 +17,13 @@ type CandidateProfile = {
   experienceLevel: string;
   educationLevel: string;
   updatedAt: string;
+  // AI-generated fields — kept in the same object so all data lands in one
+  // atomic setProfile() call, preventing intermediate renders where form fields
+  // are populated but AI sections are still empty.
+  capabilityProfile: string;
+  recommendedPosition: string;
+  futurePositions: string;
+  employerSummary: string;
 };
 
 function SkeletonBlock({ className }: { className: string }) {
@@ -187,15 +194,8 @@ export function CandidateProfileForm() {
   const [profile, setProfile] = useState<CandidateProfile | null>(null);
   const [profilePictureDataUrl, setProfilePictureDataUrl] = useState("");
   const [isReady, setIsReady] = useState(false);
-
-  // AI-generated capability fields
-  const [capabilityProfile, setCapabilityProfile] = useState("");
-  const [recommendedPosition, setRecommendedPosition] = useState("");
-  const [futurePositions, setFuturePositions] = useState("");
-  const [employerSummary, setEmployerSummary] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState("");
-
   const [saveError, setSaveError] = useState("");
   const isEditing = Boolean(profile);
 
@@ -228,6 +228,9 @@ export function CandidateProfileForm() {
       console.log("[CandidateProfileForm] profile response — row found:", !!data);
       if (data) {
         console.log("[CandidateProfileForm] AI columns — capability_summary:", !!data.capability_summary, "recommended_position:", !!data.recommended_position, "future_positions:", !!data.future_positions, "employer_summary:", !!data.employer_summary);
+        // Single setProfile call so all fields — including AI sections — land in
+        // one atomic state update. This prevents an intermediate render where the
+        // form fields are populated but the AI states are still empty strings.
         setProfile({
           candidateEmail: userRecord.email ?? "",
           fullName: data.display_name ?? "",
@@ -238,12 +241,12 @@ export function CandidateProfileForm() {
           topSkills: data.capability_tags ?? [],
           experienceLevel: data.experience_level ?? "",
           educationLevel: "",
-          updatedAt: data.created_at ?? ""
+          updatedAt: data.created_at ?? "",
+          capabilityProfile: data.capability_summary ?? "",
+          recommendedPosition: data.recommended_position ?? "",
+          futurePositions: data.future_positions ?? "",
+          employerSummary: data.employer_summary ?? "",
         });
-        setCapabilityProfile(data.capability_summary ?? "");
-        setRecommendedPosition(data.recommended_position ?? "");
-        setFuturePositions(data.future_positions ?? "");
-        setEmployerSummary(data.employer_summary ?? "");
         console.log("[CandidateProfileForm] profile and AI state populated");
       } else {
         console.log("[CandidateProfileForm] no profile row found for userId:", userRecord.id);
@@ -334,10 +337,13 @@ export function CandidateProfileForm() {
         return;
       }
 
-      setCapabilityProfile(result.capabilitySummary ?? "");
-      setRecommendedPosition(result.recommendedPosition ?? "");
-      setFuturePositions(result.futurePositions ?? "");
-      setEmployerSummary(result.employerSummary ?? "");
+      setProfile(prev => prev ? {
+        ...prev,
+        capabilityProfile: result.capabilitySummary ?? "",
+        recommendedPosition: result.recommendedPosition ?? "",
+        futurePositions: result.futurePositions ?? "",
+        employerSummary: result.employerSummary ?? "",
+      } : prev);
     } catch {
       setGenerateError("An unexpected error occurred. Please try again.");
     } finally {
@@ -349,7 +355,7 @@ export function CandidateProfileForm() {
     return <ProfilePageSkeleton />;
   }
 
-  const hasGeneratedContent = Boolean(capabilityProfile || recommendedPosition || futurePositions || employerSummary);
+  const hasGeneratedContent = Boolean(profile?.capabilityProfile || profile?.recommendedPosition || profile?.futurePositions || profile?.employerSummary);
 
   return (
     <section className="mx-auto max-w-3xl space-y-6 px-4 py-14">
@@ -590,17 +596,17 @@ export function CandidateProfileForm() {
         <div className="mt-6">
           {hasGeneratedContent ? (
             <div className="space-y-6">
-              {capabilityProfile && (
-                <AccordionSection title="Capability Profile" text={capabilityProfile} />
+              {profile?.capabilityProfile && (
+                <AccordionSection title="Capability Profile" text={profile.capabilityProfile} />
               )}
-              {recommendedPosition && (
-                <RecommendedPositionCard content={recommendedPosition} />
+              {profile?.recommendedPosition && (
+                <RecommendedPositionCard content={profile.recommendedPosition} />
               )}
-              {futurePositions && (
-                <AccordionSection title="Future Position Recommendations" text={futurePositions} />
+              {profile?.futurePositions && (
+                <AccordionSection title="Future Position Recommendations" text={profile.futurePositions} />
               )}
-              {employerSummary && (
-                <GeneratedSection title="Employer-Facing Summary" content={employerSummary} />
+              {profile?.employerSummary && (
+                <GeneratedSection title="Employer-Facing Summary" content={profile.employerSummary} />
               )}
             </div>
           ) : (
