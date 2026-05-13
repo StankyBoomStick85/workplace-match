@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { createServerClient } from "@supabase/ssr";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import { CandidateProfileForm } from "@/components/CandidateProfileForm";
 
@@ -15,8 +15,8 @@ export default async function CandidateProfilePage() {
   const authClient = createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
       get(name: string) { return cookieStore.get(name)?.value; },
-      set() {},
-      remove() {},
+      set(_name: string, _value: string, _options: CookieOptions) {},
+      remove(_name: string, _options: CookieOptions) {},
     },
   });
 
