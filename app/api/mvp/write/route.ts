@@ -115,6 +115,18 @@ export async function POST(request: Request) {
           willingToRelocate: typeof data.willingToRelocate === "string" ? data.willingToRelocate : ""
         });
       }
+      if ("phone" in data) {
+        upsertData.phone = typeof data.phone === "string" ? data.phone.trim() : "";
+      }
+      if ("streetAddress" in data) {
+        upsertData.street_address = typeof data.streetAddress === "string" ? data.streetAddress.trim() : "";
+      }
+      if ("city" in data) {
+        upsertData.city = typeof data.city === "string" ? data.city.trim() : "";
+      }
+      if ("state" in data) {
+        upsertData.state = typeof data.state === "string" ? data.state.trim() : "";
+      }
 
       const { error } = await adminClient.from("candidate_profiles").upsert(upsertData, { onConflict: "user_id" });
       if (error) throw error;
@@ -123,16 +135,26 @@ export async function POST(request: Request) {
 
     if (resource === "employer-profile") {
       const email = typeof data.email === "string" ? data.email.trim().toLowerCase() : "";
-      const { error } = await adminClient.from("employer_profiles").upsert(
-        {
-          user_id: user.id,
-          company_name: typeof data.displayName === "string" ? data.displayName.trim() : "",
-          contact_email: email,
-          location_zip: typeof data.zipCode === "string" ? data.zipCode.trim() : "",
-          member_status: "beta"
-        },
-        { onConflict: "user_id" }
-      );
+      const employerData: Record<string, unknown> = {
+        user_id: user.id,
+        company_name: typeof data.displayName === "string" ? data.displayName.trim() : "",
+        contact_email: email,
+        location_zip: typeof data.zipCode === "string" ? data.zipCode.trim() : "",
+        member_status: "beta"
+      };
+      if ("phone" in data) {
+        employerData.phone = typeof data.phone === "string" ? data.phone.trim() : "";
+      }
+      if ("streetAddress" in data) {
+        employerData.street_address = typeof data.streetAddress === "string" ? data.streetAddress.trim() : "";
+      }
+      if ("city" in data) {
+        employerData.city = typeof data.city === "string" ? data.city.trim() : "";
+      }
+      if ("state" in data) {
+        employerData.state = typeof data.state === "string" ? data.state.trim() : "";
+      }
+      const { error } = await adminClient.from("employer_profiles").upsert(employerData, { onConflict: "user_id" });
       if (error) throw error;
       return NextResponse.json({ success: true });
     }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { getCityStateForZip, normalizeStateValue, normalizeZipCode } from "../lib/addressHelpers";
 import {
   defaultContactPreference,
@@ -48,6 +48,7 @@ export function AccountSettings() {
   const roleParam = searchParams.get("role");
   const [role, setRole] = useState<Role>("candidate");
   const [userId, setUserId] = useState("");
+  const originalEmailRef = useRef("");
   const [settings, setSettings] = useState<SettingsState>(initialSettings);
   const [isEditing, setIsEditing] = useState(false);
   const [message, setMessage] = useState("");
@@ -74,31 +75,38 @@ export function AccountSettings() {
 
       setRole(resolvedRole);
       setUserId(user.id);
+      originalEmailRef.current = user.email ?? "";
 
       if (resolvedRole === "candidate") {
         const profileResponse = await fetch(`/api/mvp/read?resource=candidate-profile&userId=${encodeURIComponent(user.id)}`);
         const { data } = await profileResponse.json();
-        const zipMatch = getCityStateForZip(data?.zip_code ?? "");
+        const zipCode = data?.zip_code ?? "";
+        const zipMatch = getCityStateForZip(zipCode);
         setSettings({
           ...initialSettings,
           email: user.email ?? "",
           displayName: data?.display_name ?? "",
-          city: zipMatch?.city ?? "",
-          state: zipMatch?.state ?? "",
-          zipCode: data?.zip_code ?? "",
+          phone: data?.phone ?? "",
+          streetAddress: data?.street_address ?? "",
+          city: data?.city ?? zipMatch?.city ?? "",
+          state: data?.state ?? zipMatch?.state ?? "",
+          zipCode,
           preferredContactMethods: defaultContactPreference
         });
       } else {
         const profileResponse = await fetch(`/api/mvp/read?resource=employer-profile&userId=${encodeURIComponent(user.id)}`);
         const { data } = await profileResponse.json();
-        const zipMatch = getCityStateForZip(data?.location_zip ?? "");
+        const zipCode = data?.location_zip ?? "";
+        const zipMatch = getCityStateForZip(zipCode);
         setSettings({
           ...initialSettings,
           email: user.email ?? "",
           displayName: data?.company_name ?? "",
-          city: zipMatch?.city ?? "",
-          state: zipMatch?.state ?? "",
-          zipCode: data?.location_zip ?? "",
+          phone: data?.phone ?? "",
+          streetAddress: data?.street_address ?? "",
+          city: data?.city ?? zipMatch?.city ?? "",
+          state: data?.state ?? zipMatch?.state ?? "",
+          zipCode,
           availabilityText: "",
           preferredContactMethods: defaultContactPreference
         });
@@ -134,7 +142,9 @@ export function AccountSettings() {
     }
 
     const normalizedEmail = settings.email.trim().toLowerCase();
-    if (normalizedEmail) {
+    const emailChanged = normalizedEmail !== originalEmailRef.current.trim().toLowerCase();
+
+    if (emailChanged && normalizedEmail) {
       const { error: emailError } = await supabase.auth.updateUser({ email: normalizedEmail });
       if (emailError) {
         setError(emailError.message);
@@ -145,12 +155,17 @@ export function AccountSettings() {
         setError(accountResponse.error);
         return;
       }
+      originalEmailRef.current = normalizedEmail;
     }
 
     if (role === "candidate") {
       const profileResponse = await writeMvpData("candidate-profile", {
         displayName: settings.displayName,
-        zipCode: settings.zipCode
+        zipCode: settings.zipCode,
+        phone: settings.phone,
+        streetAddress: settings.streetAddress,
+        city: settings.city,
+        state: settings.state
       });
       if (!profileResponse.ok) {
         setError(profileResponse.error);
@@ -160,7 +175,11 @@ export function AccountSettings() {
       const profileResponse = await writeMvpData("employer-profile", {
         displayName: settings.displayName,
         email: normalizedEmail,
-        zipCode: settings.zipCode
+        zipCode: settings.zipCode,
+        phone: settings.phone,
+        streetAddress: settings.streetAddress,
+        city: settings.city,
+        state: settings.state
       });
       if (!profileResponse.ok) {
         setError(profileResponse.error);
