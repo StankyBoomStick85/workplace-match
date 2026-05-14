@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import L from "leaflet";
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
@@ -21,8 +21,8 @@ import {
   addInterest as addSupabaseInterest,
   addMutualMatch as addSupabaseMutualMatch,
   getAllJobs,
-  getCandidateInterests,
-  getCandidateProfile,
+  getApplicantInterests,
+  getApplicantProfile,
   getCurrentMvpUser,
   getEmployerInterests,
   getMutualMatches,
@@ -30,7 +30,7 @@ import {
 } from "../lib/supabaseMvpData";
 import { RemoveInterestConfirmationModal } from "./RemoveInterestConfirmationModal";
 
-type CandidateAccount = {
+type ApplicantAccount = {
   id?: string;
   email: string;
   displayName?: string;
@@ -44,7 +44,7 @@ type CandidateAccount = {
   preferredContactMethods?: ContactMethod[];
 };
 
-type CandidateProfile = {
+type ApplicantProfile = {
   fullName?: string;
   streetAddress?: string;
   city?: string;
@@ -96,7 +96,7 @@ type EmployerInterest = {
   status: "employer_interested";
 };
 
-type CandidateInterest = {
+type ApplicantInterest = {
   candidateId: string;
   employerId: string;
   jobId: string;
@@ -153,15 +153,15 @@ type JobGroup = {
   jobs: JobListing[];
 };
 
-const candidateAccountKey = "workplace_match_candidate";
-const candidateAccountsKey = "workplace_match_candidate_accounts";
+const applicantAccountKey = "workplace_match_candidate";
+const applicantAccountsKey = "workplace_match_candidate_accounts";
 const employerAccountKey = "workplace_match_employer";
 const employerAccountsKey = "workplace_match_employer_accounts";
-const candidateProfileKey = "workplace_match_candidate_profile";
+const applicantProfileKey = "workplace_match_candidate_profile";
 const employerJobsKey = "workplace_match_employer_jobs";
 const employerCompanyProfileKey = "workplace_match_employer_company_profile";
 const employerInterestsKey = "workplace_match_employer_interests";
-const candidateInterestsKey = "workplace_match_candidate_interests";
+const applicantInterestsKey = "workplace_match_candidate_interests";
 const mutualMatchesKey = "workplace_match_mutual_matches";
 const activeRoleKey = "workplace_match_active_role";
 const activeEmailKey = "workplace_match_active_email";
@@ -219,12 +219,12 @@ L.Icon.Default.mergeOptions({
   shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png"
 });
 
-export function CandidateJobsMap() {
-  const [account, setAccount] = useState<CandidateAccount | null>(null);
-  const [profile, setProfile] = useState<CandidateProfile | null>(null);
+export function ApplicantJobsMap() {
+  const [account, setAccount] = useState<ApplicantAccount | null>(null);
+  const [profile, setProfile] = useState<ApplicantProfile | null>(null);
   const [jobs, setJobs] = useState<JobListing[]>([]);
   const [companyProfile, setCompanyProfile] = useState<CompanyProfile | null>(null);
-  const [candidateInterests, setCandidateInterests] = useState<CandidateInterest[]>([]);
+  const [applicantInterests, setApplicantInterests] = useState<ApplicantInterest[]>([]);
   const [employerInterests, setEmployerInterests] = useState<EmployerInterest[]>([]);
   const [mutualMatches, setMutualMatches] = useState<MutualMatch[]>([]);
   const [searchMiles, setSearchMiles] = useState<number | null>(null);
@@ -262,32 +262,32 @@ export function CandidateJobsMap() {
     async function loadMapData() {
       const user = await getCurrentMvpUser("candidate");
       if (!user) {
-        window.location.href = "/candidate/login";
+        window.location.href = "/applicant/login";
         return;
       }
 
-      const [savedProfile, savedJobs, savedCandidateInterests, savedEmployerInterests, savedMutualMatches] =
+      const [savedProfile, savedJobs, savedApplicantInterests, savedEmployerInterests, savedMutualMatches] =
         await Promise.all([
-          getCandidateProfile(user.id),
+          getApplicantProfile(user.id),
           getAllJobs(),
-          getCandidateInterests(),
+          getApplicantInterests(),
           getEmployerInterests(),
           getMutualMatches()
         ]);
 
       const parsedAccount = { id: user.id, email: user.email };
       setAccount(parsedAccount);
-      setProfile(savedProfile ?? getCandidateMapProfileFromAccount(parsedAccount));
+      setProfile(savedProfile ?? getApplicantMapProfileFromAccount(parsedAccount));
       setHasAcknowledgedPrivacyNotice(true);
       setJobs(getEmployerCreatedJobs(savedJobs as JobListing[]));
       setCompanyProfile(null);
-      setCandidateInterests(savedCandidateInterests as CandidateInterest[]);
+      setApplicantInterests(savedApplicantInterests as ApplicantInterest[]);
       setEmployerInterests(savedEmployerInterests as EmployerInterest[]);
       setMutualMatches(savedMutualMatches as MutualMatch[]);
     }
   }, []);
 
-  const candidateId = profile ? getCandidateInterestId(profile) : "candidate-profile:local-mvp";
+  const candidateId = profile ? getApplicantInterestId(profile) : "candidate-profile:local-mvp";
   const applicantLocationResolution = useMemo(
     () => getApplicantSelfMapResolution(account, profile),
     [account, profile]
@@ -344,7 +344,7 @@ export function CandidateJobsMap() {
       interestStatusFilter,
       sortMode,
       profile,
-      candidateInterests,
+      applicantInterests,
       mutualMatches
     ]
   );
@@ -431,17 +431,17 @@ export function CandidateJobsMap() {
       return "mutual_match";
     }
 
-    const hasCandidateInterest = candidateInterests.some(
+    const hasApplicantInterest = applicantInterests.some(
       (interest) =>
         interest.employerId === job.employerEmail &&
         interest.jobId === job.id &&
         interest.candidateId === candidateId
     );
 
-    return hasCandidateInterest ? "candidate_interested" : "none";
+    return hasApplicantInterest ? "candidate_interested" : "none";
   }
 
-  function toggleCandidateInterest(job: JobListing, matchPercent: number) {
+  function toggleApplicantInterest(job: JobListing, matchPercent: number) {
     const interestState = getJobInterestState(job);
 
     if (interestState !== "none") {
@@ -449,7 +449,7 @@ export function CandidateJobsMap() {
       return;
     }
 
-    const nextInterest: CandidateInterest = {
+    const nextInterest: ApplicantInterest = {
       candidateId,
       employerId: job.employerEmail,
       jobId: job.id,
@@ -464,7 +464,7 @@ export function CandidateJobsMap() {
         interest.candidateId === nextInterest.candidateId
     );
 
-    setCandidateInterests((current) => {
+    setApplicantInterests((current) => {
       const alreadyExists = current.some(
         (interest) =>
           interest.employerId === nextInterest.employerId &&
@@ -553,7 +553,7 @@ export function CandidateJobsMap() {
   function removeCandidateInterest(job: JobListing) {
     setShowMatchPopup(false);
 
-    setCandidateInterests((current) => {
+    setApplicantInterests((current) => {
       const updated = current.filter(
         (interest) =>
           !(
@@ -721,7 +721,7 @@ export function CandidateJobsMap() {
             onSendMessage={(text) => sendApplicantMessage(job, text)}
             onSchedule={(selectedTime) => handleApplicantSchedule(job, selectedTime)}
             onRemoveInterest={() => {
-              toggleCandidateInterest(job, matchPercent);
+              toggleApplicantInterest(job, matchPercent);
               onClosePanel();
             }}
           />
@@ -732,13 +732,13 @@ export function CandidateJobsMap() {
             onReachOut={() => handleApplicantReachOut(job)}
             onSendMessage={(text) => sendApplicantMessage(job, text)}
             onSchedule={(selectedTime) => handleApplicantSchedule(job, selectedTime)}
-            onRemoveInterest={() => toggleCandidateInterest(job, matchPercent)}
+            onRemoveInterest={() => toggleApplicantInterest(job, matchPercent)}
           />
         )
       ) : (
         <button
           type="button"
-          onClick={() => toggleCandidateInterest(job, matchPercent)}
+          onClick={() => toggleApplicantInterest(job, matchPercent)}
           className="w-full rounded-md bg-red-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
         >
           {interestState === "candidate_interested" ? "Remove interest" : "Interested"}
@@ -1169,7 +1169,7 @@ export function CandidateJobsMap() {
               onClick={openFilters}
               className="flex w-full items-center justify-between rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
             >
-              <span>{activeFilterCount > 0 ? `Filters (${activeFilterCount})` : "Filters ▾"}</span>
+              <span>{activeFilterCount > 0 ? `Filters (${activeFilterCount})` : "Filters â–¾"}</span>
             </button>
             {filterSaveMessage ? (
               <p className="mt-2 text-xs font-semibold text-zinc-500">{filterSaveMessage}</p>
@@ -1861,11 +1861,11 @@ function isSeedJob(job: JobListing) {
   return job.id.startsWith("wm-test-") || job.employerEmail === "grouping-test-employer@workplacematch.local";
 }
 
-function getCandidateInterestId(profile: CandidateProfile) {
+function getApplicantInterestId(profile: ApplicantProfile) {
   return profile.updatedAt ? `candidate-profile:${profile.updatedAt}` : "candidate-profile:local-mvp";
 }
 
-function getCandidateMapProfileFromAccount(account: CandidateAccount): CandidateProfile | null {
+function getApplicantMapProfileFromAccount(account: ApplicantAccount): ApplicantProfile | null {
   if (!account.zipCode && !account.streetAddress && !account.city) {
     return null;
   }
@@ -1940,8 +1940,8 @@ function logApplicantZipResolution(zipCode: string, coordinates: Coordinates) {
 }
 
 function getApplicantSelfMapResolution(
-  account: CandidateAccount | null,
-  profile: CandidateProfile | null
+  account: ApplicantAccount | null,
+  profile: ApplicantProfile | null
 ): ApplicantMapLocationResolution {
   const manualPosition = getManualMapPosition(account) ?? getManualMapPosition(profile);
 
@@ -1966,7 +1966,7 @@ function getApplicantSelfMapResolution(
   return { position: null, source: "unresolved" };
 }
 
-function getManualMapPosition(value: CandidateAccount | CandidateProfile | null) {
+function getManualMapPosition(value: ApplicantAccount | ApplicantProfile | null) {
   if (typeof value?.manualMapLat !== "number" || typeof value.manualMapLng !== "number") {
     return null;
   }
@@ -1974,7 +1974,7 @@ function getManualMapPosition(value: CandidateAccount | CandidateProfile | null)
   return [value.manualMapLat, value.manualMapLng] as Coordinates;
 }
 
-function getApplicantExactAddressMapPosition(profile: CandidateProfile | CandidateAccount) {
+function getApplicantExactAddressMapPosition(profile: ApplicantProfile | ApplicantAccount) {
   const normalizedAddress = normalizeAddress(
     [profile.streetAddress, profile.city, profile.state, profile.zipCode].filter(Boolean).join(" ")
   );
@@ -1987,7 +1987,7 @@ function getApplicantExactAddressMapPosition(profile: CandidateProfile | Candida
   return knownExactAddresses[normalizedAddress] ?? null;
 }
 
-function updateCandidateAccountInAccountsArray(updatedAccount: CandidateAccount) {
+function updateCandidateAccountInAccountsArray(updatedAccount: ApplicantAccount) {
   void updatedAccount;
 }
 
@@ -2018,7 +2018,7 @@ function isInterestStatusFilter(value: unknown): value is InterestStatusFilter {
   return value === "all" || value === "not_marked" || value === "interested" || value === "matched";
 }
 
-function createMutualMatchRecord(interest: CandidateInterest): MutualMatch {
+function createMutualMatchRecord(interest: ApplicantInterest): MutualMatch {
   return {
     employerId: interest.employerId,
     jobId: interest.jobId,
@@ -2046,7 +2046,7 @@ function shouldShowJob(
   searchMiles: number | null,
   customAreaPoints: Coordinates[],
   filters: JobFilters,
-  profile: CandidateProfile | null,
+  profile: ApplicantProfile | null,
   interestState: InterestState
 ) {
   if (
@@ -2154,7 +2154,7 @@ function jobMeetsInterestStatusFilter(interestState: InterestState, filter: Inte
 function sortJobs(
   jobs: JobListing[],
   sortMode: JobSortMode,
-  profile: CandidateProfile | null,
+  profile: ApplicantProfile | null,
   applicantPosition: Coordinates | null
 ) {
   return [...jobs].sort((first, second) => {
@@ -2173,7 +2173,7 @@ function sortJobs(
   });
 }
 
-function getJobSortMetrics(job: JobListing, profile: CandidateProfile | null, applicantPosition: Coordinates | null) {
+function getJobSortMetrics(job: JobListing, profile: ApplicantProfile | null, applicantPosition: Coordinates | null) {
   const matchPercent = calculateSkillMatch(job.requiredSkills, getCandidateMatchSignals(profile), job.title).percentage;
   const commuteMinutes = getJobCommuteEstimate(job, applicantPosition)?.minutes ?? Number.POSITIVE_INFINITY;
   const commuteScore = Number.isFinite(commuteMinutes) ? Math.max(0, 100 - Math.min(commuteMinutes, 100)) : 0;
@@ -2600,7 +2600,7 @@ function toRadians(value: number) {
 function createApplicantAreaIcon(profilePictureDataUrl = "") {
   const markerHtml = profilePictureDataUrl
     ? `<img src="${profilePictureDataUrl}" alt="" style="display:block;width:28px;height:28px;border-radius:9999px;object-fit:cover;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4);" />`
-    : '<div style="font-size:28px;line-height:28px;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.4));cursor:grab;pointer-events:auto;">🙂</div>';
+    : '<div style="font-size:28px;line-height:28px;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.4));cursor:grab;pointer-events:auto;">ðŸ™‚</div>';
 
   return L.divIcon({
     className: "me-marker",
@@ -2688,7 +2688,7 @@ function calculateSkillMatch(requiredSkillsValue: string[], candidateSkillsValue
   return { percentage, matchedSkills, missingSkills };
 }
 
-function getCandidateMatchSignals(profile: CandidateProfile | null) {
+function getCandidateMatchSignals(profile: ApplicantProfile | null) {
   if (!profile) {
     return [];
   }
@@ -2891,3 +2891,6 @@ function skillFormsContain(skillForms: string[], term: string) {
       (skillForm.length >= 4 && term.includes(skillForm))
   );
 }
+
+
+

@@ -1,5 +1,5 @@
 import { MyMatches } from "@/components/MyMatches";
 
-export default function CandidateMatchesPage() {
+export default function ApplicantMatchesPage() {
   return <MyMatches role="candidate" />;
 }

@@ -2,11 +2,11 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
-import { CandidateProfileForm } from "@/components/CandidateProfileForm";
+import { ApplicantProfileForm } from "@/components/ApplicantProfileForm";
 
 export const dynamic = "force-dynamic";
 
-export default async function CandidateProfilePage() {
+export default async function ApplicantProfilePage() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
   const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -21,7 +21,7 @@ export default async function CandidateProfilePage() {
   });
 
   const { data: { user } } = await authClient.auth.getUser();
-  if (!user) redirect("/candidate/login");
+  if (!user) redirect("/applicant/login");
 
   const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
@@ -33,7 +33,7 @@ export default async function CandidateProfilePage() {
     .eq("id", user.id)
     .maybeSingle();
 
-  if (!userRecord || userRecord.role !== "candidate") redirect("/candidate/login");
+  if (!userRecord || userRecord.role !== "candidate") redirect("/applicant/login");
 
   const { data: profileData } = await adminClient
     .from("candidate_profiles")
@@ -42,7 +42,7 @@ export default async function CandidateProfilePage() {
     .maybeSingle();
 
   return (
-    <CandidateProfileForm
+    <ApplicantProfileForm
       userEmail={userRecord.email ?? ""}
       initialProfile={profileData}
     />

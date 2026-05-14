@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState, type ReactNode } from "react";
 import L from "leaflet";
@@ -7,10 +7,10 @@ import { clearAdminSession, hasAdminSession } from "../lib/adminAuth";
 import { refreshAdminEvents, type AdminEvent } from "../lib/adminEvents";
 import { zipCityStateLookup } from "../lib/addressHelpers";
 import {
-  getAllCandidateProfiles,
+  getAllApplicantProfiles,
   getAllEmployerProfiles,
   getAllJobs,
-  getCandidateInterests,
+  getApplicantInterests,
   getEmployerInterests,
   getMutualMatches
 } from "../lib/supabaseMvpData";
@@ -26,8 +26,8 @@ type LocalAccount = {
   companyProfileComplete?: boolean;
 };
 
-type CandidateProfile = {
-  candidateEmail?: string;
+type applicantProfile = {
+  applicantEmail?: string;
   city?: string;
   state?: string;
   zipCode?: string;
@@ -68,7 +68,7 @@ type MessageRecord = {
   jobId: string;
 };
 
-type AdminCandidate = {
+type AdminApplicant = {
   id: string;
   city: string;
   state: string;
@@ -116,11 +116,11 @@ const jobIcon = createIcon("J", "bg-red-800", "Job");
 const matchIcon = createIcon("MATCH", "bg-green-700", "Mutual match", 60);
 
 const emptyAdminData = {
-  candidates: [] as AdminCandidate[],
+  applicants: [] as AdminApplicant[],
   employers: [] as LocalAccount[],
   jobs: [] as AdminJob[],
   employerInterests: [] as InterestRecord[],
-  candidateInterests: [] as InterestRecord[],
+  applicantInterests: [] as InterestRecord[],
   totalInterests: 0,
   mutualMatches: [] as InterestRecord[],
   messages: [] as MessageRecord[],
@@ -197,7 +197,7 @@ export function AdminDashboard() {
       </div>
 
       <div className="grid gap-3 md:grid-cols-4">
-        <Stat label="Applicants" value={data.candidates.length} />
+        <Stat label="Applicants" value={data.applicants.length} />
         <Stat label="Employers" value={data.employers.length} />
         <Stat label="Jobs" value={data.jobs.length} />
         <Stat label="Mutual matches" value={data.mutualMatches.length} />
@@ -225,13 +225,13 @@ export function AdminDashboard() {
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             />
-            {data.candidates.map((candidate) =>
-              candidate.position ? (
-                <Marker key={`candidate-${candidate.id}`} position={[candidate.position.lat, candidate.position.lng]} icon={applicantIcon}>
+            {data.applicants.map((applicant) =>
+              applicant.position ? (
+                <Marker key={`candidate-${applicant.id}`} position={[applicant.position.lat, applicant.position.lng]} icon={applicantIcon}>
                   <Popup>
                     <AdminPopupTitle>Applicant area</AdminPopupTitle>
-                    <p>{formatLocation(candidate.city, candidate.state, candidate.zipCode)}</p>
-                    <p>{candidate.skillsCount} skills</p>
+                    <p>{formatLocation(applicant.city, applicant.state, applicant.zipCode)}</p>
+                    <p>{applicant.skillsCount} skills</p>
                   </Popup>
                 </Marker>
               ) : null
@@ -250,7 +250,7 @@ export function AdminDashboard() {
             )}
             {data.mutualMatches.map((match) => {
               const job = data.jobs.find((storedJob) => storedJob.id === match.jobId);
-              const candidate = data.candidates.find((storedCandidate) => storedCandidate.id === match.candidateId);
+              const applicant = data.applicants.find((storedApplicant) => storedApplicant.id === match.candidateId);
               if (!job?.position) {
                 return null;
               }
@@ -260,7 +260,7 @@ export function AdminDashboard() {
                   <Popup>
                     <AdminPopupTitle>Mutual match</AdminPopupTitle>
                     <p>{job.title}</p>
-                    <p>Applicant area: {candidate ? formatLocation(candidate.city, candidate.state, candidate.zipCode) : "Unknown"}</p>
+                    <p>Applicant area: {applicant ? formatLocation(applicant.city, applicant.state, applicant.zipCode) : "Unknown"}</p>
                     <p>{typeof match.matchPercent === "number" ? `${match.matchPercent}% match` : "Match percent unavailable"}</p>
                   </Popup>
                 </Marker>
@@ -318,13 +318,13 @@ export function AdminDashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {data.candidates.length > 0 ? (
-                  data.candidates.map((candidate) => (
-                    <tr key={candidate.id}>
-                      <td className="px-3 py-3 font-semibold text-zinc-950">{formatLocation(candidate.city, candidate.state, candidate.zipCode)}</td>
-                      <td className="px-3 py-3 text-zinc-600">{candidate.skillsCount}</td>
-                      <td className="px-3 py-3 text-zinc-600">{candidate.matchCount}</td>
-                      <td className="px-3 py-3 text-zinc-600">{candidate.interestCount}</td>
+                {data.applicants.length > 0 ? (
+                  data.applicants.map((applicant) => (
+                    <tr key={applicant.id}>
+                      <td className="px-3 py-3 font-semibold text-zinc-950">{formatLocation(applicant.city, applicant.state, applicant.zipCode)}</td>
+                      <td className="px-3 py-3 text-zinc-600">{applicant.skillsCount}</td>
+                      <td className="px-3 py-3 text-zinc-600">{applicant.matchCount}</td>
+                      <td className="px-3 py-3 text-zinc-600">{applicant.interestCount}</td>
                     </tr>
                   ))
                 ) : (
@@ -366,13 +366,13 @@ export function AdminDashboard() {
 }
 
 async function buildAdminData() {
-  const [candidateProfiles, employerProfiles, allJobs, employerInterests, candidateInterests, mutualMatches, events, messageResult] =
+  const [applicantProfiles, employerProfiles, allJobs, employerInterests, applicantInterests, mutualMatches, events, messageResult] =
     await Promise.all([
-      getAllCandidateProfiles(),
+      getAllApplicantProfiles(),
       getAllEmployerProfiles(),
       getAllJobs(),
       getEmployerInterests(),
-      getCandidateInterests(),
+      getApplicantInterests(),
       getMutualMatches(),
       refreshAdminEvents(),
       fetch("/api/mvp/read?resource=admin-summary").then((response) => response.json())
@@ -389,25 +389,25 @@ async function buildAdminData() {
       ...job,
       companyName: companyProfile?.companyName || "Employer",
       matchCount: mutualMatches.filter((match) => match.jobId === job.id).length,
-      interestCount: [...employerInterests, ...candidateInterests].filter((interest) => interest.jobId === job.id).length,
+      interestCount: [...employerInterests, ...applicantInterests].filter((interest) => interest.jobId === job.id).length,
       position: getZipPosition(job.locationZip)
     };
   });
 
-  const candidates = candidateProfiles.map((profile) => {
+  const applicants = applicantProfiles.map((profile) => {
     const zipCode = profile.zipCode || "";
     const cityState = zipCityStateLookup[zipCode] ?? null;
-    const candidateId = profile.userId;
+    const applicantId = profile.userId;
     const skillsCount = Array.isArray(profile.topSkills) ? profile.topSkills.length : 0;
 
     return {
-      id: candidateId,
+      id: applicantId,
       city: cityState?.city || "",
       state: cityState?.state || "",
       zipCode,
       skillsCount,
-      matchCount: mutualMatches.filter((match) => match.candidateId === candidateId).length,
-      interestCount: [...employerInterests, ...candidateInterests].filter((interest) => interest.candidateId === candidateId).length,
+      matchCount: mutualMatches.filter((match) => match.candidateId === applicantId).length,
+      interestCount: [...employerInterests, ...applicantInterests].filter((interest) => interest.candidateId === applicantId).length,
       position: getZipPosition(zipCode)
     };
   });
@@ -416,12 +416,12 @@ async function buildAdminData() {
   const messages = messageResult.data?.messages ?? [];
 
   return {
-    candidates,
+    applicants,
     employers,
     jobs,
     employerInterests,
-    candidateInterests,
-    totalInterests: employerInterests.length + candidateInterests.length,
+    applicantInterests,
+    totalInterests: employerInterests.length + applicantInterests.length,
     mutualMatches,
     messages: (messages as Array<{ job_id: string }>).map((message) => ({ jobId: message.job_id })),
     scheduleRequests: notifications.filter((notification: NotificationRecord) => notification.type === "schedule_request").length,
@@ -497,3 +497,4 @@ function Panel({
 function AdminPopupTitle({ children }: { children: ReactNode }) {
   return <p className="mb-1 font-bold text-zinc-950">{children}</p>;
 }
+

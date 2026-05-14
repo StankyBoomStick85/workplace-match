@@ -28,7 +28,7 @@ export function UnifiedLoginForm() {
     const userRecord = await response.json();
 
     if (userRecord?.role === "candidate") {
-      window.location.href = "/candidate/profile";
+      window.location.href = "/applicant/profile";
       return;
     }
 
@@ -92,7 +92,7 @@ export function UnifiedLoginForm() {
         </form>
 
         <div className="mt-5 flex flex-wrap gap-3 text-sm text-zinc-600">
-          <Link href="/candidate/signup" className="font-semibold text-red-800">
+          <Link href="/applicant/signup" className="font-semibold text-red-800">
             Create profile
           </Link>
           <Link href="/employer/signup" className="font-semibold text-red-800">

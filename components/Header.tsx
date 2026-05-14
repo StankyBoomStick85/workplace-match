@@ -125,8 +125,8 @@ function getRoleAwareNav(role: Role, label: string): NavItem[] {
   }
 
   return [
-    { href: "/candidate/profile", label: label || "Profile" },
-    { href: "/candidate/matches", label: "Dashboard" },
+    { href: "/applicant/profile", label: label || "Profile" },
+    { href: "/applicant/dashboard", label: "Dashboard" },
     { href: "/jobs", label: "See jobs" },
     { href: "/account/settings?role=candidate", label: "Account" }
   ];

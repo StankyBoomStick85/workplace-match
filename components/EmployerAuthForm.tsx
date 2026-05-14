@@ -93,7 +93,7 @@ export function EmployerAuthForm({ mode }: EmployerAuthFormProps) {
     const userRecord = await response.json();
 
     if (userRecord?.role === "candidate") {
-      window.location.href = "/candidate/dashboard";
+      window.location.href = "/applicant/profile";
       return;
     }
 

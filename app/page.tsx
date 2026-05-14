@@ -5,7 +5,7 @@ const features = [
   {
     icon: Sparkles,
     title: "Capability first",
-    body: "Candidates show practical skills and work readiness."
+    body: "Applicants show practical skills and work readiness."
   },
   {
     icon: MapPin,
@@ -32,12 +32,12 @@ export default function LandingPage() {
               Show capability, not narratives.
             </h1>
             <p className="mt-5 max-w-2xl text-lg leading-8 text-zinc-700">
-              Workplace Match connects candidates and employers using practical
+              Workplace Match connects applicants and employers using practical
               signals: capability, location, pay, and fit.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Link
-                href="/candidate/signup"
+                href="/applicant/signup"
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
               >
                 I&rsquo;m looking for work <ArrowRight size={17} />

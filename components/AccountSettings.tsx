@@ -62,14 +62,14 @@ export function AccountSettings() {
       const resolvedRole = resolveRole(roleParam);
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
-        window.location.href = resolvedRole === "employer" ? "/employer/login" : "/candidate/login";
+        window.location.href = resolvedRole === "employer" ? "/employer/login" : "/applicant/login";
         return;
       }
 
       const userResponse = await fetch("/api/user/me");
       const userRecord = await userResponse.json();
       if (userRecord?.role !== resolvedRole) {
-        window.location.href = resolvedRole === "employer" ? "/employer/login" : "/candidate/login";
+        window.location.href = resolvedRole === "employer" ? "/employer/login" : "/applicant/login";
         return;
       }
 

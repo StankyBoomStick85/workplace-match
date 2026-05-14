@@ -26,7 +26,7 @@ export default function OnboardingPage() {
       return;
     }
 
-    router.push(role === "candidate" ? "/candidate/dashboard" : "/employer/dashboard");
+    router.push(role === "candidate" ? "/applicant/onboarding" : "/employer/dashboard");
   }
 
   return (

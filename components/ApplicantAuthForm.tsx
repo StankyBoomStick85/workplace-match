@@ -6,11 +6,11 @@ import { logAdminEvent } from "../lib/adminEvents";
 import { supabase } from "../lib/supabase";
 import { AuthDivider, GoogleOAuthButton } from "./GoogleOAuthButton";
 
-type CandidateAuthFormProps = {
+type ApplicantAuthFormProps = {
   mode: "login" | "signup";
 };
 
-export function CandidateAuthForm({ mode }: CandidateAuthFormProps) {
+export function ApplicantAuthForm({ mode }: ApplicantAuthFormProps) {
   const isSignup = mode === "signup";
   const [error, setError] = useState("");
   const [password, setPassword] = useState("");
@@ -79,7 +79,7 @@ export function CandidateAuthForm({ mode }: CandidateAuthFormProps) {
         dedupeKey: `signup_created:candidate:${data.user.id}`
       });
       await sendWelcomeEmail(email, "candidate");
-      window.location.href = "/candidate/profile";
+      window.location.href = "/applicant/profile";
       return;
     }
 
@@ -93,7 +93,7 @@ export function CandidateAuthForm({ mode }: CandidateAuthFormProps) {
     const userRecord = await response.json();
 
     if (userRecord?.role === "candidate") {
-      window.location.href = "/candidate/profile";
+      window.location.href = "/applicant/profile";
       return;
     }
 
@@ -182,7 +182,7 @@ export function CandidateAuthForm({ mode }: CandidateAuthFormProps) {
         <p className="mt-5 text-sm text-zinc-600">
           {isSignup ? "Already have an account?" : "Need an account?"}{" "}
           <Link
-            href={isSignup ? "/candidate/login" : "/candidate/signup"}
+            href={isSignup ? "/applicant/login" : "/applicant/signup"}
             className="font-semibold text-red-800"
           >
             {isSignup ? "Log in" : "Create one"}
@@ -215,15 +215,7 @@ type PasswordFieldProps = {
   onToggle?: () => void;
 };
 
-function PasswordField({
-  id,
-  name,
-  label,
-  value,
-  isVisible,
-  onChange,
-  onToggle
-}: PasswordFieldProps) {
+function PasswordField({ id, name, label, value, isVisible, onChange, onToggle }: PasswordFieldProps) {
   return (
     <div className="space-y-2">
       <label htmlFor={id} className="label">
@@ -256,16 +248,7 @@ function PasswordField({
 
 function EyeIcon() {
   return (
-    <svg
-      aria-hidden="true"
-      className="h-4 w-4"
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="2"
-      viewBox="0 0 24 24"
-    >
+    <svg aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24">
       <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
       <circle cx="12" cy="12" r="3" />
     </svg>
@@ -274,16 +257,7 @@ function EyeIcon() {
 
 function EyeOffIcon() {
   return (
-    <svg
-      aria-hidden="true"
-      className="h-4 w-4"
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="2"
-      viewBox="0 0 24 24"
-    >
+    <svg aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24">
       <path d="M3 3l18 18" />
       <path d="M10.6 10.6A3 3 0 0 0 12 15a3 3 0 0 0 2.4-4.8" />
       <path d="M9.9 4.3A10.5 10.5 0 0 1 12 4.1c6.5 0 10 7.9 10 7.9a17.8 17.8 0 0 1-3.1 4.2" />

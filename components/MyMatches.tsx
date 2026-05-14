@@ -4,13 +4,13 @@ import { useEffect, useState } from "react";
 import { attemptPreferredContact } from "../lib/contactPreferences";
 import { logAdminEvent } from "../lib/adminEvents";
 import {
-  getAllCandidateProfiles,
+  getAllApplicantProfiles,
   getAllJobs,
   getCurrentMvpUser,
   getEmployerProfile,
   getMutualMatches,
   removeInterest,
-  type MvpCandidateProfile,
+  type MvpApplicantProfile,
   type MvpJobListing,
   type MvpMatch
 } from "../lib/supabaseMvpData";
@@ -21,7 +21,7 @@ type MatchRecord = {
   key: string;
   job: MvpJobListing;
   match: MvpMatch;
-  candidateProfile?: MvpCandidateProfile;
+  candidateProfile?: MvpApplicantProfile;
 };
 
 export function MyMatches({ role }: { role: Role }) {
@@ -38,14 +38,14 @@ export function MyMatches({ role }: { role: Role }) {
     async function loadMatches() {
       const user = await getCurrentMvpUser(role);
       if (!user) {
-        window.location.href = role === "employer" ? "/employer/login" : "/candidate/login";
+        window.location.href = role === "employer" ? "/employer/login" : "/applicant/login";
         return;
       }
 
       const [jobs, mutualMatches, candidateProfiles] = await Promise.all([
         getAllJobs(),
         getMutualMatches(),
-        getAllCandidateProfiles()
+        getAllApplicantProfiles()
       ]);
       const scopedMatches = mutualMatches.filter((match) =>
         role === "employer" ? match.employerId === user.id : match.candidateId === user.id

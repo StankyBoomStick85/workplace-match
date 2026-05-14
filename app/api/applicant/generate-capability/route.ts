@@ -71,7 +71,7 @@ export async function POST() {
     ? profile.capability_tags.join(", ")
     : "Not specified";
 
-  const userPrompt = `A candidate has provided the following profile information:
+  const userPrompt = `An applicant has provided the following profile information:
 
 - Desired role/industry: ${desiredRole}
 - Experience level: ${profile.experience_level ?? "Not specified"}
@@ -89,19 +89,19 @@ List each distinct capability as a separate item using this exact format. Do not
 List between 4 and 7 capabilities.
 
 ## RECOMMENDED_POSITION
-State the single best job title this candidate should target right now based on their full background. Use this exact format:
+State the single best job title this applicant should target right now based on their full background. Use this exact format:
 
 **[Job Title]**: [Two to three sentences explaining specifically why this role is the right fit — what in their background maps to what this role demands day-to-day.]
 
 ## FUTURE_POSITIONS
-List each role this candidate is realistically on track for as they build civilian sector experience. Use this exact format. Do not use numbered lists, bullet points, or any other structure — only the bold-title format below:
+List each role this applicant is realistically on track for as they build civilian sector experience. Use this exact format. Do not use numbered lists, bullet points, or any other structure — only the bold-title format below:
 
 **[Role Title]**: [Brief explanation of why they are on track for this role and what experience or context positions them for it.]
 
 List only roles that genuinely fit. No minimum or maximum number.
 
 ## EMPLOYER_SUMMARY
-A plain-language, employer-facing paragraph (200–300 words) that a hiring manager can read in 60 seconds to understand exactly what level of operator they are looking at and what roles align. Write it to close the knowledge gap between non-traditional backgrounds and corporate expectations. Do not use jargon the candidate used — translate it into business impact language the employer already knows.
+A plain-language, employer-facing paragraph (200–300 words) that a hiring manager can read in 60 seconds to understand exactly what level of operator they are looking at and what roles align. Write it to close the knowledge gap between non-traditional backgrounds and corporate expectations. Do not use jargon the applicant used — translate it into business impact language the employer already knows.
 
 Respond with only the four sections above. No preamble, no closing remarks.`;
 

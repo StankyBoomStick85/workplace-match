@@ -5,7 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Workplace Match",
-  description: "Capability-first job matching for candidates and employers."
+  description: "Capability-first job matching for applicants and employers."
 };
 
 export const viewport: Viewport = {

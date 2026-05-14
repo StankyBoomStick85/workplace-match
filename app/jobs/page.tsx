@@ -2,8 +2,8 @@
 
 import dynamic from "next/dynamic";
 
-const CandidateJobsMap = dynamic(
-  () => import("@/components/CandidateJobsMap").then((module) => module.CandidateJobsMap),
+const ApplicantJobsMap = dynamic(
+  () => import("@/components/ApplicantJobsMap").then((module) => module.ApplicantJobsMap),
   {
     ssr: false,
     loading: () => (
@@ -15,5 +15,5 @@ const CandidateJobsMap = dynamic(
 );
 
 export default function JobsPage() {
-  return <CandidateJobsMap />;
+  return <ApplicantJobsMap />;
 }

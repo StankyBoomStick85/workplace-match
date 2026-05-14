@@ -8,7 +8,7 @@ export type MvpUser = {
   role: MvpRole;
 };
 
-export type MvpCandidateProfile = {
+export type MvpApplicantProfile = {
   userId: string;
   candidateEmail?: string;
   fullName?: string;
@@ -103,7 +103,7 @@ export async function getCurrentMvpUser(requiredRole?: MvpRole) {
   return user;
 }
 
-export async function getCandidateProfile(userId: string) {
+export async function getApplicantProfile(userId: string) {
   const data = await fetchMvpData<any | null>("candidate-profile", { userId });
   if (!data) {
     return null;
@@ -112,7 +112,7 @@ export async function getCandidateProfile(userId: string) {
   return mapCandidateProfile(data);
 }
 
-export async function getAllCandidateProfiles() {
+export async function getAllApplicantProfiles() {
   const data = await fetchMvpData<any[]>("candidate-profiles");
   return data.map(mapCandidateProfile);
 }
@@ -137,7 +137,7 @@ export async function getEmployerJobs(employerId: string) {
   return data.map(mapJob);
 }
 
-export async function getCandidateInterests() {
+export async function getApplicantInterests() {
   const data = await fetchMvpData<any[]>("candidate-interests");
   return data.map((interest: any) => ({
     id: interest.id,
@@ -321,7 +321,7 @@ export async function getUserByEmail(email: string) {
   return data as MvpUser | null;
 }
 
-function mapCandidateProfile(data: any): MvpCandidateProfile {
+function mapCandidateProfile(data: any): MvpApplicantProfile {
   return {
     userId: data.user_id,
     candidateEmail: data.users?.email,

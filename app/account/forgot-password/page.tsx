@@ -13,7 +13,7 @@ export default function ForgotPasswordPage() {
         </p>
         <div className="mt-6 flex flex-wrap gap-3">
           <Link
-            href="/candidate/login"
+            href="/applicant/login"
             className="inline-flex items-center justify-center rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
           >
             Back to login

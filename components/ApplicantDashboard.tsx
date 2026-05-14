@@ -10,7 +10,7 @@ import {
   type MvpMatch
 } from "../lib/supabaseMvpData";
 
-type CandidateProfileState = {
+type ApplicantProfileState = {
   fullName: string;
   zipCode: string;
   searchRadius: string;
@@ -27,7 +27,7 @@ type CandidateProfileState = {
   willingToRelocate: string;
 };
 
-const emptyProfile: CandidateProfileState = {
+const emptyProfile: ApplicantProfileState = {
   fullName: "",
   zipCode: "",
   searchRadius: "",
@@ -44,9 +44,9 @@ const emptyProfile: CandidateProfileState = {
   willingToRelocate: ""
 };
 
-export function CandidateDashboard() {
-  const [profile, setProfile] = useState<CandidateProfileState>(emptyProfile);
-  const [draftProfile, setDraftProfile] = useState<CandidateProfileState>(emptyProfile);
+export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string }) {
+  const [profile, setProfile] = useState<ApplicantProfileState>(emptyProfile);
+  const [draftProfile, setDraftProfile] = useState<ApplicantProfileState>(emptyProfile);
   const [matchedJobs, setMatchedJobs] = useState<Array<{ job: MvpJobListing; match: MvpMatch }>>([]);
   const [isReady, setIsReady] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -61,7 +61,7 @@ export function CandidateDashboard() {
     async function loadProfile() {
       const user = await getCurrentMvpUser("candidate");
       if (!user) {
-        window.location.href = "/candidate/login";
+        window.location.href = "/applicant/login";
         return;
       }
 
@@ -126,6 +126,11 @@ export function CandidateDashboard() {
       return;
     }
 
+    if (redirectOnSave) {
+      window.location.href = redirectOnSave;
+      return;
+    }
+
     setProfile(draftProfile);
     isEditingRef.current = false;
     setIsEditing(false);
@@ -140,7 +145,7 @@ export function CandidateDashboard() {
     setIsEditing(true);
   }
 
-  function updateDraft(field: keyof CandidateProfileState, value: string) {
+  function updateDraft(field: keyof ApplicantProfileState, value: string) {
     setDraftProfile((current) => ({ ...current, [field]: value }));
   }
 
@@ -340,7 +345,6 @@ async function fetchDriveTime(zipCode: string, radiusMiles: number): Promise<str
   if (!apiKey) return null;
 
   try {
-    // Geocode the zip code to get coordinates
     const geocodeRes = await fetch(
       `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(zipCode)}&key=${encodeURIComponent(apiKey)}`
     );
@@ -348,11 +352,8 @@ async function fetchDriveTime(zipCode: string, radiusMiles: number): Promise<str
     if (geocodeData.status !== "OK" || !geocodeData.results?.[0]) return null;
 
     const { lat, lng } = geocodeData.results[0].geometry.location as { lat: number; lng: number };
-
-    // Destination ~radiusMiles due north (1 degree latitude ≈ 69 miles)
     const destLat = lat + radiusMiles / 69.0;
 
-    // Distance Matrix API: driving time between origin and destination
     const matrixRes = await fetch(
       `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${lat},${lng}&destinations=${destLat},${lng}&mode=driving&key=${encodeURIComponent(apiKey)}`
     );
@@ -371,7 +372,7 @@ async function fetchDriveTime(zipCode: string, radiusMiles: number): Promise<str
   }
 }
 
-function mapProfileData(data: any): CandidateProfileState {
+function mapProfileData(data: any): ApplicantProfileState {
   const extras = parseProfileExtras(data?.visibility);
 
   return {
@@ -410,17 +411,11 @@ function parseProfileExtras(value?: string) {
 }
 
 function splitTags(value: string) {
-  return value
-    .split(",")
-    .map((skill) => skill.trim())
-    .filter(Boolean);
+  return value.split(",").map((skill) => skill.trim()).filter(Boolean);
 }
 
 function formatPay(value: string, payType: string) {
-  if (!value) {
-    return "Not set";
-  }
-
+  if (!value) return "Not set";
   return payType === "salary" ? `$${value}/year` : `$${value}/hr`;
 }
 
