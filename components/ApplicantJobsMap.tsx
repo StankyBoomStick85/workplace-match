@@ -53,6 +53,7 @@ type ApplicantProfile = {
   manualMapLat?: number;
   manualMapLng?: number;
   profilePictureDataUrl?: string;
+  profilePictureUrl?: string;
   desiredJobType?: string;
   workPreference?: string;
   capabilitySummary?: string;
@@ -293,7 +294,7 @@ export function ApplicantJobsMap() {
     [account, profile]
   );
   const applicantAreaPosition = applicantLocationResolution.position;
-  const applicantProfilePicture = profile?.profilePictureDataUrl ?? account?.profilePictureDataUrl ?? "";
+  const applicantProfilePicture = profile?.profilePictureUrl ?? "";
   const applicantAreaCenter = useMemo(
     () => applicantAreaPosition ?? stLouisCenter,
     [applicantAreaPosition]

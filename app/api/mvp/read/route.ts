@@ -179,7 +179,7 @@ export async function GET(request: Request) {
       const userId = requestUrl.searchParams.get("userId") || user?.id;
       if (!userId) return NextResponse.json({ data: null });
       if (role === "candidate") {
-        const { data, error } = await adminClient.from("candidate_profiles").select("display_name").eq("user_id", userId).maybeSingle();
+        const { data, error } = await adminClient.from("candidate_profiles").select("display_name,profile_picture_url").eq("user_id", userId).maybeSingle();
         if (error) throw error;
         return NextResponse.json({ data });
       }

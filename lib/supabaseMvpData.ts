@@ -19,6 +19,7 @@ export type MvpApplicantProfile = {
   topSkills?: string[];
   experienceLevel?: string;
   updatedAt?: string;
+  profilePictureUrl?: string;
 };
 
 export type MvpEmployerProfile = {
@@ -332,7 +333,8 @@ function mapCandidateProfile(data: any): MvpApplicantProfile {
     capabilitySummary: data.summary ?? "",
     topSkills: data.capability_tags ?? [],
     experienceLevel: data.experience_level ?? "",
-    updatedAt: data.created_at ?? ""
+    updatedAt: data.created_at ?? "",
+    profilePictureUrl: data.profile_picture_url ?? ""
   };
 }
 

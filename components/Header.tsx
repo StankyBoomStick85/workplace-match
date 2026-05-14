@@ -48,12 +48,12 @@ export function Header() {
       const response = await fetch("/api/user/me");
       const userRecord = await response.json();
       const role = userRecord?.role === "candidate" || userRecord?.role === "employer" ? userRecord.role : null;
-      const label = role ? await getRoleLabel(role, user.id) : "";
+      const { label, avatarUrl } = role ? await getRoleLabel(role, user.id) : { label: "", avatarUrl: "" };
 
       if (!isMounted) return;
       setActiveRole(role);
       setActiveEmail(role ? user.email ?? "" : "");
-      setNavItems(role ? getRoleAwareNav(role, label) : getLoggedOutNav());
+      setNavItems(role ? getRoleAwareNav(role, label, avatarUrl) : getLoggedOutNav());
     }
   }, [pathname]);
 
@@ -114,7 +114,7 @@ export function Header() {
   );
 }
 
-function getRoleAwareNav(role: Role, label: string): NavItem[] {
+function getRoleAwareNav(role: Role, label: string, avatarUrl = ""): NavItem[] {
   if (role === "employer") {
     return [
       { href: "/employer/dashboard", label: label || "Dashboard" },
@@ -125,7 +125,7 @@ function getRoleAwareNav(role: Role, label: string): NavItem[] {
   }
 
   return [
-    { href: "/applicant/profile", label: label || "Profile" },
+    { href: "/applicant/profile", label: label || "Profile", avatarUrl },
     { href: "/applicant/dashboard", label: "Dashboard" },
     { href: "/jobs", label: "See jobs" },
     { href: "/account/settings?role=candidate", label: "Account" }
@@ -136,16 +136,19 @@ function getLoggedOutNav(): NavItem[] {
   return [{ href: "/login", label: "Log in" }];
 }
 
-async function getRoleLabel(role: Role, userId: string) {
+async function getRoleLabel(role: Role, userId: string): Promise<{ label: string; avatarUrl: string }> {
   if (role === "candidate") {
     const response = await fetch(`/api/mvp/read?resource=header-label&role=candidate&userId=${encodeURIComponent(userId)}`);
     const { data } = await response.json();
-    return data?.display_name?.trim() || "Profile";
+    return {
+      label: data?.display_name?.trim() || "Profile",
+      avatarUrl: data?.profile_picture_url ?? ""
+    };
   }
 
   const response = await fetch(`/api/mvp/read?resource=header-label&role=employer&userId=${encodeURIComponent(userId)}`);
   const { data } = await response.json();
-  return data?.company_name?.trim() || "Dashboard";
+  return { label: data?.company_name?.trim() || "Dashboard", avatarUrl: "" };
 }
 
 function NavLink({
@@ -172,15 +175,7 @@ function NavLink({
             // eslint-disable-next-line @next/next/no-img-element
             <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
           ) : (
-            <svg
-              aria-hidden="true"
-              viewBox="0 0 24 24"
-              className="h-5 w-5"
-              fill="currentColor"
-            >
-              <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4Z" />
-              <path d="M4.75 20c.75-3.16 3.57-5.5 7.25-5.5s6.5 2.34 7.25 5.5H4.75Z" />
-            </svg>
+            <span className="text-xs font-semibold leading-none">{nameInitials(label)}</span>
           )}
         </span>
       ) : null}
@@ -192,4 +187,11 @@ function NavLink({
 function isActivePath(pathname: string, href: string) {
   const routePath = href.split(/[?#]/)[0];
   return pathname === routePath || pathname.startsWith(`${routePath}/`);
+}
+
+function nameInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0][0].toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }

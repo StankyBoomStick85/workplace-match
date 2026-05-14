@@ -8,6 +8,7 @@ type ApplicantProfile = {
   city?: string;
   state?: string;
   profilePictureDataUrl?: string;
+  profilePictureUrl?: string;
   fullName: string;
   zipCode: string;
   desiredJobType: string;
@@ -129,6 +130,7 @@ type Props = {
 function mapProfileRow(userEmail: string, row: NonNullable<ProfileRow>): ApplicantProfile {
   return {
     candidateEmail: userEmail,
+    profilePictureUrl: (row.profile_picture_url as string) ?? "",
     fullName: (row.display_name as string) ?? "",
     zipCode: (row.zip_code as string) ?? "",
     desiredJobType: Array.isArray(row.job_types) ? ((row.job_types[0] as string) ?? "") : "",
@@ -264,8 +266,10 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
       <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.16em] text-red-800">Profile</p>
-            <h1 className="mt-2 text-3xl font-bold text-zinc-950">Your profile</h1>
+            <h1 className="text-3xl font-bold text-zinc-950">{profile?.fullName || "Your profile"}</h1>
+            <div className="mt-4">
+              <ProfileAvatar src={profile?.profilePictureUrl} name={profile?.fullName ?? ""} size="lg" />
+            </div>
           </div>
           <div className="flex gap-2">
             {isEditing ? (
@@ -473,6 +477,29 @@ function ViewField({ label, value }: { label: string; value: string }) {
     <div className="space-y-1">
       <dt className="label">{label}</dt>
       <dd className="text-sm text-zinc-900">{value || "—"}</dd>
+    </div>
+  );
+}
+
+function nameInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0][0].toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function ProfileAvatar({ src, name, size }: { src?: string; name: string; size: "sm" | "lg" }) {
+  const sizeClass = size === "lg"
+    ? "h-28 w-28 text-3xl"
+    : "h-7 w-7 text-xs";
+  return (
+    <div className={`${sizeClass} flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-gray-200 bg-gray-100 font-semibold text-zinc-500`}>
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt={name} className="h-full w-full object-cover" />
+      ) : (
+        <span aria-hidden="true">{nameInitials(name)}</span>
+      )}
     </div>
   );
 }
