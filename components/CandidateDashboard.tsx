@@ -53,6 +53,7 @@ export function CandidateDashboard() {
   const isEditingRef = useRef(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [driveTimeDisplay, setDriveTimeDisplay] = useState<string | null>(null);
 
   useEffect(() => {
     loadProfile();
@@ -84,6 +85,23 @@ export function CandidateDashboard() {
       setIsReady(true);
     }
   }, []);
+
+  useEffect(() => {
+    const zip = isEditing ? draftProfile.zipCode : profile.zipCode;
+    const radius = isEditing ? draftProfile.searchRadius : profile.searchRadius;
+
+    if (!zip || !radius || Number(radius) <= 0) {
+      setDriveTimeDisplay(null);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      const result = await fetchDriveTime(zip, Number(radius));
+      setDriveTimeDisplay(result);
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [profile.zipCode, profile.searchRadius, draftProfile.zipCode, draftProfile.searchRadius, isEditing]);
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -171,8 +189,11 @@ export function CandidateDashboard() {
                 <ProfileField label="ZIP code" id="zipCode">
                   <input id="zipCode" value={draftProfile.zipCode} onChange={(event) => updateDraft("zipCode", event.target.value)} readOnly={!isEditing} className="field" />
                 </ProfileField>
-                <ProfileField label="Search radius" id="searchRadius">
+                <ProfileField label="Search radius (drive time from your location)" id="searchRadius">
                   <input id="searchRadius" type="number" min="0" value={draftProfile.searchRadius} onChange={(event) => updateDraft("searchRadius", event.target.value)} readOnly={!isEditing} className="field" />
+                  {driveTimeDisplay && (
+                    <p className="text-xs text-zinc-500">{driveTimeDisplay}</p>
+                  )}
                 </ProfileField>
               </ProfileSection>
 
@@ -268,7 +289,7 @@ export function CandidateDashboard() {
               <div className="mt-4 grid gap-4 md:grid-cols-2">
                 <DashboardCard label="Full name" value={profile.fullName || "Not set"} />
                 <DashboardCard label="ZIP code" value={profile.zipCode || "Not set"} />
-                <DashboardCard label="Search radius" value={profile.searchRadius ? `${profile.searchRadius} miles` : "Not set"} />
+                <DashboardCard label="Search radius" value={profile.searchRadius ? (driveTimeDisplay ?? `${profile.searchRadius} miles`) : "Not set"} />
                 <DashboardCard label="Desired pay" value={formatPay(profile.desiredPayMin, profile.payType)} />
                 <DashboardCard label="Job type" value={profile.jobType || "Not set"} />
                 <DashboardCard label="Shift preference" value={profile.shiftPreference || "Not set"} />
@@ -312,6 +333,42 @@ export function CandidateDashboard() {
       </div>
     </section>
   );
+}
+
+async function fetchDriveTime(zipCode: string, radiusMiles: number): Promise<string | null> {
+  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    // Geocode the zip code to get coordinates
+    const geocodeRes = await fetch(
+      `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(zipCode)}&key=${encodeURIComponent(apiKey)}`
+    );
+    const geocodeData = await geocodeRes.json();
+    if (geocodeData.status !== "OK" || !geocodeData.results?.[0]) return null;
+
+    const { lat, lng } = geocodeData.results[0].geometry.location as { lat: number; lng: number };
+
+    // Destination ~radiusMiles due north (1 degree latitude ≈ 69 miles)
+    const destLat = lat + radiusMiles / 69.0;
+
+    // Distance Matrix API: driving time between origin and destination
+    const matrixRes = await fetch(
+      `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${lat},${lng}&destinations=${destLat},${lng}&mode=driving&key=${encodeURIComponent(apiKey)}`
+    );
+    const matrixData = await matrixRes.json();
+    if (matrixData.status !== "OK") return null;
+
+    const element = matrixData.rows?.[0]?.elements?.[0] as { status: string; duration: { value: number }; distance: { value: number } } | undefined;
+    if (!element || element.status !== "OK") return null;
+
+    const durationMin = Math.round(element.duration.value / 60);
+    const distanceMiles = Math.round(element.distance.value / 1609.34);
+
+    return `~${durationMin} min drive (${distanceMiles} miles)`;
+  } catch {
+    return null;
+  }
 }
 
 function mapProfileData(data: any): CandidateProfileState {
