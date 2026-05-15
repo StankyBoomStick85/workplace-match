@@ -47,7 +47,7 @@ export async function POST() {
 
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("job_types, experience_level, work_preference, capability_tags, summary")
+    .select("job_types, experience_level, work_preference, capability_tags, summary, document_metadata")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -112,18 +112,99 @@ A plain-language, employer-facing paragraph (200–300 words) that a hiring mana
 
 Respond with only the five sections above. No preamble, no closing remarks.`;
 
+  // --- Build document content blocks ---
+  type StoredDoc = {
+    id: string;
+    label: string;
+    filename: string;
+    path: string;
+    contentType: string;
+  };
+
+  const storedDocs: StoredDoc[] = Array.isArray(profile.document_metadata)
+    ? (profile.document_metadata as StoredDoc[])
+    : [];
+
+  type ContentBlock = Record<string, unknown>;
+  const docBlocks: ContentBlock[] = [];
+  const unreadableDocLabels: string[] = [];
+
+  for (const doc of storedDocs) {
+    const isImage = doc.contentType.startsWith("image/");
+    const isPdf = doc.contentType === "application/pdf";
+    if (!isImage && !isPdf) {
+      unreadableDocLabels.push(`"${doc.label}" (${doc.filename})`);
+      continue;
+    }
+    try {
+      const { data: blob, error: dlErr } = await adminClient.storage
+        .from("candidate-documents")
+        .download(doc.path);
+      if (dlErr || !blob) throw dlErr ?? new Error("empty download");
+      const bytes = await blob.arrayBuffer();
+      if (bytes.byteLength > 4 * 1024 * 1024) {
+        unreadableDocLabels.push(`"${doc.label}" (file too large to attach)`);
+        continue;
+      }
+      const b64 = Buffer.from(bytes).toString("base64");
+      if (isImage) {
+        const mediaType = doc.contentType as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+        docBlocks.push({ type: "image", source: { type: "base64", media_type: mediaType, data: b64 } });
+        docBlocks.push({ type: "text", text: `(Above image: "${doc.label}")` });
+      } else {
+        docBlocks.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 }, title: doc.label });
+      }
+    } catch (err) {
+      console.error("[generate-capability] failed to load document", doc.path, err);
+      unreadableDocLabels.push(`"${doc.label}" (could not be read)`);
+    }
+  }
+
+  // Prepend document context to the prompt when docs are present
+  let fullPrompt = userPrompt;
+  if (storedDocs.length > 0) {
+    const lines: string[] = [];
+    if (docBlocks.length > 0) {
+      lines.push("The applicant has provided source documents attached above. Treat them as primary evidence — specific data in these documents takes precedence over the self-reported fields below.");
+    }
+    if (unreadableDocLabels.length > 0) {
+      lines.push(`The following documents were uploaded but could not be attached automatically: ${unreadableDocLabels.join(", ")}. Note them as additional context.`);
+    }
+    fullPrompt = lines.join(" ") + "\n\n" + userPrompt;
+  }
+
+  const messageContent = [
+    ...docBlocks,
+    { type: "text" as const, text: fullPrompt },
+  ];
+
+  const hasPdfs = docBlocks.some((b) => b.type === "document");
   const anthropic = new Anthropic({ apiKey });
 
   let text = "";
   try {
-    const message = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 2048,
-      system:
-        "You are a veteran career counselor and hiring specialist who translates non-traditional, military, and blue-collar backgrounds into civilian corporate language that hiring managers can immediately understand and act on. You are precise, specific, and never use filler language.",
-      messages: [{ role: "user", content: userPrompt }]
-    });
-    text = message.content.find((b) => b.type === "text")?.text ?? "";
+    if (hasPdfs) {
+      const message = await anthropic.beta.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 4096,
+        betas: ["pdfs-2024-09-25"],
+        system:
+          "You are a veteran career counselor and hiring specialist who translates non-traditional, military, and blue-collar backgrounds into civilian corporate language that hiring managers can immediately understand and act on. You are precise, specific, and never use filler language.",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        messages: [{ role: "user", content: messageContent as any }],
+      });
+      text = message.content.find((b) => b.type === "text")?.text ?? "";
+    } else {
+      const message = await anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: docBlocks.length > 0 ? 4096 : 2048,
+        system:
+          "You are a veteran career counselor and hiring specialist who translates non-traditional, military, and blue-collar backgrounds into civilian corporate language that hiring managers can immediately understand and act on. You are precise, specific, and never use filler language.",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        messages: [{ role: "user", content: messageContent as any }],
+      });
+      text = message.content.find((b) => b.type === "text")?.text ?? "";
+    }
   } catch (err) {
     console.error("[generate-capability] Anthropic API error", err);
     const message = err instanceof Error ? err.message : String(err);
