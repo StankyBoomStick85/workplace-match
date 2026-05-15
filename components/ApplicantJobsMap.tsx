@@ -897,7 +897,7 @@ export function ApplicantJobsMap() {
 
   return (
     <section className={`fixed inset-x-0 bottom-0 z-40 w-screen overflow-hidden bg-[#eef3ef] ${headerOffsetClass}`}>
-      <MapContainer center={mapCenter} zoom={10} minZoom={8} zoomControl={false} className="absolute inset-0 z-0 h-full w-full">
+      <MapContainer center={mapCenter} zoom={10} minZoom={4} zoomControl={false} className="absolute inset-0 z-0 h-full w-full">
         <RecenterMap center={mapCenter} />
         <PanToSelectedJob position={selectedResultJobPosition} />
         <ZoomLevelTracker onZoomChange={setMapZoom} />
