@@ -532,11 +532,11 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
         <div className="mt-6">
           {hasGeneratedContent ? (
             <div className="space-y-6">
-              {profile?.capabilityProfile ? <AccordionSection title="Capability Profile" text={profile.capabilityProfile} /> : null}
               {profile?.recommendedPosition ? <RecommendedPositionCard content={profile.recommendedPosition} /> : null}
               {profile?.entryPoint ? <EntryPointCard content={profile.entryPoint} /> : null}
               {profile?.futurePositions ? <AccordionSection title="Future Position Recommendations" text={profile.futurePositions} /> : null}
               {profile?.employerSummary ? <GeneratedSection title="Employer-Facing Summary" content={profile.employerSummary} /> : null}
+              {profile?.capabilityProfile ? <AccordionSection title="Capability Profile" text={profile.capabilityProfile} /> : null}
             </div>
           ) : (
             <div className="rounded-md border border-gray-200 bg-gray-50 p-6 text-center">
