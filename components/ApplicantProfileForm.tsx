@@ -1,6 +1,9 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { supabase } from "../lib/supabase";
+
+const PROFILE_PICTURE_BUCKET = "profile-pictures";
 
 type ApplicantProfile = {
   candidateEmail?: string;
@@ -148,11 +151,11 @@ function mapProfileRow(userEmail: string, row: NonNullable<ProfileRow>): Applica
 }
 
 export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
-  const [profile, setProfile] = useState<ApplicantProfile | null>(
-    initialProfile ? mapProfileRow(userEmail, initialProfile) : null
-  );
+  const mappedInitial = initialProfile ? mapProfileRow(userEmail, initialProfile) : null;
+  const [profile, setProfile] = useState<ApplicantProfile | null>(mappedInitial);
   const [isEditing, setIsEditing] = useState(false);
-  const [profilePictureDataUrl, setProfilePictureDataUrl] = useState("");
+  const [profilePictureDataUrl, setProfilePictureDataUrl] = useState(mappedInitial?.profilePictureUrl ?? "");
+  const [pendingPictureFile, setPendingPictureFile] = useState<File | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState("");
   const [saveError, setSaveError] = useState("");
@@ -160,6 +163,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
 
   function handleProfilePictureChange(file: File | null) {
     if (!file) return;
+    setPendingPictureFile(file);
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result === "string") setProfilePictureDataUrl(reader.result);
@@ -172,13 +176,40 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
     setSaveError("");
     setSaveSuccess(false);
 
+    // Upload profile picture if a new file was selected
+    let savedPictureUrl = profile?.profilePictureUrl ?? "";
+    if (pendingPictureFile) {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setSaveError("Session expired. Please sign in again.");
+        return;
+      }
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from(PROFILE_PICTURE_BUCKET)
+        .upload(`${user.id}/avatar`, pendingPictureFile, {
+          upsert: true,
+          contentType: pendingPictureFile.type,
+        });
+      if (uploadError) {
+        setSaveError(`Picture upload failed: ${uploadError.message}`);
+        return;
+      }
+      const { data: { publicUrl } } = supabase.storage
+        .from(PROFILE_PICTURE_BUCKET)
+        .getPublicUrl(uploadData.path);
+      savedPictureUrl = publicUrl;
+    } else if (!profilePictureDataUrl && profile?.profilePictureUrl) {
+      // User clicked "Remove picture"
+      savedPictureUrl = "";
+    }
+
     const formData = new FormData(event.currentTarget);
     const nextProfile: ApplicantProfile = {
       candidateEmail: profile?.candidateEmail ?? "",
       streetAddress: profile?.streetAddress ?? "",
       city: profile?.city ?? "",
       state: profile?.state ?? "",
-      profilePictureDataUrl,
+      profilePictureUrl: savedPictureUrl,
       fullName: String(formData.get("fullName") ?? "").trim(),
       zipCode: profile?.zipCode ?? "",
       desiredJobType: String(formData.get("desiredJobType") ?? "").trim(),
@@ -208,6 +239,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
             capabilitySummary: nextProfile.capabilitySummary,
             topSkills: nextProfile.topSkills,
             experienceLevel: nextProfile.experienceLevel,
+            profilePictureUrl: savedPictureUrl,
           },
         }),
       });
@@ -221,6 +253,8 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
       return;
     }
 
+    setPendingPictureFile(null);
+    setProfilePictureDataUrl(savedPictureUrl);
     setProfile(nextProfile);
     setIsEditing(false);
     setSaveSuccess(true);
@@ -337,7 +371,11 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
                     className="block w-full text-sm text-zinc-700 file:mr-3 file:rounded-md file:border file:border-zinc-300 file:bg-white file:px-3 file:py-2 file:text-sm file:font-semibold file:text-zinc-900 hover:file:bg-zinc-50"
                   />
                   {profilePictureDataUrl ? (
-                    <button type="button" onClick={() => setProfilePictureDataUrl("")} className="text-sm font-semibold text-zinc-600 transition hover:text-red-800">
+                    <button
+                      type="button"
+                      onClick={() => { setProfilePictureDataUrl(""); setPendingPictureFile(null); }}
+                      className="text-sm font-semibold text-zinc-600 transition hover:text-red-800"
+                    >
                       Remove picture
                     </button>
                   ) : null}
@@ -481,24 +519,15 @@ function ViewField({ label, value }: { label: string; value: string }) {
   );
 }
 
-function nameInitials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0][0].toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
-
 function ProfileAvatar({ src, name, size }: { src?: string; name: string; size: "sm" | "lg" }) {
-  const sizeClass = size === "lg"
-    ? "h-28 w-28 text-3xl"
-    : "h-7 w-7 text-xs";
+  const sizeClass = size === "lg" ? "h-28 w-28 text-4xl" : "h-7 w-7 text-sm";
   return (
-    <div className={`${sizeClass} flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-gray-200 bg-gray-100 font-semibold text-zinc-500`}>
+    <div className={`${sizeClass} flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-gray-200 bg-gray-100`}>
       {src ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={src} alt={name} className="h-full w-full object-cover" />
       ) : (
-        <span aria-hidden="true">{nameInitials(name)}</span>
+        <span aria-hidden="true">🙂</span>
       )}
     </div>
   );

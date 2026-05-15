@@ -127,6 +127,9 @@ export async function POST(request: Request) {
       if ("state" in data) {
         upsertData.state = typeof data.state === "string" ? data.state.trim() : "";
       }
+      if ("profilePictureUrl" in data) {
+        upsertData.profile_picture_url = typeof data.profilePictureUrl === "string" ? data.profilePictureUrl : "";
+      }
 
       const { error } = await adminClient.from("candidate_profiles").upsert(upsertData, { onConflict: "user_id" });
       if (error) throw error;
