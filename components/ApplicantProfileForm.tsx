@@ -176,6 +176,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
   const [pendingPictureFile, setPendingPictureFile] = useState<File | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState(false);
 
@@ -191,60 +192,66 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    // Capture before any await — event.currentTarget becomes null after async gaps
+    const form = event.currentTarget;
     setSaveError("");
     setSaveSuccess(false);
-
-    // Upload profile picture if a new file was selected
-    let savedPictureUrl = profile?.profilePictureUrl ?? "";
-    if (pendingPictureFile) {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        setSaveError("Session expired. Please sign in again.");
-        return;
-      }
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from(PROFILE_PICTURE_BUCKET)
-        .upload(`${user.id}/avatar`, pendingPictureFile, {
-          upsert: true,
-          contentType: pendingPictureFile.type,
-        });
-      if (uploadError) {
-        setSaveError(`Picture upload failed: ${uploadError.message}`);
-        return;
-      }
-      const { data: { publicUrl } } = supabase.storage
-        .from(PROFILE_PICTURE_BUCKET)
-        .getPublicUrl(uploadData.path);
-      savedPictureUrl = publicUrl;
-    } else if (!profilePictureDataUrl && profile?.profilePictureUrl) {
-      // User clicked "Remove picture"
-      savedPictureUrl = "";
-    }
-
-    const formData = new FormData(event.currentTarget);
-    const nextProfile: ApplicantProfile = {
-      candidateEmail: profile?.candidateEmail ?? "",
-      streetAddress: profile?.streetAddress ?? "",
-      city: profile?.city ?? "",
-      state: profile?.state ?? "",
-      profilePictureUrl: savedPictureUrl,
-      fullName: String(formData.get("fullName") ?? "").trim(),
-      zipCode: profile?.zipCode ?? "",
-      desiredJobType: String(formData.get("desiredJobType") ?? "").trim(),
-      workPreference: String(formData.get("workPreference") ?? "open"),
-      capabilitySummary: String(formData.get("capabilitySummary") ?? "").trim(),
-      topSkills: splitSkills(String(formData.get("topSkills") ?? "")),
-      experienceLevel: String(formData.get("experienceLevel") ?? ""),
-      educationLevel: String(formData.get("educationLevel") ?? ""),
-      updatedAt: new Date().toISOString(),
-      capabilityProfile: profile?.capabilityProfile ?? "",
-      recommendedPosition: profile?.recommendedPosition ?? "",
-      entryPoint: profile?.entryPoint ?? "",
-      futurePositions: profile?.futurePositions ?? "",
-      employerSummary: profile?.employerSummary ?? "",
-    };
+    setIsSaving(true);
 
     try {
+      let savedPictureUrl = profile?.profilePictureUrl ?? "";
+
+      if (pendingPictureFile) {
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
+        if (userError || !user) {
+          console.error("[handleSubmit] getUser failed", userError);
+          setSaveError("Session expired. Please sign in again.");
+          return;
+        }
+        console.log("[handleSubmit] uploading to", PROFILE_PICTURE_BUCKET, `${user.id}/avatar`);
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from(PROFILE_PICTURE_BUCKET)
+          .upload(`${user.id}/avatar`, pendingPictureFile, {
+            upsert: true,
+            contentType: pendingPictureFile.type,
+          });
+        if (uploadError) {
+          console.error("[handleSubmit] storage upload failed", uploadError);
+          setSaveError(`Picture upload failed: ${uploadError.message}`);
+          return;
+        }
+        const { data: { publicUrl } } = supabase.storage
+          .from(PROFILE_PICTURE_BUCKET)
+          .getPublicUrl(uploadData.path);
+        console.log("[handleSubmit] upload succeeded, publicUrl:", publicUrl);
+        savedPictureUrl = publicUrl;
+      } else if (!profilePictureDataUrl && profile?.profilePictureUrl) {
+        savedPictureUrl = "";
+      }
+
+      const formData = new FormData(form);
+      const nextProfile: ApplicantProfile = {
+        candidateEmail: profile?.candidateEmail ?? "",
+        streetAddress: profile?.streetAddress ?? "",
+        city: profile?.city ?? "",
+        state: profile?.state ?? "",
+        profilePictureUrl: savedPictureUrl,
+        fullName: String(formData.get("fullName") ?? "").trim(),
+        zipCode: profile?.zipCode ?? "",
+        desiredJobType: String(formData.get("desiredJobType") ?? "").trim(),
+        workPreference: String(formData.get("workPreference") ?? "open"),
+        capabilitySummary: String(formData.get("capabilitySummary") ?? "").trim(),
+        topSkills: splitSkills(String(formData.get("topSkills") ?? "")),
+        experienceLevel: String(formData.get("experienceLevel") ?? ""),
+        educationLevel: String(formData.get("educationLevel") ?? ""),
+        updatedAt: new Date().toISOString(),
+        capabilityProfile: profile?.capabilityProfile ?? "",
+        recommendedPosition: profile?.recommendedPosition ?? "",
+        entryPoint: profile?.entryPoint ?? "",
+        futurePositions: profile?.futurePositions ?? "",
+        employerSummary: profile?.employerSummary ?? "",
+      };
+
       const response = await fetch("/api/mvp/write", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -265,19 +272,22 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) {
+        console.error("[handleSubmit] write route returned error", result);
         setSaveError(result.error ?? "Unable to save profile. Please try again.");
         return;
       }
-    } catch {
-      setSaveError("An unexpected error occurred. Please try again.");
-      return;
-    }
 
-    setPendingPictureFile(null);
-    setProfilePictureDataUrl(savedPictureUrl);
-    setProfile(nextProfile);
-    setIsEditing(false);
-    setSaveSuccess(true);
+      setPendingPictureFile(null);
+      setProfilePictureDataUrl(savedPictureUrl);
+      setProfile(nextProfile);
+      setIsEditing(false);
+      setSaveSuccess(true);
+    } catch (err) {
+      console.error("[handleSubmit] unexpected error", err);
+      setSaveError("An unexpected error occurred. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function handleGenerate() {
@@ -332,16 +342,26 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
                 <button
                   type="button"
                   onClick={() => { setIsEditing(false); setSaveError(""); }}
-                  className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-gray-50"
+                  disabled={isSaving}
+                  className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-gray-50 disabled:opacity-40"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   form="applicant-profile-form"
-                  className="inline-flex items-center justify-center rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
+                  disabled={isSaving}
+                  className="inline-flex items-center gap-2 justify-center rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950 disabled:opacity-60"
                 >
-                  Save
+                  {isSaving ? (
+                    <>
+                      <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      Saving…
+                    </>
+                  ) : "Save"}
                 </button>
               </>
             ) : (
