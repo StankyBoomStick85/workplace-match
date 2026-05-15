@@ -23,6 +23,7 @@ type ApplicantProfile = {
   updatedAt: string;
   capabilityProfile?: string;
   recommendedPosition?: string;
+  entryPoint?: string;
   futurePositions?: string;
   employerSummary?: string;
 };
@@ -112,6 +113,22 @@ function RecommendedPositionCard({ content }: { content: string }) {
   );
 }
 
+function EntryPointCard({ content }: { content: string }) {
+  const match = content.match(/^\*\*(.+?)\*\*[:\s]*([\s\S]*)$/);
+  const title = match ? match[1].trim() : "";
+  const body = match ? match[2].trim() : content;
+  return (
+    <div>
+      <h3 className="text-sm font-semibold text-zinc-900">Entry Point Role</h3>
+      <p className="mt-0.5 text-xs text-zinc-500">Where to start</p>
+      <div className="mt-2 rounded-md border border-blue-200 bg-blue-50 p-4">
+        {title && <p className="font-bold text-blue-900">{title}</p>}
+        <p className={`text-sm leading-7 text-zinc-700 whitespace-pre-wrap${title ? " mt-2" : ""}`}>{body}</p>
+      </div>
+    </div>
+  );
+}
+
 function GeneratedSection({ title, content }: { title: string; content: string }) {
   return (
     <div>
@@ -145,6 +162,7 @@ function mapProfileRow(userEmail: string, row: NonNullable<ProfileRow>): Applica
     updatedAt: (row.created_at as string) ?? "",
     capabilityProfile: (row.capability_summary as string) ?? "",
     recommendedPosition: (row.recommended_position as string) ?? "",
+    entryPoint: (row.entry_point as string) ?? "",
     futurePositions: (row.future_positions as string) ?? "",
     employerSummary: (row.employer_summary as string) ?? "",
   };
@@ -221,6 +239,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
       updatedAt: new Date().toISOString(),
       capabilityProfile: profile?.capabilityProfile ?? "",
       recommendedPosition: profile?.recommendedPosition ?? "",
+      entryPoint: profile?.entryPoint ?? "",
       futurePositions: profile?.futurePositions ?? "",
       employerSummary: profile?.employerSummary ?? "",
     };
@@ -280,6 +299,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
               ...prev,
               capabilityProfile: result.capabilitySummary ?? "",
               recommendedPosition: result.recommendedPosition ?? "",
+              entryPoint: result.entryPoint ?? "",
               futurePositions: result.futurePositions ?? "",
               employerSummary: result.employerSummary ?? "",
             }
@@ -293,7 +313,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
   }
 
   const hasGeneratedContent = Boolean(
-    profile?.capabilityProfile || profile?.recommendedPosition || profile?.futurePositions || profile?.employerSummary
+    profile?.capabilityProfile || profile?.recommendedPosition || profile?.entryPoint || profile?.futurePositions || profile?.employerSummary
   );
 
   return (
@@ -494,6 +514,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
             <div className="space-y-6">
               {profile?.capabilityProfile ? <AccordionSection title="Capability Profile" text={profile.capabilityProfile} /> : null}
               {profile?.recommendedPosition ? <RecommendedPositionCard content={profile.recommendedPosition} /> : null}
+              {profile?.entryPoint ? <EntryPointCard content={profile.entryPoint} /> : null}
               {profile?.futurePositions ? <AccordionSection title="Future Position Recommendations" text={profile.futurePositions} /> : null}
               {profile?.employerSummary ? <GeneratedSection title="Employer-Facing Summary" content={profile.employerSummary} /> : null}
             </div>

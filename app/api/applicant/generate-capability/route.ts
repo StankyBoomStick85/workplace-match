@@ -8,11 +8,13 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 function extractSection(text: string, heading: string, nextHeading?: string): string {
-  const marker = `## ${heading}`;
-  const start = text.indexOf(marker);
+  const lower = text.toLowerCase();
+  const marker = `## ${heading}`.toLowerCase();
+  const start = lower.indexOf(marker);
   if (start === -1) return "";
   const contentStart = start + marker.length;
-  const end = nextHeading ? text.indexOf(`## ${nextHeading}`, contentStart) : text.length;
+  const nextMarker = nextHeading ? `## ${nextHeading}`.toLowerCase() : null;
+  const end = nextMarker ? lower.indexOf(nextMarker, contentStart) : text.length;
   return text.slice(contentStart, end === -1 ? text.length : end).trim();
 }
 
@@ -79,7 +81,7 @@ export async function POST() {
 - Skills they listed: ${skills}
 - Background summary they wrote: ${profile.summary ?? "Not provided"}
 
-Based on this information, generate exactly four sections with these exact headings:
+Based on this information, generate exactly five sections with these exact headings:
 
 ## CAPABILITY_PROFILE
 List each distinct capability as a separate item using this exact format. Do not use numbered lists, bullet points, or any other structure — only the bold-title format below:
@@ -93,6 +95,11 @@ State the single best job title this applicant should target right now based on 
 
 **[Job Title]**: [Two to three sentences explaining specifically why this role is the right fit — what in their background maps to what this role demands day-to-day.]
 
+## ENTRY_POINT
+State the single best starting role this applicant should pursue first to build toward their recommended position. This is especially important for candidates with non-traditional or military backgrounds who are highly capable but need civilian sector context first. Use this exact format:
+
+**[Starting Role Title]**: [Two to three sentences explaining why this is the right entry point — what civilian experience it builds, how it bridges their background to their target role, and what makes it realistic to land now.]
+
 ## FUTURE_POSITIONS
 List each role this applicant is realistically on track for as they build civilian sector experience. Use this exact format. Do not use numbered lists, bullet points, or any other structure — only the bold-title format below:
 
@@ -103,7 +110,7 @@ List only roles that genuinely fit. No minimum or maximum number.
 ## EMPLOYER_SUMMARY
 A plain-language, employer-facing paragraph (200–300 words) that a hiring manager can read in 60 seconds to understand exactly what level of operator they are looking at and what roles align. Write it to close the knowledge gap between non-traditional backgrounds and corporate expectations. Do not use jargon the applicant used — translate it into business impact language the employer already knows.
 
-Respond with only the four sections above. No preamble, no closing remarks.`;
+Respond with only the five sections above. No preamble, no closing remarks.`;
 
   const anthropic = new Anthropic({ apiKey });
 
@@ -124,7 +131,8 @@ Respond with only the four sections above. No preamble, no closing remarks.`;
   }
 
   const capabilitySummary = extractSection(text, "CAPABILITY_PROFILE", "RECOMMENDED_POSITION");
-  const recommendedPosition = extractSection(text, "RECOMMENDED_POSITION", "FUTURE_POSITIONS");
+  const recommendedPosition = extractSection(text, "RECOMMENDED_POSITION", "ENTRY_POINT");
+  const entryPoint = extractSection(text, "ENTRY_POINT", "FUTURE_POSITIONS");
   const futurePositions = extractSection(text, "FUTURE_POSITIONS", "EMPLOYER_SUMMARY");
   const employerSummary = extractSection(text, "EMPLOYER_SUMMARY");
 
@@ -133,6 +141,7 @@ Respond with only the four sections above. No preamble, no closing remarks.`;
     .update({
       capability_summary: capabilitySummary,
       recommended_position: recommendedPosition,
+      entry_point: entryPoint,
       future_positions: futurePositions,
       employer_summary: employerSummary
     })
@@ -143,5 +152,5 @@ Respond with only the four sections above. No preamble, no closing remarks.`;
     return NextResponse.json({ error: "Failed to save generated profile." }, { status: 500 });
   }
 
-  return NextResponse.json({ success: true, capabilitySummary, recommendedPosition, futurePositions, employerSummary });
+  return NextResponse.json({ success: true, capabilitySummary, recommendedPosition, entryPoint, futurePositions, employerSummary });
 }
