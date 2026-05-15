@@ -104,6 +104,9 @@ export async function POST(request: Request) {
       if ("experienceLevel" in data) {
         upsertData.experience_level = typeof data.experienceLevel === "string" ? data.experienceLevel : "";
       }
+      if ("educationLevel" in data) {
+        upsertData.education_level = typeof data.educationLevel === "string" ? data.educationLevel : "";
+      }
       if ("capabilitySummary" in data) {
         upsertData.summary = typeof data.capabilitySummary === "string" ? data.capabilitySummary.trim() : "";
       }
