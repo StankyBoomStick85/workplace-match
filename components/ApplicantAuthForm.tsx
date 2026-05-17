@@ -79,7 +79,22 @@ export function ApplicantAuthForm({ mode }: ApplicantAuthFormProps) {
         dedupeKey: `signup_created:candidate:${data.user.id}`
       });
       await sendWelcomeEmail(email, "candidate");
-      router.push("/applicant/dashboard");
+
+      // Force the SDK to settle its internal session state before navigating.
+      const { data: sessionCheck } = await supabase.auth.getUser();
+      if (sessionCheck?.user) {
+        router.push("/applicant/dashboard");
+      } else {
+        await new Promise<void>((resolve) => {
+          const { data: listener } = supabase.auth.onAuthStateChange((event) => {
+            if (event === "SIGNED_IN") {
+              listener.subscription.unsubscribe();
+              resolve();
+            }
+          });
+        });
+        router.push("/applicant/dashboard");
+      }
       return;
     }
 
