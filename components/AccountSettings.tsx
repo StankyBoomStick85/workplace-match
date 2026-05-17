@@ -218,160 +218,213 @@ export function AccountSettings() {
     });
   }
 
+  async function handleZipBlur() {
+    const zip = settings.zipCode.trim();
+    if (zip.length !== 5) return;
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?postalcode=${encodeURIComponent(zip)}&country=US&format=json&limit=1&addressdetails=1`,
+        { headers: { "Accept-Language": "en" } }
+      );
+      const data: Array<{ address?: { city?: string; town?: string; village?: string; county?: string; state_code?: string } }> = await res.json();
+      const addr = data?.[0]?.address;
+      if (!addr) return;
+      const city = addr.city ?? addr.town ?? addr.village ?? addr.county ?? "";
+      const state = addr.state_code ?? "";
+      if (city || state) {
+        setSettings((current) => ({
+          ...current,
+          city: city || current.city,
+          state: state ? normalizeStateValue(state) : current.state,
+        }));
+      }
+    } catch {
+      // silent fail — user can enter manually
+    }
+  }
+
   return (
-    <section className="mx-auto max-w-5xl px-4 py-12">
-      <form onSubmit={(e) => e.preventDefault()} className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-sm font-bold uppercase tracking-[0.16em] text-red-800">Account</p>
-            <p className="mt-2 text-sm text-zinc-600">
-              Manage your {role === "employer" ? "employer" : "applicant"} account information.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            {isEditing ? (
-              <>
-                <button type="button" onClick={handleSave} className="rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950">
-                  Save
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsEditing(false);
-                    setMessage("");
-                    setError("");
-                  }}
-                  className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setIsEditing(true)}
-                className="rounded-md border border-gray-300 bg-gray-50 px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-white"
-              >
-                Edit
-              </button>
-            )}
-          </div>
-        </div>
-
-        <div className="mt-6 grid gap-4 md:grid-cols-2">
-          <Field label={role === "employer" ? "Company Name" : "Name"} id="displayName">
-            <input
-              id="displayName"
-              value={settings.displayName}
-              onChange={(event) => setSettings((current) => ({ ...current, displayName: event.target.value }))}
-              readOnly={!isEditing}
-              className="field"
-            />
-          </Field>
-          <Field label="Email" id="email">
-            <input
-              id="email"
-              type="email"
-              value={settings.email}
-              onChange={(event) => setSettings((current) => ({ ...current, email: event.target.value }))}
-              readOnly={!isEditing}
-              className="field"
-            />
-          </Field>
-          <Field label="Street address" id="streetAddress" fullWidth>
-            <input
-              id="streetAddress"
-              value={settings.streetAddress}
-              onChange={(event) => updateAddressField("streetAddress", event.target.value)}
-              readOnly={!isEditing}
-              className="field"
-            />
-          </Field>
-          <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_4rem_7rem] md:col-span-2">
-            <Field label="City" id="city">
-              <input
-                id="city"
-                value={settings.city}
-                onChange={(event) => updateAddressField("city", event.target.value)}
-                readOnly={!isEditing}
-                className="field"
-              />
-            </Field>
-            <Field label="State" id="state">
-              <StateAbbreviationSelect
-                id="state"
-                value={settings.state}
-                onChange={(value) => updateAddressField("state", value)}
-                disabled={!isEditing}
-                className="field uppercase"
-              />
-            </Field>
-            <Field label="ZIP" id="zipCode">
-              <input
-                id="zipCode"
-                value={settings.zipCode}
-                onChange={(event) => updateAddressField("zipCode", event.target.value)}
-                readOnly={!isEditing}
-                className="field"
-              />
-            </Field>
-          </div>
-          <Field label="Phone" id="phone">
-            <input
-              id="phone"
-              value={settings.phone}
-              onChange={(event) => setSettings((current) => ({ ...current, phone: event.target.value }))}
-              readOnly={!isEditing}
-              className="field"
-            />
-          </Field>
-        </div>
-
-        <div className="mt-6 rounded-lg border border-gray-200 bg-gray-50 p-4">
+    <>
+      {isEditing ? (
+        <div className="sticky top-0 z-20 flex items-center justify-end gap-2 border-b border-gray-200 bg-white/95 px-6 py-3 shadow-sm backdrop-blur-sm">
           <button
             type="button"
-            onClick={() => setShowPasswordSection((current) => !current)}
-            className="text-sm font-semibold text-red-800"
+            onClick={() => { setIsEditing(false); setMessage(""); setError(""); }}
+            className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-gray-50"
           >
-            {showPasswordSection ? "Hide password update" : "Update password"}
+            Cancel
           </button>
-          {showPasswordSection ? (
-            <div className="mt-4 grid gap-4 md:grid-cols-3">
-              <Field label="Current password" id="currentPassword">
+          <button
+            type="button"
+            onClick={handleSave}
+            className="rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
+          >
+            Save
+          </button>
+        </div>
+      ) : null}
+      <section className="mx-auto max-w-5xl px-4 py-12">
+        <form onSubmit={(e) => e.preventDefault()} className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-bold uppercase tracking-[0.16em] text-red-800">Account</p>
+              <p className="mt-2 text-sm text-zinc-600">
+                Manage your {role === "employer" ? "employer" : "applicant"} account information.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              {isEditing ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleSave}
+                    className="rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setIsEditing(false); setMessage(""); setError(""); }}
+                    className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setIsEditing(true)}
+                  className="rounded-md border border-gray-300 bg-gray-50 px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-white"
+                >
+                  Edit
+                </button>
+              )}
+            </div>
+          </div>
+
+          {isEditing ? (
+            <div className="mt-6 grid gap-4 md:grid-cols-2">
+              <Field label={role === "employer" ? "Company Name" : "Name"} id="displayName">
                 <input
-                  id="currentPassword"
-                  type="password"
-                  value={settings.currentPassword}
-                  onChange={(event) => setSettings((current) => ({ ...current, currentPassword: event.target.value }))}
+                  id="displayName"
+                  value={settings.displayName}
+                  onChange={(event) => setSettings((current) => ({ ...current, displayName: event.target.value }))}
                   className="field"
                 />
               </Field>
-              <Field label="New password" id="newPassword">
+              <Field label="Email" id="email">
                 <input
-                  id="newPassword"
-                  type="password"
-                  value={settings.newPassword}
-                  onChange={(event) => setSettings((current) => ({ ...current, newPassword: event.target.value }))}
+                  id="email"
+                  type="email"
+                  value={settings.email}
+                  onChange={(event) => setSettings((current) => ({ ...current, email: event.target.value }))}
                   className="field"
                 />
               </Field>
-              <Field label="Confirm new password" id="confirmPassword">
+              <Field label="Street address" id="streetAddress" fullWidth>
                 <input
-                  id="confirmPassword"
-                  type="password"
-                  value={settings.confirmPassword}
-                  onChange={(event) => setSettings((current) => ({ ...current, confirmPassword: event.target.value }))}
+                  id="streetAddress"
+                  value={settings.streetAddress}
+                  onChange={(event) => updateAddressField("streetAddress", event.target.value)}
+                  className="field"
+                />
+              </Field>
+              <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_4rem_7rem] md:col-span-2">
+                <Field label="City" id="city">
+                  <input
+                    id="city"
+                    value={settings.city}
+                    onChange={(event) => updateAddressField("city", event.target.value)}
+                    className="field"
+                  />
+                </Field>
+                <Field label="State" id="state">
+                  <StateAbbreviationSelect
+                    id="state"
+                    value={settings.state}
+                    onChange={(value) => updateAddressField("state", value)}
+                    className="field uppercase"
+                  />
+                </Field>
+                <Field label="ZIP" id="zipCode">
+                  <input
+                    id="zipCode"
+                    value={settings.zipCode}
+                    onChange={(event) => updateAddressField("zipCode", event.target.value)}
+                    onBlur={handleZipBlur}
+                    className="field"
+                  />
+                </Field>
+              </div>
+              <Field label="Phone" id="phone">
+                <input
+                  id="phone"
+                  value={settings.phone}
+                  onChange={(event) => setSettings((current) => ({ ...current, phone: event.target.value }))}
                   className="field"
                 />
               </Field>
             </div>
-          ) : null}
-        </div>
+          ) : (
+            <dl className="mt-6 grid gap-4 md:grid-cols-2">
+              <ViewField label={role === "employer" ? "Company Name" : "Name"} value={settings.displayName} />
+              <ViewField label="Email" value={settings.email} />
+              <ViewField label="Street address" value={settings.streetAddress} fullWidth />
+              <ViewField label="City" value={settings.city} />
+              <ViewField label="State" value={settings.state} />
+              <ViewField label="ZIP" value={settings.zipCode} />
+              <ViewField label="Phone" value={settings.phone} />
+            </dl>
+          )}
 
-        {message ? <p className="mt-4 text-sm font-semibold text-green-700">{message}</p> : null}
-        {error ? <p className="mt-4 text-sm font-semibold text-red-700">{error}</p> : null}
-      </form>
-    </section>
+          {isEditing ? (
+            <div className="mt-6 rounded-lg border border-gray-200 bg-gray-50 p-4">
+              <button
+                type="button"
+                onClick={() => setShowPasswordSection((current) => !current)}
+                className="text-sm font-semibold text-red-800"
+              >
+                {showPasswordSection ? "Hide password update" : "Update password"}
+              </button>
+              {showPasswordSection ? (
+                <div className="mt-4 grid gap-4 md:grid-cols-3">
+                  <Field label="Current password" id="currentPassword">
+                    <input
+                      id="currentPassword"
+                      type="password"
+                      value={settings.currentPassword}
+                      onChange={(event) => setSettings((current) => ({ ...current, currentPassword: event.target.value }))}
+                      className="field"
+                    />
+                  </Field>
+                  <Field label="New password" id="newPassword">
+                    <input
+                      id="newPassword"
+                      type="password"
+                      value={settings.newPassword}
+                      onChange={(event) => setSettings((current) => ({ ...current, newPassword: event.target.value }))}
+                      className="field"
+                    />
+                  </Field>
+                  <Field label="Confirm new password" id="confirmPassword">
+                    <input
+                      id="confirmPassword"
+                      type="password"
+                      value={settings.confirmPassword}
+                      onChange={(event) => setSettings((current) => ({ ...current, confirmPassword: event.target.value }))}
+                      className="field"
+                    />
+                  </Field>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {message ? <p className="mt-4 text-sm font-semibold text-green-700">{message}</p> : null}
+          {error ? <p className="mt-4 text-sm font-semibold text-red-700">{error}</p> : null}
+        </form>
+      </section>
+    </>
   );
 }
 
@@ -410,6 +463,15 @@ function Field({
         {label}
       </label>
       {children}
+    </div>
+  );
+}
+
+function ViewField({ label, value, fullWidth = false }: { label: string; value: string; fullWidth?: boolean }) {
+  return (
+    <div className={`space-y-1 ${fullWidth ? "md:col-span-2" : ""}`}>
+      <dt className="label">{label}</dt>
+      <dd className="text-sm text-zinc-900">{value || "—"}</dd>
     </div>
   );
 }

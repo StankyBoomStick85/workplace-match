@@ -38,6 +38,7 @@ type ApplicantProfileState = {
   industriesOfInterest: string;
   availableStartDate: string;
   willingToRelocate: string;
+  phone: string;
 };
 
 const emptyProfile: ApplicantProfileState = {
@@ -54,7 +55,8 @@ const emptyProfile: ApplicantProfileState = {
   experienceLevel: "",
   industriesOfInterest: "",
   availableStartDate: "",
-  willingToRelocate: ""
+  willingToRelocate: "",
+  phone: ""
 };
 
 export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string }) {
@@ -196,6 +198,7 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
           if (ex.topSkills) merged.topSkills = ex.topSkills;
           if (ex.experienceLevel) merged.experienceLevel = ex.experienceLevel;
           if (ex.industriesOfInterest) merged.industriesOfInterest = ex.industriesOfInterest;
+          if (ex.phoneNumber) merged.phone = ex.phoneNumber as string;
 
           const mergedProfile = { ...draftProfile, ...merged };
           setDraftProfile(mergedProfile);
@@ -624,7 +627,8 @@ function mapProfileData(data: any): ApplicantProfileState {
     experienceLevel: data?.experience_level ?? "",
     industriesOfInterest: extras.industriesOfInterest,
     availableStartDate: extras.availableStartDate,
-    willingToRelocate: extras.willingToRelocate
+    willingToRelocate: extras.willingToRelocate,
+    phone: data?.phone ?? ""
   };
 }
 
