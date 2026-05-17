@@ -83,7 +83,7 @@ export function ApplicantAuthForm({ mode }: ApplicantAuthFormProps) {
       // Force the SDK to settle its internal session state before navigating.
       const { data: sessionCheck } = await supabase.auth.getUser();
       if (sessionCheck?.user) {
-        router.push("/applicant/dashboard");
+        router.push("/applicant/profile");
       } else {
         await new Promise<void>((resolve) => {
           const { data: listener } = supabase.auth.onAuthStateChange((event) => {
@@ -93,7 +93,7 @@ export function ApplicantAuthForm({ mode }: ApplicantAuthFormProps) {
             }
           });
         });
-        router.push("/applicant/dashboard");
+        router.push("/applicant/profile");
       }
       return;
     }
