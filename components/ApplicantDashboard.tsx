@@ -71,6 +71,7 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
   const [newDocLabel, setNewDocLabel] = useState("");
   const [newDocFile, setNewDocFile] = useState<File | null>(null);
   const [isUploadingDoc, setIsUploadingDoc] = useState(false);
+  const [isExtracting, setIsExtracting] = useState(false);
   const [docError, setDocError] = useState("");
 
   useEffect(() => {
@@ -173,6 +174,43 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
       setNewDocFile(null);
       const fileInput = document.getElementById("onboardingDocFileInput") as HTMLInputElement | null;
       if (fileInput) fileInput.value = "";
+
+      // Attempt AI extraction to pre-fill the profile form
+      const uploadedContentType = newDocFile.type;
+      setIsUploadingDoc(false);
+      setIsExtracting(true);
+      try {
+        const extractRes = await fetch("/api/applicant/extract-resume", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: storagePath, contentType: uploadedContentType }),
+        });
+        const extractResult = await extractRes.json().catch(() => ({}));
+
+        if (extractRes.ok && extractResult.extracted) {
+          const ex = extractResult.extracted as Record<string, string | null>;
+          const merged: Partial<ApplicantProfileState> = {};
+          if (ex.fullName) merged.fullName = ex.fullName;
+          if (ex.zipCode) merged.zipCode = ex.zipCode;
+          if (ex.capabilitySummary) merged.capabilitySummary = ex.capabilitySummary;
+          if (ex.topSkills) merged.topSkills = ex.topSkills;
+          if (ex.experienceLevel) merged.experienceLevel = ex.experienceLevel;
+          if (ex.industriesOfInterest) merged.industriesOfInterest = ex.industriesOfInterest;
+
+          // Switch to edit mode and pre-fill — sets draftProfile to profile first, then our merged override wins
+          isEditingRef.current = true;
+          setMessage("");
+          setError("");
+          setIsEditing(true);
+          setDraftProfile({ ...profile, ...merged });
+        }
+      } catch (err) {
+        console.error("[extract-resume] extraction failed, skipping pre-fill", err);
+        // Upload already succeeded — extraction failure is non-blocking
+      } finally {
+        setIsExtracting(false);
+      }
+      return; // already cleared isUploadingDoc above
     } catch (err) {
       console.error("[handleAddDocument] unexpected error", err);
       setDocError("An unexpected error occurred.");
@@ -312,56 +350,66 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
               </ul>
             ) : null}
 
-            <div className="mt-4 space-y-3">
-              <div className="flex flex-wrap items-end gap-3">
-                <div className="min-w-0 flex-1 space-y-1">
-                  <label htmlFor="onboardingDocLabel" className="label">Document label</label>
-                  <input
-                    id="onboardingDocLabel"
-                    type="text"
-                    placeholder="e.g. Resume, NCOER 2023, AWS Certification"
-                    value={newDocLabel}
-                    onChange={(e) => setNewDocLabel(e.target.value)}
-                    disabled={isUploadingDoc}
-                    className="field"
-                  />
-                </div>
-                <div className="min-w-0 flex-1 space-y-1">
-                  <label htmlFor="onboardingDocFileInput" className="label">File (PDF, DOC, DOCX, JPG, PNG — 5 MB max)</label>
-                  <input
-                    id="onboardingDocFileInput"
-                    type="file"
-                    accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0] ?? null;
-                      setNewDocFile(file);
-                      if (file && !newDocLabel.trim()) {
-                        setNewDocLabel(file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " "));
-                      }
-                    }}
-                    disabled={isUploadingDoc}
-                    className="block w-full text-sm text-zinc-700 file:mr-3 file:rounded-md file:border file:border-zinc-300 file:bg-white file:px-3 file:py-2 file:text-sm file:font-semibold file:text-zinc-900 hover:file:bg-zinc-50"
-                  />
-                </div>
+            {isExtracting ? (
+              <div className="mt-4 flex items-center gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3">
+                <svg className="h-4 w-4 shrink-0 animate-spin text-amber-700" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                <p className="text-sm font-semibold text-amber-800">Reading your resume…</p>
               </div>
-              {docError ? <p className="text-sm text-red-700">{docError}</p> : null}
-              <button
-                type="button"
-                onClick={handleAddDocument}
-                disabled={isUploadingDoc || !newDocLabel.trim() || !newDocFile}
-                className="inline-flex items-center gap-2 rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950 disabled:opacity-50"
-              >
-                {isUploadingDoc ? (
-                  <>
-                    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                    Uploading…
-                  </>
-                ) : "Upload Document"}
-              </button>
-            </div>
+            ) : (
+              <div className="mt-4 space-y-3">
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <label htmlFor="onboardingDocLabel" className="label">Document label</label>
+                    <input
+                      id="onboardingDocLabel"
+                      type="text"
+                      placeholder="e.g. Resume, NCOER 2023, AWS Certification"
+                      value={newDocLabel}
+                      onChange={(e) => setNewDocLabel(e.target.value)}
+                      disabled={isUploadingDoc}
+                      className="field"
+                    />
+                  </div>
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <label htmlFor="onboardingDocFileInput" className="label">File (PDF, DOC, DOCX, JPG, PNG — 5 MB max)</label>
+                    <input
+                      id="onboardingDocFileInput"
+                      type="file"
+                      accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] ?? null;
+                        setNewDocFile(file);
+                        if (file && !newDocLabel.trim()) {
+                          setNewDocLabel(file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " "));
+                        }
+                      }}
+                      disabled={isUploadingDoc}
+                      className="block w-full text-sm text-zinc-700 file:mr-3 file:rounded-md file:border file:border-zinc-300 file:bg-white file:px-3 file:py-2 file:text-sm file:font-semibold file:text-zinc-900 hover:file:bg-zinc-50"
+                    />
+                  </div>
+                </div>
+                {docError ? <p className="text-sm text-red-700">{docError}</p> : null}
+                <button
+                  type="button"
+                  onClick={handleAddDocument}
+                  disabled={isUploadingDoc || !newDocLabel.trim() || !newDocFile}
+                  className="inline-flex items-center gap-2 rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950 disabled:opacity-50"
+                >
+                  {isUploadingDoc ? (
+                    <>
+                      <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      Uploading…
+                    </>
+                  ) : "Upload Document"}
+                </button>
+              </div>
+            )}
           </div>
 
           {message ? <p className="mt-4 text-sm font-semibold text-green-700">{message}</p> : null}
