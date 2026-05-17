@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { logAdminEvent } from "../lib/adminEvents";
 import { supabase } from "../lib/supabase";
@@ -11,6 +12,7 @@ type ApplicantAuthFormProps = {
 };
 
 export function ApplicantAuthForm({ mode }: ApplicantAuthFormProps) {
+  const router = useRouter();
   const isSignup = mode === "signup";
   const [error, setError] = useState("");
   const [password, setPassword] = useState("");
@@ -77,7 +79,7 @@ export function ApplicantAuthForm({ mode }: ApplicantAuthFormProps) {
         dedupeKey: `signup_created:candidate:${data.user.id}`
       });
       await sendWelcomeEmail(email, "candidate");
-      window.location.href = "/applicant/dashboard";
+      router.push("/applicant/dashboard");
       return;
     }
 
