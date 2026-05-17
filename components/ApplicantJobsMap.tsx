@@ -252,6 +252,7 @@ export function ApplicantJobsMap() {
   const [sortMode, setSortMode] = useState<JobSortMode>("balanced");
   const [hoveredResultJobId, setHoveredResultJobId] = useState("");
   const [selectedResultJobId, setSelectedResultJobId] = useState("");
+  const [geocodedZipCenter, setGeocodedZipCenter] = useState<Coordinates | null>(null);
   const clusterMarkerRefs = useRef<Record<string, L.Marker | null>>({});
   const singleJobMarkerRefs = useRef<Record<string, L.Marker | null>>({});
   const detailPanelRef = useRef<HTMLDivElement | null>(null);
@@ -295,9 +296,36 @@ export function ApplicantJobsMap() {
   );
   const applicantAreaPosition = applicantLocationResolution.position;
   const applicantProfilePicture = profile?.profilePictureUrl ?? "";
+
+  const zipToGeocode =
+    applicantLocationResolution.source === "unresolved"
+      ? (account?.zipCode ?? profile?.zipCode ?? "")
+      : "";
+
+  useEffect(() => {
+    if (!zipToGeocode) {
+      setGeocodedZipCenter(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(
+      `https://nominatim.openstreetmap.org/search?postalcode=${encodeURIComponent(zipToGeocode)}&country=US&format=json&limit=1`,
+      { headers: { "Accept-Language": "en" } }
+    )
+      .then((r) => r.json())
+      .then((data: Array<{ lat: string; lon: string }>) => {
+        if (cancelled || !data?.[0]) return;
+        const lat = parseFloat(data[0].lat);
+        const lon = parseFloat(data[0].lon);
+        if (isFinite(lat) && isFinite(lon)) setGeocodedZipCenter([lat, lon]);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [zipToGeocode]);
+
   const applicantAreaCenter = useMemo(
-    () => applicantAreaPosition ?? stLouisCenter,
-    [applicantAreaPosition]
+    () => applicantAreaPosition ?? geocodedZipCenter ?? stLouisCenter,
+    [applicantAreaPosition, geocodedZipCenter]
   );
   const mapCenter = useMemo(() => getInitialMapCenter(applicantAreaCenter), [applicantAreaCenter]);
   const hasCustomArea = customAreaPoints.length >= 3;
@@ -594,7 +622,7 @@ export function ApplicantJobsMap() {
   }
 
   function getJobPopupData(job: JobListing) {
-    const matchPercent = calculateSkillMatch(job.requiredSkills, getCandidateMatchSignals(profile), job.title).percentage;
+    const matchPercent = calculateSkillMatch(job.requiredSkills, getApplicantMatchSignals(profile), job.title).percentage;
     const interestState = getJobInterestState(job);
     const commuteEstimate = getJobCommuteEstimate(job, applicantAreaPosition);
     const companyName =
@@ -1170,7 +1198,7 @@ export function ApplicantJobsMap() {
               onClick={openFilters}
               className="flex w-full items-center justify-between rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
             >
-              <span>{activeFilterCount > 0 ? `Filters (${activeFilterCount})` : "Filters â–¾"}</span>
+              <span>{activeFilterCount > 0 ? `Filters (${activeFilterCount})` : "Filters ▾"}</span>
             </button>
             {filterSaveMessage ? (
               <p className="mt-2 text-xs font-semibold text-zinc-500">{filterSaveMessage}</p>
@@ -2052,7 +2080,7 @@ function shouldShowJob(
 ) {
   if (
     filters.minimumMatchPercent > 0 &&
-    calculateSkillMatch(job.requiredSkills, getCandidateMatchSignals(profile), job.title).percentage <
+    calculateSkillMatch(job.requiredSkills, getApplicantMatchSignals(profile), job.title).percentage <
       filters.minimumMatchPercent
   ) {
     return false;
@@ -2175,7 +2203,7 @@ function sortJobs(
 }
 
 function getJobSortMetrics(job: JobListing, profile: ApplicantProfile | null, applicantPosition: Coordinates | null) {
-  const matchPercent = calculateSkillMatch(job.requiredSkills, getCandidateMatchSignals(profile), job.title).percentage;
+  const matchPercent = calculateSkillMatch(job.requiredSkills, getApplicantMatchSignals(profile), job.title).percentage;
   const commuteMinutes = getJobCommuteEstimate(job, applicantPosition)?.minutes ?? Number.POSITIVE_INFINITY;
   const commuteScore = Number.isFinite(commuteMinutes) ? Math.max(0, 100 - Math.min(commuteMinutes, 100)) : 0;
 
@@ -2689,7 +2717,7 @@ function calculateSkillMatch(requiredSkillsValue: string[], candidateSkillsValue
   return { percentage, matchedSkills, missingSkills };
 }
 
-function getCandidateMatchSignals(profile: ApplicantProfile | null) {
+function getApplicantMatchSignals(profile: ApplicantProfile | null) {
   if (!profile) {
     return [];
   }
