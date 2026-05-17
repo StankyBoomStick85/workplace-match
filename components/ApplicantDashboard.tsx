@@ -197,12 +197,14 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
           if (ex.experienceLevel) merged.experienceLevel = ex.experienceLevel;
           if (ex.industriesOfInterest) merged.industriesOfInterest = ex.industriesOfInterest;
 
-          // Switch to edit mode and pre-fill — sets draftProfile to profile first, then our merged override wins
           isEditingRef.current = true;
           setMessage("");
           setError("");
           setIsEditing(true);
-          setDraftProfile({ ...profile, ...merged });
+          setDraftProfile((prev) => ({ ...prev, ...merged }));
+          window.dispatchEvent(new CustomEvent("workplace-match-extraction-complete", {
+            detail: { message: "Please verify your account information and profile details are correct" }
+          }));
         }
       } catch (err) {
         console.error("[extract-resume] extraction failed, skipping pre-fill", err);

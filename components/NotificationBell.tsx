@@ -13,20 +13,32 @@ import { supabase } from "../lib/supabase";
 export function NotificationBell({ recipientEmail }: { recipientEmail: string }) {
   const [notifications, setNotifications] = useState<ContactNotification[]>([]);
   const [isOpen, setIsOpen] = useState(false);
-  const unreadCount = notifications.filter((notification) => notification.status === "unread").length;
+  const [extractAlerts, setExtractAlerts] = useState<string[]>([]);
+  const unreadCount =
+    notifications.filter((notification) => notification.status === "unread").length +
+    extractAlerts.length;
 
   useEffect(() => {
     refreshNotifications();
     window.addEventListener("storage", refreshNotifications);
     window.addEventListener("workplace-match-notifications-updated", refreshNotifications);
+    window.addEventListener("workplace-match-extraction-complete", handleExtractionComplete);
 
     return () => {
       window.removeEventListener("storage", refreshNotifications);
       window.removeEventListener("workplace-match-notifications-updated", refreshNotifications);
+      window.removeEventListener("workplace-match-extraction-complete", handleExtractionComplete);
     };
 
     async function refreshNotifications() {
       setNotifications(await refreshContactNotifications(recipientEmail));
+    }
+
+    function handleExtractionComplete(e: Event) {
+      const detail = (e as CustomEvent<{ message: string }>).detail;
+      if (detail?.message) {
+        setExtractAlerts((prev) => [...prev, detail.message]);
+      }
     }
   }, [recipientEmail]);
 
@@ -39,6 +51,10 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
         (notification) => notification.recipientEmail.trim().toLowerCase() === recipientEmail.trim().toLowerCase()
       ));
     }
+  }
+
+  function dismissExtractAlert(index: number) {
+    setExtractAlerts((prev) => prev.filter((_, i) => i !== index));
   }
 
   async function openNotification(notification: ContactNotification) {
@@ -116,8 +132,33 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
         <div className="absolute right-0 top-full z-[1200] mt-2 w-80 rounded-lg border border-gray-200 bg-white p-3 text-left shadow-soft">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-800">Notifications</p>
           <div className="mt-3 max-h-80 overflow-y-auto">
-            {notifications.length > 0 ? (
+            {extractAlerts.length === 0 && notifications.length === 0 ? (
+              <p className="rounded-md border border-dashed border-gray-300 bg-gray-50 p-3 text-sm text-zinc-600">
+                No notifications yet.
+              </p>
+            ) : (
               <div className="space-y-2">
+                {extractAlerts.map((message, index) => (
+                  <div
+                    key={`extract-${index}`}
+                    className="flex items-start justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 p-3"
+                  >
+                    <div className="min-w-0">
+                      <span className="block text-sm font-bold text-amber-900">Action required</span>
+                      <span className="mt-1 block text-sm leading-5 text-amber-800">{message}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => dismissExtractAlert(index)}
+                      aria-label="Dismiss"
+                      className="shrink-0 text-amber-600 transition hover:text-amber-900"
+                    >
+                      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                ))}
                 {notifications.map((notification) => (
                   <button
                     key={notification.id}
@@ -133,10 +174,6 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
                   </button>
                 ))}
               </div>
-            ) : (
-              <p className="rounded-md border border-dashed border-gray-300 bg-gray-50 p-3 text-sm text-zinc-600">
-                No notifications yet.
-              </p>
             )}
           </div>
         </div>

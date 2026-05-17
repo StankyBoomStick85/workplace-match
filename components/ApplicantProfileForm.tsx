@@ -200,6 +200,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
   const [newDocLabel, setNewDocLabel] = useState("");
   const [newDocFile, setNewDocFile] = useState<File | null>(null);
   const [isUploadingDoc, setIsUploadingDoc] = useState(false);
+  const [isExtracting, setIsExtracting] = useState(false);
   const [docError, setDocError] = useState("");
 
   function handleProfilePictureChange(file: File | null) {
@@ -317,8 +318,11 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
     if (!newDocFile) { setDocError("Please select a file to upload."); return; }
     if (newDocFile.size > MAX_DOC_BYTES) { setDocError("File must be 5 MB or smaller."); return; }
 
+    const contentTypeForExtraction = newDocFile.type;
     setDocError("");
     setIsUploadingDoc(true);
+    let pathForExtraction = "";
+
     try {
       const { data: { user }, error: userErr } = await supabase.auth.getUser();
       if (userErr || !user) { setDocError("Session expired. Please sign in again."); return; }
@@ -361,11 +365,43 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
       setNewDocFile(null);
       const fileInput = document.getElementById("docFileInput") as HTMLInputElement | null;
       if (fileInput) fileInput.value = "";
+      pathForExtraction = storagePath;
     } catch (err) {
       console.error("[handleAddDocument] unexpected error", err);
       setDocError("An unexpected error occurred.");
     } finally {
       setIsUploadingDoc(false);
+    }
+
+    if (!pathForExtraction) return;
+
+    // Capability fields only — never touches name, zip, email, phone, or address
+    setIsExtracting(true);
+    try {
+      const extractRes = await fetch("/api/applicant/extract-resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: pathForExtraction, contentType: contentTypeForExtraction }),
+      });
+      const extractResult = await extractRes.json().catch(() => ({}));
+      if (extractRes.ok && extractResult.extracted) {
+        const ex = extractResult.extracted as Record<string, string | null>;
+        setProfile((prev) =>
+          prev
+            ? {
+                ...prev,
+                ...(ex.capabilitySummary ? { capabilitySummary: ex.capabilitySummary } : {}),
+                ...(ex.topSkills ? { topSkills: splitSkills(ex.topSkills) } : {}),
+                ...(ex.experienceLevel ? { experienceLevel: ex.experienceLevel } : {}),
+                updatedAt: new Date().toISOString(),
+              }
+            : prev
+        );
+      }
+    } catch (err) {
+      console.error("[handleAddDocument] extraction failed, skipping pre-fill", err);
+    } finally {
+      setIsExtracting(false);
     }
   }
 
@@ -672,7 +708,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
             <button
               type="button"
               onClick={handleAddDocument}
-              disabled={isUploadingDoc || !newDocLabel.trim() || !newDocFile}
+              disabled={isUploadingDoc || isExtracting || !newDocLabel.trim() || !newDocFile}
               className="inline-flex items-center gap-2 rounded-md bg-zinc-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-zinc-700 disabled:opacity-50"
             >
               {isUploadingDoc ? (
@@ -685,6 +721,15 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
                 </>
               ) : "Upload Document"}
             </button>
+            {isExtracting ? (
+              <div className="flex items-center gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3">
+                <svg className="h-4 w-4 shrink-0 animate-spin text-amber-700" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                <p className="text-sm font-semibold text-amber-800">Reading document and pre-filling capability fields…</p>
+              </div>
+            ) : null}
           </div>
         </div>
       </div> : null}
