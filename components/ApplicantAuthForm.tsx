@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { logAdminEvent } from "../lib/adminEvents";
 import { supabase } from "../lib/supabase";
 import { AuthDivider, GoogleOAuthButton } from "./GoogleOAuthButton";
@@ -18,6 +18,14 @@ export function ApplicantAuthForm({ mode }: ApplicantAuthFormProps) {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [showSignedUpBanner, setShowSignedUpBanner] = useState(false);
+
+  useEffect(() => {
+    if (!isSignup && localStorage.getItem("wpm_just_signed_up") === "true") {
+      localStorage.removeItem("wpm_just_signed_up");
+      setShowSignedUpBanner(true);
+    }
+  }, [isSignup]);
 
   function updatePassword(value: string) {
     setPassword(value);
@@ -82,6 +90,7 @@ export function ApplicantAuthForm({ mode }: ApplicantAuthFormProps) {
 
       // Force the SDK to settle its internal session state before navigating.
       const { data: sessionCheck } = await supabase.auth.getUser();
+      localStorage.setItem("wpm_just_signed_up", "true");
       if (sessionCheck?.user) {
         router.push("/applicant/profile");
       } else {
@@ -122,6 +131,11 @@ export function ApplicantAuthForm({ mode }: ApplicantAuthFormProps) {
 
   return (
     <section className="mx-auto max-w-md px-4 py-14">
+      {showSignedUpBanner && (
+        <div className="mb-4 rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+          Your account has been created. Please log in.
+        </div>
+      )}
       <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
         <p className="text-sm font-semibold uppercase tracking-[0.16em] text-red-800">
           Profile
