@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   getNotificationsForRecipient,
   markNotificationsRead,
@@ -14,6 +14,7 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
   const [notifications, setNotifications] = useState<ContactNotification[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [extractAlerts, setExtractAlerts] = useState<string[]>([]);
+  const containerRef = useRef<HTMLDivElement>(null);
   const unreadCount =
     notifications.filter((notification) => notification.status === "unread").length +
     extractAlerts.length;
@@ -41,6 +42,17 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
       }
     }
   }, [recipientEmail]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isOpen]);
 
   function toggleNotifications() {
     const nextIsOpen = !isOpen;
@@ -101,7 +113,7 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
   }
 
   return (
-    <div className="relative">
+    <div className="relative" ref={containerRef}>
       <button
         type="button"
         onClick={toggleNotifications}

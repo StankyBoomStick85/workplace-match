@@ -197,14 +197,14 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
           if (ex.experienceLevel) merged.experienceLevel = ex.experienceLevel;
           if (ex.industriesOfInterest) merged.industriesOfInterest = ex.industriesOfInterest;
 
-          isEditingRef.current = true;
+          const mergedProfile = { ...draftProfile, ...merged };
+          setDraftProfile(mergedProfile);
           setMessage("");
           setError("");
-          setIsEditing(true);
-          setDraftProfile((prev) => ({ ...prev, ...merged }));
           window.dispatchEvent(new CustomEvent("workplace-match-extraction-complete", {
             detail: { message: "Please verify your account information and profile details are correct" }
           }));
+          await performSave(mergedProfile);
         }
       } catch (err) {
         console.error("[extract-resume] extraction failed, skipping pre-fill", err);
@@ -248,19 +248,15 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
     }
   }
 
-  async function saveProfile(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError("");
-    setMessage("");
-
+  async function performSave(data: ApplicantProfileState) {
     const response = await fetch("/api/mvp/write", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         resource: "candidate-profile",
         data: {
-          ...draftProfile,
-          topSkills: splitTags(draftProfile.topSkills)
+          ...data,
+          topSkills: splitTags(data.topSkills)
         }
       })
     });
@@ -276,10 +272,17 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
       return;
     }
 
-    setProfile(draftProfile);
+    setProfile(data);
     isEditingRef.current = false;
     setIsEditing(false);
     setMessage("Profile saved.");
+  }
+
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    await performSave(draftProfile);
   }
 
   function startEditing() {
