@@ -3,7 +3,9 @@
     "allow": [
       "Bash(npx tsc *)",
       "Bash(node -e \"const p = require\\('./package.json'\\); console.log\\('next:', p.dependencies.next, 'react:', p.dependencies.react\\)\")",
-      "Bash(node -e \"const p = require\\('./package.json'\\); console.log\\('@supabase/ssr:', p.dependencies['@supabase/ssr'], '@supabase/supabase-js:', p.dependencies['@supabase/supabase-js']\\)\")"
+      "Bash(node -e \"const p = require\\('./package.json'\\); console.log\\('@supabase/ssr:', p.dependencies['@supabase/ssr'], '@supabase/supabase-js:', p.dependencies['@supabase/supabase-js']\\)\")",
+      "Bash(node -e \"require\\('mammoth'\\); console.log\\('found'\\)\")",
+      "Bash(npm install *)"
     ]
   }
 }

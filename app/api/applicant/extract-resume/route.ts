@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
+import mammoth from "mammoth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -69,9 +70,11 @@ export async function POST(request: Request) {
 
   const isImage = contentType.startsWith("image/");
   const isPdf = contentType === "application/pdf";
+  const isWord =
+    contentType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    contentType === "application/msword";
 
-  if (!isImage && !isPdf) {
-    // DOCX/DOC — cannot read binary without external parser; return null so the UI skips pre-fill gracefully
+  if (!isImage && !isPdf && !isWord) {
     return NextResponse.json({ extracted: null, message: "File type cannot be read automatically." });
   }
 
@@ -99,7 +102,20 @@ export async function POST(request: Request) {
 
   let rawText = "";
   try {
-    if (isPdf) {
+    if (isWord) {
+      const result = await mammoth.extractRawText({ buffer: Buffer.from(bytes) });
+      const docText = result.value.trim();
+      if (!docText) {
+        return NextResponse.json({ extracted: null, message: "Could not extract text from Word document." });
+      }
+      const message = await anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 512,
+        system: SYSTEM_PROMPT,
+        messages: [{ role: "user", content: `${USER_PROMPT}\n\n---\n\n${docText}` }],
+      });
+      rawText = message.content.find((b) => b.type === "text")?.text ?? "";
+    } else if (isPdf) {
       const message = await anthropic.beta.messages.create({
         model: "claude-sonnet-4-6",
         max_tokens: 512,
