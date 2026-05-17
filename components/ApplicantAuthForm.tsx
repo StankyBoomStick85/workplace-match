@@ -79,7 +79,7 @@ export function ApplicantAuthForm({ mode }: ApplicantAuthFormProps) {
         dedupeKey: `signup_created:candidate:${data.user.id}`
       });
       await sendWelcomeEmail(email, "candidate");
-      window.location.href = "/applicant/profile";
+      window.location.href = "/applicant/onboarding";
       return;
     }
 

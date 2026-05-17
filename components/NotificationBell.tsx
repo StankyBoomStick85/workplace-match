@@ -10,10 +10,29 @@ import {
 import { logAdminEvent } from "../lib/adminEvents";
 import { supabase } from "../lib/supabase";
 
+const EXTRACT_ALERTS_KEY = "wm_extract_alerts";
+
+function loadStoredAlerts(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(EXTRACT_ALERTS_KEY) ?? "[]");
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredAlerts(alerts: string[]) {
+  try {
+    localStorage.setItem(EXTRACT_ALERTS_KEY, JSON.stringify(alerts));
+  } catch {}
+}
+
 export function NotificationBell({ recipientEmail }: { recipientEmail: string }) {
   const [notifications, setNotifications] = useState<ContactNotification[]>([]);
   const [isOpen, setIsOpen] = useState(false);
-  const [extractAlerts, setExtractAlerts] = useState<string[]>([]);
+  const [extractAlerts, setExtractAlerts] = useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    return loadStoredAlerts();
+  });
   const containerRef = useRef<HTMLDivElement>(null);
   const unreadCount =
     notifications.filter((notification) => notification.status === "unread").length +
@@ -38,7 +57,11 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
     function handleExtractionComplete(e: Event) {
       const detail = (e as CustomEvent<{ message: string }>).detail;
       if (detail?.message) {
-        setExtractAlerts((prev) => [...prev, detail.message]);
+        setExtractAlerts((prev) => {
+          const next = [...prev, detail.message];
+          saveStoredAlerts(next);
+          return next;
+        });
       }
     }
   }, [recipientEmail]);
@@ -66,7 +89,11 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
   }
 
   function dismissExtractAlert(index: number) {
-    setExtractAlerts((prev) => prev.filter((_, i) => i !== index));
+    setExtractAlerts((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      saveStoredAlerts(next);
+      return next;
+    });
   }
 
   async function openNotification(notification: ContactNotification) {
