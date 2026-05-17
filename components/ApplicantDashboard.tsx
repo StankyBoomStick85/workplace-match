@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { supabase } from "../lib/supabase";
 import {
   getAllJobs,
   getCurrentMvpUser,
@@ -9,6 +10,18 @@ import {
   type MvpJobListing,
   type MvpMatch
 } from "../lib/supabaseMvpData";
+
+const DOCUMENTS_BUCKET = "candidate-documents";
+const MAX_DOC_BYTES = 5 * 1024 * 1024;
+
+type DocumentMeta = {
+  id: string;
+  label: string;
+  filename: string;
+  path: string;
+  contentType: string;
+  uploadedAt: string;
+};
 
 type ApplicantProfileState = {
   fullName: string;
@@ -54,6 +67,11 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [driveTimeDisplay, setDriveTimeDisplay] = useState<string | null>(null);
+  const [documentMeta, setDocumentMeta] = useState<DocumentMeta[]>([]);
+  const [newDocLabel, setNewDocLabel] = useState("");
+  const [newDocFile, setNewDocFile] = useState<File | null>(null);
+  const [isUploadingDoc, setIsUploadingDoc] = useState(false);
+  const [docError, setDocError] = useState("");
 
   useEffect(() => {
     loadProfile();
@@ -75,6 +93,9 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
       setProfile(nextProfile);
       if (!isEditingRef.current) {
         setDraftProfile(nextProfile);
+      }
+      if (Array.isArray(data?.document_metadata)) {
+        setDocumentMeta(data.document_metadata as DocumentMeta[]);
       }
       setMatchedJobs(
         matches
@@ -102,6 +123,90 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
 
     return () => clearTimeout(timer);
   }, [profile.zipCode, profile.searchRadius, draftProfile.zipCode, draftProfile.searchRadius, isEditing]);
+
+  async function handleAddDocument() {
+    if (!newDocLabel.trim()) { setDocError("Please enter a label for this document."); return; }
+    if (!newDocFile) { setDocError("Please select a file to upload."); return; }
+    if (newDocFile.size > MAX_DOC_BYTES) { setDocError("File must be 5 MB or smaller."); return; }
+
+    setDocError("");
+    setIsUploadingDoc(true);
+    try {
+      const { data: { user }, error: userErr } = await supabase.auth.getUser();
+      if (userErr || !user) { setDocError("Session expired. Please sign in again."); return; }
+
+      const docId = crypto.randomUUID();
+      const storagePath = `${user.id}/docs/${docId}`;
+      const { error: uploadErr } = await supabase.storage
+        .from(DOCUMENTS_BUCKET)
+        .upload(storagePath, newDocFile, { contentType: newDocFile.type });
+      if (uploadErr) {
+        console.error("[handleAddDocument] upload failed", uploadErr);
+        setDocError(`Upload failed: ${uploadErr.message}`);
+        return;
+      }
+
+      const newMeta: DocumentMeta = {
+        id: docId,
+        label: newDocLabel.trim(),
+        filename: newDocFile.name,
+        path: storagePath,
+        contentType: newDocFile.type,
+        uploadedAt: new Date().toISOString(),
+      };
+      const updatedMeta = [...documentMeta, newMeta];
+
+      const res = await fetch("/api/mvp/write", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resource: "candidate-profile", data: { documentMetadata: updatedMeta } }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        console.error("[handleAddDocument] write failed", body);
+        setDocError(body.error ?? "Failed to save document record.");
+        return;
+      }
+
+      setDocumentMeta(updatedMeta);
+      setNewDocLabel("");
+      setNewDocFile(null);
+      const fileInput = document.getElementById("onboardingDocFileInput") as HTMLInputElement | null;
+      if (fileInput) fileInput.value = "";
+    } catch (err) {
+      console.error("[handleAddDocument] unexpected error", err);
+      setDocError("An unexpected error occurred.");
+    } finally {
+      setIsUploadingDoc(false);
+    }
+  }
+
+  async function handleDeleteDocument(doc: DocumentMeta) {
+    setDocError("");
+    try {
+      const { error: removeErr } = await supabase.storage
+        .from(DOCUMENTS_BUCKET)
+        .remove([doc.path]);
+      if (removeErr) console.error("[handleDeleteDocument] storage remove failed", removeErr);
+
+      const updatedMeta = documentMeta.filter((d) => d.id !== doc.id);
+      const res = await fetch("/api/mvp/write", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resource: "candidate-profile", data: { documentMetadata: updatedMeta } }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        console.error("[handleDeleteDocument] write failed", body);
+        setDocError(body.error ?? "Failed to update document list.");
+        return;
+      }
+      setDocumentMeta(updatedMeta);
+    } catch (err) {
+      console.error("[handleDeleteDocument] unexpected error", err);
+      setDocError("An unexpected error occurred.");
+    }
+  }
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -179,6 +284,83 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
                   Edit Profile
                 </button>
               )}
+            </div>
+          </div>
+
+          {/* Upload Your Story */}
+          <div className="mt-6 rounded-lg border-2 border-dashed border-red-200 bg-red-50 p-6">
+            <h2 className="text-xl font-bold text-zinc-950">Upload your resume to pre-fill your profile</h2>
+            <p className="mt-1 text-sm leading-6 text-zinc-600">Drop one document and see jobs you qualify for instantly. The more you upload, the more accurate your matches become.</p>
+
+            {documentMeta.length > 0 ? (
+              <ul className="mt-4 divide-y divide-red-100 rounded-md border border-red-200 bg-white">
+                {documentMeta.map((doc) => (
+                  <li key={doc.id} className="flex items-center justify-between gap-4 px-4 py-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-zinc-900">{doc.label}</p>
+                      <p className="truncate text-xs text-zinc-500">{doc.filename}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteDocument(doc)}
+                      className="shrink-0 text-xs font-semibold text-zinc-500 transition hover:text-red-700"
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            <div className="mt-4 space-y-3">
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="min-w-0 flex-1 space-y-1">
+                  <label htmlFor="onboardingDocLabel" className="label">Document label</label>
+                  <input
+                    id="onboardingDocLabel"
+                    type="text"
+                    placeholder="e.g. Resume, NCOER 2023, AWS Certification"
+                    value={newDocLabel}
+                    onChange={(e) => setNewDocLabel(e.target.value)}
+                    disabled={isUploadingDoc}
+                    className="field"
+                  />
+                </div>
+                <div className="min-w-0 flex-1 space-y-1">
+                  <label htmlFor="onboardingDocFileInput" className="label">File (PDF, DOC, DOCX, JPG, PNG — 5 MB max)</label>
+                  <input
+                    id="onboardingDocFileInput"
+                    type="file"
+                    accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] ?? null;
+                      setNewDocFile(file);
+                      if (file && !newDocLabel.trim()) {
+                        setNewDocLabel(file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " "));
+                      }
+                    }}
+                    disabled={isUploadingDoc}
+                    className="block w-full text-sm text-zinc-700 file:mr-3 file:rounded-md file:border file:border-zinc-300 file:bg-white file:px-3 file:py-2 file:text-sm file:font-semibold file:text-zinc-900 hover:file:bg-zinc-50"
+                  />
+                </div>
+              </div>
+              {docError ? <p className="text-sm text-red-700">{docError}</p> : null}
+              <button
+                type="button"
+                onClick={handleAddDocument}
+                disabled={isUploadingDoc || !newDocLabel.trim() || !newDocFile}
+                className="inline-flex items-center gap-2 rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950 disabled:opacity-50"
+              >
+                {isUploadingDoc ? (
+                  <>
+                    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Uploading…
+                  </>
+                ) : "Upload Document"}
+              </button>
             </div>
           </div>
 
