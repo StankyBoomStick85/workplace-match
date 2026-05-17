@@ -26,6 +26,8 @@ type DocumentMeta = {
 type ApplicantProfileState = {
   fullName: string;
   zipCode: string;
+  city: string;
+  state: string;
   searchRadius: string;
   desiredPayMin: string;
   payType: string;
@@ -35,6 +37,7 @@ type ApplicantProfileState = {
   capabilitySummary: string;
   topSkills: string;
   experienceLevel: string;
+  educationLevel: string;
   industriesOfInterest: string;
   availableStartDate: string;
   willingToRelocate: string;
@@ -44,6 +47,8 @@ type ApplicantProfileState = {
 const emptyProfile: ApplicantProfileState = {
   fullName: "",
   zipCode: "",
+  city: "",
+  state: "",
   searchRadius: "",
   desiredPayMin: "",
   payType: "hourly",
@@ -53,6 +58,7 @@ const emptyProfile: ApplicantProfileState = {
   capabilitySummary: "",
   topSkills: "",
   experienceLevel: "",
+  educationLevel: "",
   industriesOfInterest: "",
   availableStartDate: "",
   willingToRelocate: "",
@@ -194,9 +200,12 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
           const merged: Partial<ApplicantProfileState> = {};
           if (ex.fullName) merged.fullName = ex.fullName;
           if (ex.zipCode) merged.zipCode = ex.zipCode;
+          if (ex.city) merged.city = ex.city;
+          if (ex.state) merged.state = ex.state;
           if (ex.capabilitySummary) merged.capabilitySummary = ex.capabilitySummary;
           if (ex.topSkills) merged.topSkills = ex.topSkills;
           if (ex.experienceLevel) merged.experienceLevel = ex.experienceLevel;
+          if (ex.educationLevel) merged.educationLevel = ex.educationLevel;
           if (ex.industriesOfInterest) merged.industriesOfInterest = ex.industriesOfInterest;
           if (ex.phoneNumber) merged.phone = ex.phoneNumber as string;
 
@@ -616,6 +625,8 @@ function mapProfileData(data: any): ApplicantProfileState {
   return {
     fullName: data?.display_name ?? "",
     zipCode: data?.zip_code ?? "",
+    city: data?.city ?? "",
+    state: data?.state ?? "",
     searchRadius: data?.search_radius ? String(data.search_radius) : "",
     desiredPayMin: data?.desired_pay_min ? String(data.desired_pay_min) : "",
     payType: data?.pay_type || "hourly",
@@ -625,6 +636,7 @@ function mapProfileData(data: any): ApplicantProfileState {
     capabilitySummary: data?.summary ?? "",
     topSkills: Array.isArray(data?.capability_tags) ? data.capability_tags.join(", ") : "",
     experienceLevel: data?.experience_level ?? "",
+    educationLevel: data?.education_level ?? "",
     industriesOfInterest: extras.industriesOfInterest,
     availableStartDate: extras.availableStartDate,
     willingToRelocate: extras.willingToRelocate,

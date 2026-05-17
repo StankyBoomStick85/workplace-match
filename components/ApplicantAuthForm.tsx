@@ -65,12 +65,10 @@ export function ApplicantAuthForm({ mode }: ApplicantAuthFormProps) {
         email,
         role: "candidate"
       });
-      if (!data.session) {
-        const { error: sessionError } = await supabase.auth.signInWithPassword({ email, password });
-        if (sessionError) {
-          setError("Account created. Log in to continue.");
-          return;
-        }
+      const { error: sessionError } = await supabase.auth.signInWithPassword({ email, password });
+      if (sessionError) {
+        setError("Account created. Log in to continue.");
+        return;
       }
       logAdminEvent({
         type: "signup_created",

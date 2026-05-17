@@ -17,10 +17,13 @@ Return exactly this JSON shape:
 {
   "fullName": string or null,
   "zipCode": string or null (US ZIP code only — 5 digits),
+  "city": string or null (city name from address or location if present),
+  "state": string or null (2-letter US state abbreviation if present, e.g. "MO", "TX"),
   "phoneNumber": string or null (US phone number if present),
   "capabilitySummary": string or null (write a clean 2-4 sentence professional summary based on the document — do not quote verbatim),
   "topSkills": string or null (comma-separated list of specific skills found in the document),
   "experienceLevel": "entry" or "skilled" or "lead" or "lower management" or "management" or null,
+  "educationLevel": "High school or GED" or "Some college" or "Associate degree" or "Bachelor's degree" or "Trade or technical program" or "Other" or null,
   "industriesOfInterest": string or null (primary industry or professional field)
 }
 
@@ -111,7 +114,7 @@ export async function POST(request: Request) {
       }
       const message = await anthropic.messages.create({
         model: "claude-sonnet-4-6",
-        max_tokens: 600,
+        max_tokens: 800,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: `${USER_PROMPT}\n\n---\n\n${docText}` }],
       });
@@ -119,7 +122,7 @@ export async function POST(request: Request) {
     } else if (isPdf) {
       const message = await anthropic.beta.messages.create({
         model: "claude-sonnet-4-6",
-        max_tokens: 600,
+        max_tokens: 800,
         betas: ["pdfs-2024-09-25"],
         system: SYSTEM_PROMPT,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -133,7 +136,7 @@ export async function POST(request: Request) {
       const mediaType = contentType as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
       const message = await anthropic.messages.create({
         model: "claude-sonnet-4-6",
-        max_tokens: 600,
+        max_tokens: 800,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: [
           { type: "image", source: { type: "base64", media_type: mediaType, data: b64 } },

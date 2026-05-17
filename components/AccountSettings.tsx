@@ -247,7 +247,7 @@ export function AccountSettings() {
   return (
     <>
       {isEditing ? (
-        <div className="fixed top-0 left-0 z-20 w-full flex items-center justify-end gap-2 border-b border-gray-200 bg-white/95 px-6 py-3 shadow-sm backdrop-blur-sm">
+        <div className="fixed top-0 left-0 z-[1001] w-full flex items-center justify-end gap-2 border-b border-gray-200 bg-white/95 px-6 py-3 shadow-sm backdrop-blur-sm">
           <button
             type="button"
             onClick={() => { setIsEditing(false); setMessage(""); setError(""); }}
