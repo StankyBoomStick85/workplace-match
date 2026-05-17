@@ -471,7 +471,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
   return (
     <>
       {isEditing ? (
-        <div className="fixed top-0 left-0 z-[1001] w-full flex items-center justify-end gap-2 border-b border-gray-200 bg-white/95 px-6 py-4 shadow-sm backdrop-blur-sm">
+        <div className="fixed top-0 left-0 z-[1001] w-full flex items-center justify-end gap-2 border-b border-gray-200 bg-white/95 px-6 py-5 shadow-sm backdrop-blur-sm">
           <button
             type="button"
             onClick={() => { setIsEditing(false); setSaveError(""); }}
@@ -585,7 +585,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
 
             <div className="space-y-2">
               <label htmlFor="experienceLevel" className="label">Experience level</label>
-              <select id="experienceLevel" name="experienceLevel" required defaultValue={profile?.experienceLevel ?? ""} className="field">
+              <select id="experienceLevel" name="experienceLevel" defaultValue={profile?.experienceLevel ?? ""} className="field">
                 <option value="">Select level</option>
                 <option>Entry level</option>
                 <option>Some experience</option>
