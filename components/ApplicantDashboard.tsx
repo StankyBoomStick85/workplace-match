@@ -327,8 +327,8 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
               <p className="mt-2 text-3xl font-bold text-zinc-950">{profile.fullName || "Applicant"}</p>
             </div>
             <div className="flex flex-wrap gap-3">
-              <Link href="/jobs" className="rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950">
-                See Jobs
+              <Link href="/applicant/job-map" className="rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950">
+                Job Map
               </Link>
               {isEditing ? (
                 <button key="save" type="submit" className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-gray-50">
@@ -554,6 +554,12 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
             </>
           )}
         </form>
+
+        {matchedJobs.length === 0 && !isEditing ? (
+          <p className="mt-6 text-sm text-zinc-600">
+            Nothing here yet. Start exploring the Job Map and click interest on roles that fit.
+          </p>
+        ) : null}
 
         {matchedJobs.length > 0 && !isEditing ? (
           <div className="mt-6 space-y-4">
