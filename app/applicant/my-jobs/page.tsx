@@ -1,5 +1,5 @@
-import { ApplicantDashboard } from "@/components/ApplicantDashboard";
+import { ApplicantMyJobs } from "@/components/ApplicantMyJobs";
 
-export default function ApplicantDashboardPage() {
-  return <ApplicantDashboard />;
+export default function ApplicantMyJobsPage() {
+  return <ApplicantMyJobs />;
 }
