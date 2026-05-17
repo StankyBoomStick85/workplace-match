@@ -605,8 +605,8 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
         )}
       </div>
 
-      {/* Upload Your Story */}
-      <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
+      {/* Upload Your Story — edit mode only */}
+      {isEditing ? <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
         <h2 className="text-2xl font-bold text-zinc-950">Upload Your Story</h2>
         <p className="mt-2 text-sm leading-6 text-zinc-600">
           Add resumes, transcripts, certifications, performance reviews, NCOERs, OERs, or awards. The AI Capability Engine reads these as primary source material to generate a more accurate profile. Accepted formats: PDF, JPG, PNG, DOC, DOCX (5 MB max each).
@@ -657,7 +657,13 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
                 id="docFileInput"
                 type="file"
                 accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
-                onChange={(e) => setNewDocFile(e.target.files?.[0] ?? null)}
+                onChange={(e) => {
+                const file = e.target.files?.[0] ?? null;
+                setNewDocFile(file);
+                if (file && !newDocLabel.trim()) {
+                  setNewDocLabel(file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " "));
+                }
+              }}
                 disabled={isUploadingDoc}
                 className="block w-full text-sm text-zinc-700 file:mr-3 file:rounded-md file:border file:border-zinc-300 file:bg-white file:px-3 file:py-2 file:text-sm file:font-semibold file:text-zinc-900 hover:file:bg-zinc-50"
               />
@@ -681,7 +687,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
             </button>
           </div>
         </div>
-      </div>
+      </div> : null}
 
       <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
         <p className="text-sm font-semibold uppercase tracking-[0.16em] text-red-800">AI-Powered</p>
