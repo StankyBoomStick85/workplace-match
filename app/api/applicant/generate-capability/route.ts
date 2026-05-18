@@ -108,7 +108,16 @@ List each role this applicant is realistically on track for as they build civili
 List only roles that genuinely fit. No minimum or maximum number.
 
 ## EMPLOYER_SUMMARY
-A plain-language, employer-facing paragraph (200–300 words) that a hiring manager can read in 60 seconds to understand exactly what level of operator they are looking at and what roles align. Write it to close the knowledge gap between non-traditional backgrounds and corporate expectations. Do not use jargon the applicant used — translate it into business impact language the employer already knows.
+A plain-language, employer-facing paragraph (200-300 words) that a hiring manager can read in 60 seconds. Use they/them/their pronouns throughout. Do not include the candidate's name.
+
+Do not use generic experience tier labels such as "entry level," "junior," "mid-level," or "senior." Instead, use specific role titles that reflect actual capability (e.g. "project coordinator," "field operations lead"). Exception: if the candidate's background genuinely aligns to management or executive level, name that directly as it is directional and useful to the employer.
+
+Structure the summary in three parts:
+1. What this person can do right now and what specific role they are best suited for today - use a real job title, not a tier label
+2. What small gaps exist and what it would take to close them (a certification, specific experience, etc.)
+3. Where this person can realistically grow within your organization or industry given their trajectory
+
+Write to close the knowledge gap between non-traditional backgrounds and corporate expectations. Translate experience into business impact language the employer already knows. Do not use jargon the applicant used. Never frame the summary in a way that diminishes what the candidate has built regardless of their experience level.
 
 Respond with only the five sections above. No preamble, no closing remarks.`;
 
