@@ -11,6 +11,7 @@ type AlternatePath = {
   roleTitle: string;
   explanation: string;
   entryPoint: string;
+  gap: string;
 };
 
 function parseAlternatePaths(text: string): AlternatePath[] {
@@ -18,9 +19,15 @@ function parseAlternatePaths(text: string): AlternatePath[] {
   return blocks.flatMap((block): AlternatePath[] => {
     const roleTitle = block.split("\n")[0]?.trim() ?? "";
     const whyMatch = block.match(/## WHY\n([\s\S]+?)(?=\n## ENTRY_POINT|$)/);
-    const entryMatch = block.match(/## ENTRY_POINT\n(.+?)(?:\n|$)/);
+    const entryMatch = block.match(/## ENTRY_POINT\n(.+?)(?:\n## GAP|\n|$)/);
+    const gapMatch = block.match(/## GAP\n([\s\S]+?)(?:\n## |$)/);
     if (!roleTitle || !whyMatch || !entryMatch) return [];
-    return [{ roleTitle, explanation: whyMatch[1].trim(), entryPoint: entryMatch[1].trim() }];
+    return [{
+      roleTitle,
+      explanation: whyMatch[1].trim(),
+      entryPoint: entryMatch[1].trim(),
+      gap: gapMatch ? gapMatch[1].trim() : "",
+    }];
   });
 }
 
@@ -81,27 +88,39 @@ export async function POST() {
     ? profile.capability_tags.join(", ")
     : "Not specified";
 
-  const prompt = `An applicant has this background:
+  const systemPrompt = `You are a career intelligence engine. Your job is NOT to find roles similar to what this person has already done. Your job is to read the entire profile — every field, every detail, every implied skill — and ask: what kind of person is capable of all of this?
+
+Look beyond job titles and education. Look at what this person has actually managed, survived, juggled, and delivered. A person who raised children alone, managed a household budget, handled medical needs, maintained high credit under financial pressure, and kept everything running — that is an operations and logistics brain. Name what that is. Surface it.
+
+For each alternate path, ask:
+- What type of person succeeds in this role?
+- Does this candidate's actual demonstrated behavior match that profile — regardless of their job title history?
+- Could they walk in with 80% of what is needed and close the gap in 90 days of OJT?
+
+Range the results: include roles they could start next week AND roles that need 60–90 days of preparation. Do not cluster all results in one industry. Think broadly — operations, logistics, sales, project coordination, public sector, trades management, healthcare administration, finance, education, tech-adjacent.
+
+Do not use the words entry level, junior, senior, or any tier label. Do not pigeonhole based on what they have done. Surface what they are capable of becoming.`;
+
+  const prompt = `Here is the candidate's complete profile:
 
 - Desired role/industry: ${desiredRole}
 - Experience level: ${profile.experience_level ?? "Not specified"}
 - Skills: ${skills}
 - Background summary: ${profile.summary ?? "Not provided"}
 
-Identify 3 to 5 roles OUTSIDE this person's direct education or experience path where their transferable skills would make them genuinely competitive. Do not suggest variations of their current path.
-
-For each role, respond using exactly this format:
+Return exactly 5 alternate role paths using this exact format for each:
 
 ## ROLE
-[Job Title]
+[Specific job title — not generic]
 
 ## WHY
-[2-3 sentences explaining which specific skills transfer and why this person would be competitive, not just passable.]
+[2-3 sentences grounded in specific things from their profile, not generic traits. Explain why they would succeed, not just qualify.]
 
 ## ENTRY_POINT
-[The specific first job title to apply for to break into this field — not a description, just the title.]
+[The exact first job title to apply for to get a foot in the door]
 
-List only roles that represent a genuine lateral move based on real skill overlap. No filler roles.`;
+## GAP
+[One specific thing — a cert, 90 days OJT, one course — that gets them fully competitive]`;
 
   const anthropic = new Anthropic({ apiKey });
 
@@ -110,7 +129,7 @@ List only roles that represent a genuine lateral move based on real skill overla
     const message = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 2048,
-      system: "You are a veteran career counselor and hiring specialist who translates non-traditional, military, and blue-collar backgrounds into civilian corporate language that hiring managers can immediately understand and act on. You are precise, specific, and never use filler language.",
+      system: systemPrompt,
       messages: [{ role: "user", content: prompt }],
     });
     text = message.content.find((b) => b.type === "text")?.text ?? "";

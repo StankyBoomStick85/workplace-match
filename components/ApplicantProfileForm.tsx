@@ -20,6 +20,7 @@ type AlternatePath = {
   roleTitle: string;
   explanation: string;
   entryPoint: string;
+  gap: string;
 };
 
 type ApplicantProfile = {
@@ -866,9 +867,14 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
                             <div key={i} className="rounded-md border border-gray-200 bg-gray-50 p-4">
                               <p className="font-semibold text-zinc-900">{path.roleTitle}</p>
                               <p className="mt-2 text-sm leading-6 text-zinc-700">{path.explanation}</p>
-                              <p className="mt-2 text-xs text-zinc-500">
+                              <p className="mt-3 text-xs text-zinc-500">
                                 <span className="font-semibold">Entry point:</span> {path.entryPoint}
                               </p>
+                              {path.gap ? (
+                                <p className="mt-1 text-xs text-zinc-500">
+                                  <span className="font-semibold">Gap to close:</span> {path.gap}
+                                </p>
+                              ) : null}
                             </div>
                           ))}
                         </div>
