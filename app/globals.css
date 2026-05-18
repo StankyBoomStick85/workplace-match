@@ -89,3 +89,15 @@ html.dark .field {
 html.dark .shadow-soft {
   box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.4);
 }
+html.dark .label {
+  color: #ffffff !important;
+  font-weight: 700 !important;
+}
+html.dark dd {
+  color: #ffffff !important;
+  font-weight: 400 !important;
+}
+html.dark .bg-red-50 *,
+html.dark .bg-blue-50 * {
+  color: #111827 !important;
+}
