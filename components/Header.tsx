@@ -75,7 +75,7 @@ export function Header() {
           aria-label="Workplace Match home"
         >
           <Image
-            src="/wp-icon.png"
+            src="/wp-icon.svg"
             alt=""
             width={44}
             height={42}
