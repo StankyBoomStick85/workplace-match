@@ -68,10 +68,10 @@ export function Header() {
 
   return (
     <header className="sticky top-0 z-[1000] border-b border-gray-200 bg-white">
-      <div className="mx-auto flex max-w-6xl items-center justify-between gap-5 px-4 py-3.5">
+      <div className="mx-auto flex max-w-6xl items-center justify-between gap-5 px-4 py-2 sm:py-3.5">
         <Link
           href="/"
-          className="flex shrink-0 items-center gap-3"
+          className="flex shrink-0 items-center gap-2 sm:gap-3"
           aria-label="Workplace Match home"
         >
           <Image
@@ -80,14 +80,14 @@ export function Header() {
             width={44}
             height={42}
             priority
-            className="h-10 w-auto object-contain"
+            className="h-7 w-auto object-contain sm:h-10"
           />
-          <span className="whitespace-nowrap text-2xl tracking-normal">
+          <span className="whitespace-nowrap text-base tracking-normal sm:text-2xl">
             <span className="font-bold text-red-700">Workplace</span>{" "}
             <span className="font-bold text-zinc-900">Match</span>
           </span>
         </Link>
-        <nav className="flex flex-wrap items-center justify-end gap-6 text-base">
+        <nav className="flex flex-wrap items-center justify-end gap-3 text-sm sm:gap-6 sm:text-base">
           {navItems.map((item) => (
             <NavLink
               key={item.href}
@@ -104,7 +104,7 @@ export function Header() {
               <button
                 type="button"
                 onClick={signOut}
-                className="border-b-2 border-transparent px-1.5 py-2 font-bold text-zinc-950 transition-colors duration-150 hover:text-red-700"
+                className="border-b-2 border-transparent px-1 py-1 font-bold text-zinc-950 transition-colors duration-150 hover:text-red-700 sm:px-1.5 sm:py-2"
               >
                 Sign out
               </button>
@@ -166,7 +166,7 @@ function NavLink({
   return (
     <Link
       href={href}
-      className={`inline-flex items-center gap-2 border-b-2 px-1.5 py-2 font-bold transition-colors duration-150 hover:text-red-700 ${
+      className={`inline-flex items-center gap-2 border-b-2 px-1 py-1 font-bold transition-colors duration-150 hover:text-red-700 sm:px-1.5 sm:py-2 ${
         isActive ? "border-red-700 text-red-700" : "border-transparent text-zinc-950"
       }`}
     >

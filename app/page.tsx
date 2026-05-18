@@ -23,19 +23,19 @@ export default function LandingPage() {
   return (
     <>
       <section className="border-b border-gray-200 bg-white">
-        <div className="mx-auto grid min-h-[560px] max-w-6xl items-center gap-10 px-4 py-14 lg:grid-cols-[1.05fr_0.95fr]">
+        <div className="mx-auto grid max-w-6xl items-center gap-6 px-4 py-8 md:min-h-[560px] md:gap-10 md:py-14 lg:grid-cols-[1.05fr_0.95fr]">
           <div>
             <p className="mb-4 text-sm font-semibold uppercase tracking-[0.18em] text-red-800">
               Capability-based matching
             </p>
-            <h1 className="max-w-3xl text-5xl font-bold leading-tight tracking-normal text-zinc-950 md:text-6xl">
+            <h1 className="max-w-3xl text-3xl font-bold leading-tight tracking-normal text-zinc-950 sm:text-4xl md:text-5xl lg:text-6xl">
               Show capability, not narratives.
             </h1>
             <p className="mt-5 max-w-2xl text-lg leading-8 text-zinc-700">
               Workplace Match connects applicants and employers using practical
               signals: capability, location, pay, and fit.
             </p>
-            <div className="mt-8 flex flex-wrap gap-3">
+            <div className="mt-6 flex flex-wrap gap-3 md:mt-8">
               <Link
                 href="/applicant/signup"
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
@@ -51,7 +51,7 @@ export default function LandingPage() {
             </div>
           </div>
 
-          <div className="rounded-lg border border-gray-200 bg-gray-50 p-5 shadow-soft">
+          <div className="hidden rounded-lg border border-gray-200 bg-gray-50 p-5 shadow-soft md:block">
             <div className="mb-5 flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-md bg-white text-red-800">
                 <BriefcaseBusiness size={22} />
