@@ -612,6 +612,8 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
                 <option>Some college</option>
                 <option>Associate degree</option>
                 <option>Bachelor's degree</option>
+                <option>Master's degree</option>
+                <option>Doctorate / PhD</option>
                 <option>Trade or technical program</option>
                 <option>Other</option>
               </select>
