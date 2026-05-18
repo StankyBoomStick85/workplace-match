@@ -38,3 +38,54 @@ textarea {
 .btn-secondary {
   @apply inline-flex items-center justify-center rounded-md border border-line bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:border-moss;
 }
+
+/* ── Dark mode surface overrides ─────────────────────── */
+html.dark body {
+  background-color: #111827;
+  color: #f3f4f6;
+}
+html.dark header {
+  background-color: #1f2937;
+  border-color: #374151;
+}
+html.dark .bg-white {
+  background-color: #1f2937 !important;
+}
+html.dark .bg-gray-50 {
+  background-color: #111827 !important;
+}
+html.dark .bg-gray-100 {
+  background-color: #1f2937 !important;
+}
+html.dark .border-gray-200 {
+  border-color: #374151 !important;
+}
+html.dark .border-gray-300 {
+  border-color: #4b5563 !important;
+}
+html.dark .text-zinc-950,
+html.dark .text-zinc-900 {
+  color: #f9fafb !important;
+}
+html.dark .text-zinc-700,
+html.dark .text-zinc-600 {
+  color: #d1d5db !important;
+}
+html.dark .text-zinc-500 {
+  color: #9ca3af !important;
+}
+html.dark input,
+html.dark select,
+html.dark textarea {
+  background-color: #374151;
+  color: #f3f4f6;
+  border-color: #4b5563;
+}
+html.dark .field {
+  background-color: #374151;
+  color: #f3f4f6;
+  border-color: #4b5563;
+}
+html.dark .shadow-soft {
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.4);
+}

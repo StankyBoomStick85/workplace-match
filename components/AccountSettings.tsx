@@ -43,10 +43,10 @@ const initialSettings: SettingsState = {
   confirmPassword: ""
 };
 
-export function AccountSettings() {
+export function AccountSettings({ role: roleProp, inModal = false }: { role?: Role; inModal?: boolean } = {}) {
   const searchParams = useSearchParams();
-  const roleParam = searchParams.get("role");
-  const [role, setRole] = useState<Role>("candidate");
+  const roleParam = roleProp ?? searchParams.get("role");
+  const [role, setRole] = useState<Role>(roleProp ?? "candidate");
   const [userId, setUserId] = useState("");
   const originalEmailRef = useRef("");
   const [settings, setSettings] = useState<SettingsState>(initialSettings);
@@ -246,7 +246,7 @@ export function AccountSettings() {
 
   return (
     <>
-      {isEditing ? (
+      {isEditing && !inModal ? (
         <div className="fixed top-0 left-0 z-[1001] w-full flex items-center justify-end gap-2 border-b border-gray-200 bg-white/95 px-6 py-5 shadow-sm backdrop-blur-sm">
           <button
             type="button"
@@ -264,7 +264,7 @@ export function AccountSettings() {
           </button>
         </div>
       ) : null}
-      <section className={`mx-auto max-w-5xl px-4 py-12${isEditing ? " pt-20" : ""}`}>
+      <section className={`${inModal ? "px-6 py-4" : `mx-auto max-w-5xl px-4 py-12${isEditing ? " pt-20" : ""}`}`}>
         <form onSubmit={(e) => e.preventDefault()} className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
@@ -401,6 +401,25 @@ export function AccountSettings() {
                   </Field>
                 </div>
               ) : null}
+            </div>
+          ) : null}
+
+          {inModal && isEditing ? (
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => { setIsEditing(false); setMessage(""); setError(""); }}
+                className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSave}
+                className="rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
+              >
+                Save
+              </button>
             </div>
           ) : null}
 

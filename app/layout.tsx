@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Header } from "@/components/Header";
+import { ThemeProvider } from "@/components/ThemeProvider";
 import "leaflet/dist/leaflet.css";
 import "./globals.css";
 
@@ -21,6 +22,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="min-h-screen font-sans antialiased">
+        <ThemeProvider />
         <Header />
         <main>{children}</main>
       </body>

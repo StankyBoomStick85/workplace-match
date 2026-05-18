@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { NotificationBell } from "./NotificationBell";
+import { SettingsModal } from "./SettingsModal";
 
 type Role = "candidate" | "employer";
 
@@ -99,6 +100,7 @@ export function Header() {
           {activeRole ? (
             <>
               {activeEmail ? <NotificationBell recipientEmail={activeEmail} /> : null}
+              {activeRole === "candidate" ? <SettingsModal /> : null}
               <button
                 type="button"
                 onClick={signOut}
@@ -127,8 +129,7 @@ function getRoleAwareNav(role: Role, label: string, avatarUrl = ""): NavItem[] {
   return [
     { href: "/applicant/profile", label: label || "Profile", avatarUrl },
     { href: "/applicant/my-jobs", label: "My Jobs" },
-    { href: "/applicant/job-map", label: "Job Map" },
-    { href: "/account/settings?role=candidate", label: "Account" }
+    { href: "/applicant/job-map", label: "Job Map" }
   ];
 }
 
