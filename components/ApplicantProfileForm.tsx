@@ -16,6 +16,12 @@ type DocumentMeta = {
   uploadedAt: string;
 };
 
+type AlternatePath = {
+  roleTitle: string;
+  explanation: string;
+  entryPoint: string;
+};
+
 type ApplicantProfile = {
   candidateEmail?: string;
   streetAddress?: string;
@@ -37,6 +43,7 @@ type ApplicantProfile = {
   entryPoint?: string;
   futurePositions?: string;
   employerSummary?: string;
+  summaryPriority?: string;
 };
 
 function splitSkills(value: string) {
@@ -176,6 +183,7 @@ function mapProfileRow(userEmail: string, row: NonNullable<ProfileRow>): Applica
     entryPoint: (row.entry_point as string) ?? "",
     futurePositions: (row.future_positions as string) ?? "",
     employerSummary: (row.employer_summary as string) ?? "",
+    summaryPriority: (row.summary_priority as string) ?? "",
   };
 }
 
@@ -187,6 +195,12 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
   const [pendingPictureFile, setPendingPictureFile] = useState<File | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState("");
+  const [activePathTab, setActivePathTab] = useState<"primary" | "alternate">(
+    (mappedInitial?.summaryPriority as "primary" | "alternate") || "primary"
+  );
+  const [alternatePaths, setAlternatePaths] = useState<AlternatePath[] | null>(null);
+  const [isGeneratingAlternate, setIsGeneratingAlternate] = useState(false);
+  const [alternatePathsError, setAlternatePathsError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -273,6 +287,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
         entryPoint: profile?.entryPoint ?? "",
         futurePositions: profile?.futurePositions ?? "",
         employerSummary: profile?.employerSummary ?? "",
+        summaryPriority: profile?.summaryPriority ?? "",
       };
 
       const response = await fetch("/api/mvp/write", {
@@ -462,6 +477,34 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
     } finally {
       setIsGenerating(false);
     }
+  }
+
+  async function handleShowAlternatePaths() {
+    if (alternatePaths !== null) return;
+    setIsGeneratingAlternate(true);
+    setAlternatePathsError("");
+    try {
+      const res = await fetch("/api/applicant/generate-alternate-paths", { method: "POST" });
+      const result = await res.json();
+      if (!res.ok) {
+        setAlternatePathsError(result.error ?? "Failed to generate alternate paths.");
+        return;
+      }
+      setAlternatePaths(result.alternatePaths);
+    } catch {
+      setAlternatePathsError("An unexpected error occurred.");
+    } finally {
+      setIsGeneratingAlternate(false);
+    }
+  }
+
+  async function handleSetPriority(priority: "primary" | "alternate") {
+    setProfile((prev) => prev ? { ...prev, summaryPriority: priority } : prev);
+    await fetch("/api/mvp/write", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resource: "candidate-profile", data: { summaryPriority: priority } }),
+    });
   }
 
   const hasGeneratedContent = Boolean(
@@ -774,7 +817,66 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
               {profile?.recommendedPosition ? <RecommendedPositionCard content={profile.recommendedPosition} /> : null}
               {profile?.entryPoint ? <EntryPointCard content={profile.entryPoint} /> : null}
               {profile?.futurePositions ? <AccordionSection title="Future Position Recommendations" text={profile.futurePositions} /> : null}
-              {profile?.employerSummary ? <GeneratedSection title="Employer-Facing Summary" content={profile.employerSummary} /> : null}
+              {profile?.employerSummary ? (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="inline-flex rounded-md border border-gray-200 bg-gray-100 p-1">
+                      <button
+                        type="button"
+                        onClick={() => setActivePathTab("primary")}
+                        className={`rounded px-3 py-1.5 text-sm font-semibold transition ${activePathTab === "primary" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"}`}
+                      >
+                        Primary Path
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setActivePathTab("alternate"); handleShowAlternatePaths(); }}
+                        className={`rounded px-3 py-1.5 text-sm font-semibold transition ${activePathTab === "alternate" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"}`}
+                      >
+                        Alternate Paths
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleSetPriority(activePathTab)}
+                      disabled={profile?.summaryPriority === activePathTab}
+                      className={`text-xs font-semibold transition ${profile?.summaryPriority === activePathTab ? "cursor-default text-green-700" : "text-zinc-400 hover:text-zinc-700"}`}
+                    >
+                      {profile?.summaryPriority === activePathTab ? "Employer Priority" : "Set as Priority"}
+                    </button>
+                  </div>
+
+                  {activePathTab === "primary" ? (
+                    <GeneratedSection title="Employer-Facing Summary" content={profile.employerSummary} />
+                  ) : (
+                    <div>
+                      {isGeneratingAlternate ? (
+                        <div className="flex items-center gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3">
+                          <svg className="h-4 w-4 shrink-0 animate-spin text-amber-700" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                          <p className="text-sm font-semibold text-amber-800">Finding alternate career paths…</p>
+                        </div>
+                      ) : alternatePathsError ? (
+                        <p className="text-sm text-red-700">{alternatePathsError}</p>
+                      ) : alternatePaths && alternatePaths.length > 0 ? (
+                        <div className="space-y-4">
+                          {alternatePaths.map((path, i) => (
+                            <div key={i} className="rounded-md border border-gray-200 bg-gray-50 p-4">
+                              <p className="font-semibold text-zinc-900">{path.roleTitle}</p>
+                              <p className="mt-2 text-sm leading-6 text-zinc-700">{path.explanation}</p>
+                              <p className="mt-2 text-xs text-zinc-500">
+                                <span className="font-semibold">Entry point:</span> {path.entryPoint}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+              ) : null}
               {profile?.capabilityProfile ? <AccordionSection title="Capability Profile" text={profile.capabilityProfile} /> : null}
             </div>
           ) : (

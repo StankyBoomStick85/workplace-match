@@ -136,6 +136,9 @@ export async function POST(request: Request) {
       if ("documentMetadata" in data) {
         upsertData.document_metadata = Array.isArray(data.documentMetadata) ? data.documentMetadata : [];
       }
+      if ("summaryPriority" in data) {
+        upsertData.summary_priority = typeof data.summaryPriority === "string" ? data.summaryPriority : null;
+      }
 
       const { error } = await adminClient.from("candidate_profiles").upsert(upsertData, { onConflict: "user_id" });
       if (error) throw error;

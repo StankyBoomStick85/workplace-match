@@ -47,7 +47,7 @@ export async function POST() {
 
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("job_types, experience_level, work_preference, capability_tags, summary, document_metadata")
+    .select("job_types, experience_level, work_preference, capability_tags, summary, document_metadata, summary_priority")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -72,6 +72,32 @@ export async function POST() {
   const skills = Array.isArray(profile.capability_tags) && profile.capability_tags.length > 0
     ? profile.capability_tags.join(", ")
     : "Not specified";
+
+  const employerSummaryInstruction = profile.summary_priority === "alternate"
+    ? `## EMPLOYER_SUMMARY
+A plain-language, employer-facing paragraph (200-300 words) that a hiring manager can read in 60 seconds. Use they/them/their pronouns throughout. Do not include the candidate's name.
+
+Do not use generic experience tier labels such as "entry level," "junior," "mid-level," or "senior." Instead, use specific role titles that reflect actual capability (e.g. "project coordinator," "field operations lead"). Exception: if the candidate's background genuinely aligns to management or executive level, name that directly as it is directional and useful to the employer.
+
+Lead with the transferable skills that make this candidate competitive in roles outside their direct background — name those roles explicitly. Reference their direct experience as supporting context in the second half of the paragraph.
+
+Structure the summary in three parts:
+1. What this person can do right now and what specific role they are best suited for today based on their transferable skills — use a real job title, not a tier label
+2. What small gaps exist and what it would take to close them (a certification, specific experience, etc.)
+3. Where this person can realistically grow within your organization or industry given their trajectory
+
+Write to close the knowledge gap between non-traditional backgrounds and corporate expectations. Translate experience into business impact language the employer already knows. Do not use jargon the applicant used. Never frame the summary in a way that diminishes what the candidate has built regardless of their experience level.`
+    : `## EMPLOYER_SUMMARY
+A plain-language, employer-facing paragraph (200-300 words) that a hiring manager can read in 60 seconds. Use they/them/their pronouns throughout. Do not include the candidate's name.
+
+Do not use generic experience tier labels such as "entry level," "junior," "mid-level," or "senior." Instead, use specific role titles that reflect actual capability (e.g. "project coordinator," "field operations lead"). Exception: if the candidate's background genuinely aligns to management or executive level, name that directly as it is directional and useful to the employer.
+
+Structure the summary in three parts:
+1. What this person can do right now and what specific role they are best suited for today - use a real job title, not a tier label
+2. What small gaps exist and what it would take to close them (a certification, specific experience, etc.)
+3. Where this person can realistically grow within your organization or industry given their trajectory
+
+Write to close the knowledge gap between non-traditional backgrounds and corporate expectations. Translate experience into business impact language the employer already knows. Do not use jargon the applicant used. Never frame the summary in a way that diminishes what the candidate has built regardless of their experience level.`;
 
   const userPrompt = `An applicant has provided the following profile information:
 
@@ -107,17 +133,7 @@ List each role this applicant is realistically on track for as they build civili
 
 List only roles that genuinely fit. No minimum or maximum number.
 
-## EMPLOYER_SUMMARY
-A plain-language, employer-facing paragraph (200-300 words) that a hiring manager can read in 60 seconds. Use they/them/their pronouns throughout. Do not include the candidate's name.
-
-Do not use generic experience tier labels such as "entry level," "junior," "mid-level," or "senior." Instead, use specific role titles that reflect actual capability (e.g. "project coordinator," "field operations lead"). Exception: if the candidate's background genuinely aligns to management or executive level, name that directly as it is directional and useful to the employer.
-
-Structure the summary in three parts:
-1. What this person can do right now and what specific role they are best suited for today - use a real job title, not a tier label
-2. What small gaps exist and what it would take to close them (a certification, specific experience, etc.)
-3. Where this person can realistically grow within your organization or industry given their trajectory
-
-Write to close the knowledge gap between non-traditional backgrounds and corporate expectations. Translate experience into business impact language the employer already knows. Do not use jargon the applicant used. Never frame the summary in a way that diminishes what the candidate has built regardless of their experience level.
+${employerSummaryInstruction}
 
 Respond with only the five sections above. No preamble, no closing remarks.`;
 
