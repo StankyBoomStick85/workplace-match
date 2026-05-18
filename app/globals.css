@@ -41,27 +41,27 @@ textarea {
 
 /* ── Dark mode surface overrides ─────────────────────── */
 html.dark body {
-  background-color: #111827;
+  background-color: #111111;
   color: #f3f4f6;
 }
 html.dark header {
-  background-color: #1f2937;
-  border-color: #374151;
+  background-color: #1c1c1c;
+  border-color: #2e2e2e;
 }
 html.dark .bg-white {
-  background-color: #1f2937 !important;
+  background-color: #1c1c1c !important;
 }
 html.dark .bg-gray-50 {
-  background-color: #111827 !important;
+  background-color: #111111 !important;
 }
 html.dark .bg-gray-100 {
-  background-color: #1f2937 !important;
+  background-color: #1c1c1c !important;
 }
 html.dark .border-gray-200 {
-  border-color: #374151 !important;
+  border-color: #2e2e2e !important;
 }
 html.dark .border-gray-300 {
-  border-color: #4b5563 !important;
+  border-color: #3a3a3a !important;
 }
 html.dark .text-zinc-950,
 html.dark .text-zinc-900 {
@@ -77,14 +77,14 @@ html.dark .text-zinc-500 {
 html.dark input,
 html.dark select,
 html.dark textarea {
-  background-color: #374151;
+  background-color: #2a2a2a;
   color: #f3f4f6;
-  border-color: #4b5563;
+  border-color: #3a3a3a;
 }
 html.dark .field {
-  background-color: #374151;
+  background-color: #2a2a2a;
   color: #f3f4f6;
-  border-color: #4b5563;
+  border-color: #3a3a3a;
 }
 html.dark .shadow-soft {
   box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.4);
