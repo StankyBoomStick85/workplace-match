@@ -97,29 +97,56 @@ export async function POST(request: Request) {
       return NextResponse.json({ cached: 0, fresh: false, region, error: "Adzuna not configured." });
     }
 
-    const url = new URL("https://api.adzuna.com/v1/api/jobs/us/search/1");
-    url.searchParams.set("app_id", appId);
-    url.searchParams.set("app_key", appKey);
-    url.searchParams.set("results_per_page", "50");
-    url.searchParams.set("where", region);
-    url.searchParams.set("distance", String(Math.round(radiusMiles)));
-    url.searchParams.set("what", "");
+    const stateOnly = region.includes(",") ? region.split(",")[1].trim() : region;
 
-    console.log("[refresh-adzuna-cache] calling Adzuna:", url.toString());
+    const url1 = new URL("https://api.adzuna.com/v1/api/jobs/us/search/1");
+    url1.searchParams.set("app_id", appId);
+    url1.searchParams.set("app_key", appKey);
+    url1.searchParams.set("results_per_page", "100");
+    url1.searchParams.set("where", region);
+    url1.searchParams.set("distance", String(Math.round(radiusMiles)));
+    url1.searchParams.set("what", "");
 
-    const response = await fetch(url.toString(), {
-      headers: { "Accept": "application/json" }
-    });
+    const url2 = new URL("https://api.adzuna.com/v1/api/jobs/us/search/1");
+    url2.searchParams.set("app_id", appId);
+    url2.searchParams.set("app_key", appKey);
+    url2.searchParams.set("results_per_page", "100");
+    url2.searchParams.set("where", stateOnly);
+    url2.searchParams.set("distance", "100");
+    url2.searchParams.set("what", "");
 
-    if (!response.ok) {
-      const body = await response.text();
-      console.error(`[refresh-adzuna-cache] Adzuna error ${response.status}:`, body);
-      return NextResponse.json({ cached: 0, fresh: false, region });
+    console.log("[refresh-adzuna-cache] calling Adzuna (local):", url1.toString());
+    console.log("[refresh-adzuna-cache] calling Adzuna (state):", url2.toString());
+
+    const [res1, res2] = await Promise.allSettled([
+      fetch(url1.toString(), { headers: { "Accept": "application/json" } }),
+      fetch(url2.toString(), { headers: { "Accept": "application/json" } })
+    ]);
+
+    const rawJobs: AdzunaResult[] = [];
+    const seenIds = new Set<string>();
+
+    for (const result of [res1, res2]) {
+      if (result.status === "rejected") {
+        console.error("[refresh-adzuna-cache] Adzuna fetch rejected:", result.reason);
+        continue;
+      }
+      const response = result.value;
+      if (!response.ok) {
+        const body = await response.text();
+        console.error(`[refresh-adzuna-cache] Adzuna error ${response.status}:`, body);
+        continue;
+      }
+      const data = await response.json();
+      for (const job of (data.results ?? []) as AdzunaResult[]) {
+        if (!seenIds.has(job.id)) {
+          seenIds.add(job.id);
+          rawJobs.push(job);
+        }
+      }
     }
 
-    const data = await response.json();
-    const rawJobs: AdzunaResult[] = data.results ?? [];
-    console.log("[refresh-adzuna-cache] Adzuna returned:", rawJobs.length, "jobs");
+    console.log("[refresh-adzuna-cache] Adzuna returned:", rawJobs.length, "jobs (deduplicated)");
 
     const jobsWithCoords = rawJobs.filter(
       (job) => isFinite(job.latitude ?? NaN) && isFinite(job.longitude ?? NaN)

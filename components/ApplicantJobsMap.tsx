@@ -280,6 +280,7 @@ export function ApplicantJobsMap() {
   const singleJobMarkerRefs = useRef<Record<string, L.Marker | null>>({});
   const detailPanelRef = useRef<HTMLDivElement | null>(null);
   const suppressClusterReopenRef = useRef(false);
+  const wasDrawingRef = useRef(false);
 
   useEffect(() => {
     loadMapData();
@@ -326,36 +327,6 @@ export function ApplicantJobsMap() {
         setMatchScores(initial);
       }
 
-      // Fire-and-forget: trigger AI scoring, then poll for results
-      if (user.id) {
-        setScoringInProgress(true);
-        fetch("/api/scoring/score-jobs", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ candidateId: user.id })
-        }).catch(() => {});
-
-        pollAttemptsRef.current = 0;
-        const interval = setInterval(async () => {
-          pollAttemptsRef.current += 1;
-          const { data: polledScores } = await supabase
-            .from("match_scores")
-            .select("job_id, score")
-            .eq("candidate_id", user.id)
-            .gt("expires_at", new Date().toISOString());
-          if (polledScores && polledScores.length > 0) {
-            const updated: Record<string, number> = {};
-            (polledScores as Array<{ job_id: string; score: number }>).forEach((r) => { updated[r.job_id] = r.score; });
-            setMatchScores(updated);
-          }
-          if (pollAttemptsRef.current >= 5) {
-            clearInterval(interval);
-            pollIntervalRef.current = null;
-            setScoringInProgress(false);
-          }
-        }, 3000);
-        pollIntervalRef.current = interval;
-      }
       setJobs(getEmployerCreatedJobs(savedJobs as JobListing[]));
       setCompanyProfile(null);
       setApplicantInterests(savedApplicantInterests as ApplicantInterest[]);
@@ -417,10 +388,10 @@ export function ApplicantJobsMap() {
     let cancelled = false;
     const [lat, lng] = applicantAreaCenter;
     const radius = searchMiles ?? 25;
+    const userId = account?.id;
 
     async function loadExternalJobs() {
       try {
-        // Step 1: ensure cache is populated for this region
         await fetch("/api/scoring/refresh-adzuna-cache", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -428,13 +399,14 @@ export function ApplicantJobsMap() {
         });
         if (cancelled) return;
 
-        // Step 2: read from cache
-        const res = await fetch(`/api/jobs/external?lat=${lat}&lng=${lng}`);
+        const res = await fetch(`/api/jobs/external?lat=${lat}&lng=${lng}&radius=${radius}`);
         if (cancelled) return;
         const data: { jobs?: ExternalJob[] } = await res.json();
         if (cancelled) return;
         console.log("[jobs/external] cache returned", data.jobs?.length ?? 0, "jobs");
         setExternalJobs(data.jobs ?? []);
+
+        if (userId) startScorePolling(userId);
       } catch (err) {
         if (cancelled) return;
         console.error("[jobs/external] error", err);
@@ -449,7 +421,55 @@ export function ApplicantJobsMap() {
 
     loadExternalJobs();
     return () => { cancelled = true; };
-  }, [applicantAreaCenter[0], applicantAreaCenter[1], searchMiles]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applicantAreaCenter[0], applicantAreaCenter[1], searchMiles, account?.id]);
+
+  useEffect(() => {
+    const wasDrawing = wasDrawingRef.current;
+    wasDrawingRef.current = isDrawingCustomArea;
+
+    if (!wasDrawing || isDrawingCustomArea || customAreaPoints.length < 3) return;
+
+    let cancelled = false;
+    const userId = account?.id;
+    const centroid = computePolygonCentroid(customAreaPoints);
+    const maxRadius = computeMaxDistanceMiles(centroid, customAreaPoints);
+    const lat = centroid.lat;
+    const lng = centroid.lng;
+    const radius = Math.max(10, Math.ceil(maxRadius));
+
+    async function loadCustomAreaJobs() {
+      try {
+        await fetch("/api/scoring/refresh-adzuna-cache", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lat, lng, radius })
+        });
+        if (cancelled) return;
+
+        const res = await fetch(`/api/jobs/external?lat=${lat}&lng=${lng}&radius=${radius}`);
+        if (cancelled) return;
+        const data: { jobs?: ExternalJob[] } = await res.json();
+        if (cancelled) return;
+
+        const filtered = (data.jobs ?? []).filter((job) =>
+          isPointInPolygon([job.lat, job.lng], customAreaPoints)
+        );
+        console.log("[custom-area] filtered", filtered.length, "of", data.jobs?.length ?? 0, "jobs inside polygon");
+        setExternalJobs(filtered);
+
+        if (userId) startScorePolling(userId);
+      } catch (err) {
+        if (cancelled) return;
+        console.error("[custom-area] error", err);
+      }
+    }
+
+    loadCustomAreaJobs();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDrawingCustomArea, customAreaPoints]);
+
   const hasCustomArea = customAreaPoints.length >= 3;
   const filters: JobFilters = {
     minimumMatchPercent,
@@ -784,6 +804,40 @@ export function ApplicantJobsMap() {
       }, { onConflict: "candidate_id,job_id" });
       setSavedExternalJobIds((prev) => new Set(prev).add(job.id));
     }
+  }
+
+  function startScorePolling(userId: string) {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    setScoringInProgress(true);
+    fetch("/api/scoring/score-jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ candidateId: userId })
+    }).catch(() => {});
+
+    pollAttemptsRef.current = 0;
+    const interval = setInterval(async () => {
+      pollAttemptsRef.current += 1;
+      const { data: polledScores } = await supabase
+        .from("match_scores")
+        .select("job_id, score")
+        .eq("candidate_id", userId)
+        .gt("expires_at", new Date().toISOString());
+      if (polledScores && polledScores.length > 0) {
+        const updated: Record<string, number> = {};
+        (polledScores as Array<{ job_id: string; score: number }>).forEach((r) => { updated[r.job_id] = r.score; });
+        setMatchScores(updated);
+      }
+      if (pollAttemptsRef.current >= 5) {
+        clearInterval(interval);
+        pollIntervalRef.current = null;
+        setScoringInProgress(false);
+      }
+    }, 3000);
+    pollIntervalRef.current = interval;
   }
 
   function getMatchThread(job: JobListing): MatchThreadContext {
@@ -2766,6 +2820,19 @@ function formatJobLocation(job: JobListing) {
     .join(", ");
 
   return [job.locationStreet, cityStateZip].filter(Boolean).join(", ");
+}
+
+function computePolygonCentroid(points: Coordinates[]): { lat: number; lng: number } {
+  const lat = points.reduce((sum, p) => sum + p[0], 0) / points.length;
+  const lng = points.reduce((sum, p) => sum + p[1], 0) / points.length;
+  return { lat, lng };
+}
+
+function computeMaxDistanceMiles(centroid: { lat: number; lng: number }, points: Coordinates[]): number {
+  return points.reduce((max, p) => {
+    const d = getDistanceMiles([centroid.lat, centroid.lng], p);
+    return d > max ? d : max;
+  }, 0);
 }
 
 function getDistanceMiles(origin: Coordinates, destination: Coordinates) {
