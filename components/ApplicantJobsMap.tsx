@@ -830,47 +830,38 @@ export function ApplicantJobsMap() {
       pollIntervalRef.current = null;
     }
     setScoringInProgress(true);
-    console.log("[startScorePolling] firing score-jobs fetch | mode:", mode, "forceRescore:", forceRescore);
-    fetch("/api/scoring/score-jobs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ candidateId: userId, scoringMode: mode, forceRescore })
-    })
-      .then(async (res) => {
-        const data = await res.json();
-        if (data.scores && Object.keys(data.scores).length > 0) {
-          setMatchScores((prev) => ({ ...prev, ...data.scores }));
-        }
-      })
-      .catch(() => {});
 
-    pollAttemptsRef.current = 0;
-    const interval = setInterval(async () => {
-      pollAttemptsRef.current += 1;
-      const { data: polledScores, error: pollError } = await supabase
-        .from("match_scores")
-        .select("job_id, score")
-        .eq("candidate_id", userId)
-        .gt("expires_at", new Date().toISOString());
-      if (pollError) {
-        // Stop immediately on auth/permission errors — retrying won't help
-        clearInterval(interval);
-        pollIntervalRef.current = null;
+    (async () => {
+      let firstCall = true;
+      try {
+        // Loop until the server scores 0 new jobs (all remaining are already cached)
+        while (true) {
+          console.log("[startScorePolling] batch fetch | mode:", mode, "forceRescore:", firstCall && forceRescore);
+          const res = await fetch("/api/scoring/score-jobs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              candidateId: userId,
+              scoringMode: mode,
+              forceRescore: firstCall && forceRescore
+            })
+          });
+          firstCall = false;
+          if (!res.ok) break;
+          const data = await res.json();
+          if (data.scores && Object.keys(data.scores).length > 0) {
+            setMatchScores((prev) => ({ ...prev, ...data.scores }));
+          }
+          console.log("[startScorePolling] batch result | scored:", data.scored, "skipped:", data.skipped, "scores returned:", Object.keys(data.scores ?? {}).length);
+          // Server returned 0 new scores → all jobs are now cached, stop looping
+          if ((data.scored ?? 0) === 0) break;
+        }
+      } catch {
+        // Network or parse error — exit loop
+      } finally {
         setScoringInProgress(false);
-        return;
       }
-      if (polledScores && polledScores.length > 0) {
-        const updated: Record<string, number> = {};
-        (polledScores as Array<{ job_id: string; score: number }>).forEach((r) => { updated[r.job_id] = r.score; });
-        setMatchScores((prev) => ({ ...prev, ...updated }));
-      }
-      if (pollAttemptsRef.current >= 5) {
-        clearInterval(interval);
-        pollIntervalRef.current = null;
-        setScoringInProgress(false);
-      }
-    }, 3000);
-    pollIntervalRef.current = interval;
+    })();
   }
 
   function getMatchThread(job: JobListing): MatchThreadContext {
