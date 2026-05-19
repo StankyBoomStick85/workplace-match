@@ -526,6 +526,9 @@ export function ApplicantJobsMap() {
   const visibleExternalJobs = useMemo(() => {
     console.log("[visibleExternalJobs] applicantAreaCenter:", applicantAreaCenter, "searchMiles:", searchMiles, "externalJobs.length:", externalJobs.length);
     if (hasCustomArea || !searchMiles) return externalJobs;
+    externalJobs.slice(0, 3).forEach((job) => {
+      console.log("[visibleExternalJobs] sample job lat:", job.lat, "lng:", job.lng, "distance:", getDistanceMiles(applicantAreaCenter, [job.lat, job.lng]));
+    });
     return externalJobs.filter(
       (job) => getDistanceMiles(applicantAreaCenter, [job.lat, job.lng]) <= searchMiles
     );
