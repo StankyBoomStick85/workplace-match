@@ -839,7 +839,7 @@ export function ApplicantJobsMap() {
       .then(async (res) => {
         const data = await res.json();
         if (data.scores && Object.keys(data.scores).length > 0) {
-          setMatchScores(data.scores);
+          setMatchScores((prev) => ({ ...prev, ...data.scores }));
         }
       })
       .catch(() => {});
@@ -862,7 +862,7 @@ export function ApplicantJobsMap() {
       if (polledScores && polledScores.length > 0) {
         const updated: Record<string, number> = {};
         (polledScores as Array<{ job_id: string; score: number }>).forEach((r) => { updated[r.job_id] = r.score; });
-        setMatchScores(updated);
+        setMatchScores((prev) => ({ ...prev, ...updated }));
       }
       if (pollAttemptsRef.current >= 5) {
         clearInterval(interval);
