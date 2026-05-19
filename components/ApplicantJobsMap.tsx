@@ -2917,7 +2917,7 @@ function toRadians(value: number) {
 
 function createApplicantAreaIcon(profilePictureUrl = "") {
   const markerHtml = profilePictureUrl
-    ? `<img src="${profilePictureUrl}" alt="" style="display:block;width:28px;height:28px;border-radius:9999px;object-fit:cover;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4);" />`
+    ? `<img src="${profilePictureUrl}" alt="" onerror="this.style.display='none'" style="display:block;width:28px;height:28px;border-radius:9999px;object-fit:cover;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4);" />`
     : '<div style="font-size:22px;line-height:28px;text-align:center;width:28px;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.4));cursor:grab;pointer-events:auto;">&#x1F642;</div>';
 
   return L.divIcon({
