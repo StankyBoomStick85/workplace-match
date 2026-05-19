@@ -99,51 +99,66 @@ export async function POST(request: Request) {
 
     const stateOnly = region.includes(",") ? region.split(",")[1].trim() : region;
 
-    const url1 = new URL("https://api.adzuna.com/v1/api/jobs/us/search/1");
-    url1.searchParams.set("app_id", appId);
-    url1.searchParams.set("app_key", appKey);
-    url1.searchParams.set("results_per_page", "100");
-    url1.searchParams.set("where", region);
-    url1.searchParams.set("distance", String(Math.round(radiusMiles)));
-    url1.searchParams.set("what", "");
+    function buildAdzunaUrl(where: string, distance: number, page: number): string {
+      const url = new URL(`https://api.adzuna.com/v1/api/jobs/us/search/${page}`);
+      url.searchParams.set("app_id", appId);
+      url.searchParams.set("app_key", appKey);
+      url.searchParams.set("results_per_page", "50");
+      url.searchParams.set("where", where);
+      url.searchParams.set("distance", String(Math.round(distance)));
+      url.searchParams.set("what", "");
+      return url.toString();
+    }
 
-    const url2 = new URL("https://api.adzuna.com/v1/api/jobs/us/search/1");
-    url2.searchParams.set("app_id", appId);
-    url2.searchParams.set("app_key", appKey);
-    url2.searchParams.set("results_per_page", "100");
-    url2.searchParams.set("where", stateOnly);
-    url2.searchParams.set("distance", "100");
-    url2.searchParams.set("what", "");
+    // Pages 1-3 of the main region + pages 1-2 of state-wide coverage
+    const queryTargets: Array<{ url: string; label: string }> = [
+      { url: buildAdzunaUrl(region, radiusMiles, 1), label: `${region} p1` },
+      { url: buildAdzunaUrl(region, radiusMiles, 2), label: `${region} p2` },
+      { url: buildAdzunaUrl(region, radiusMiles, 3), label: `${region} p3` },
+      { url: buildAdzunaUrl(stateOnly, 100, 1), label: `${stateOnly} state p1` },
+      { url: buildAdzunaUrl(stateOnly, 100, 2), label: `${stateOnly} state p2` },
+    ];
 
-    console.log("[refresh-adzuna-cache] calling Adzuna (local):", url1.toString());
-    console.log("[refresh-adzuna-cache] calling Adzuna (state):", url2.toString());
+    // Cross-river Illinois coverage for Missouri-region users (St. Louis metro spans both states)
+    if (stateOnly === "Missouri") {
+      queryTargets.push(
+        { url: buildAdzunaUrl("Belleville, Illinois", radiusMiles, 1), label: "Belleville IL" },
+        { url: buildAdzunaUrl("O'Fallon, Illinois", radiusMiles, 1), label: "O'Fallon IL" }
+      );
+    }
 
-    const [res1, res2] = await Promise.allSettled([
-      fetch(url1.toString(), { headers: { "Accept": "application/json" } }),
-      fetch(url2.toString(), { headers: { "Accept": "application/json" } })
-    ]);
+    console.log("[refresh-adzuna-cache] queries:", queryTargets.map((q) => q.label).join(", "));
+
+    const fetchResults = await Promise.allSettled(
+      queryTargets.map(({ url }) => fetch(url, { headers: { "Accept": "application/json" } }))
+    );
 
     const rawJobs: AdzunaResult[] = [];
     const seenIds = new Set<string>();
 
-    for (const result of [res1, res2]) {
+    for (let i = 0; i < fetchResults.length; i++) {
+      const result = fetchResults[i];
+      const { label } = queryTargets[i];
       if (result.status === "rejected") {
-        console.error("[refresh-adzuna-cache] Adzuna fetch rejected:", result.reason);
+        console.error(`[refresh-adzuna-cache] ${label} rejected:`, result.reason);
         continue;
       }
       const response = result.value;
       if (!response.ok) {
         const body = await response.text();
-        console.error(`[refresh-adzuna-cache] Adzuna error ${response.status}:`, body);
+        console.error(`[refresh-adzuna-cache] ${label} error ${response.status}:`, body);
         continue;
       }
       const data = await response.json();
+      let added = 0;
       for (const job of (data.results ?? []) as AdzunaResult[]) {
         if (!seenIds.has(job.id)) {
           seenIds.add(job.id);
           rawJobs.push(job);
+          added++;
         }
       }
+      console.log(`[refresh-adzuna-cache] ${label}: +${added} new jobs`);
     }
 
     console.log("[refresh-adzuna-cache] Adzuna returned:", rawJobs.length, "jobs (deduplicated)");
