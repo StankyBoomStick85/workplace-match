@@ -71,7 +71,16 @@ export async function GET(request: Request) {
     if (resource === "candidate-profiles") {
       const { data, error } = await adminClient.from("candidate_profiles").select("*");
       if (error) throw error;
-      return NextResponse.json({ data: data ?? [] });
+      const aiFields = ["capability_summary", "recommended_position", "entry_point", "future_positions", "employer_summary", "alternate_paths"];
+      const gated = (data ?? []).map((row: Record<string, unknown>) => {
+        if (!row.is_approved) {
+          const stripped = { ...row };
+          for (const f of aiFields) stripped[f] = null;
+          return stripped;
+        }
+        return row;
+      });
+      return NextResponse.json({ data: gated });
     }
 
     if (resource === "employer-profile") {

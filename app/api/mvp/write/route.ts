@@ -139,6 +139,9 @@ export async function POST(request: Request) {
       if ("summaryPriority" in data) {
         upsertData.summary_priority = typeof data.summaryPriority === "string" ? data.summaryPriority : null;
       }
+      if ("isApproved" in data) {
+        upsertData.is_approved = data.isApproved === true;
+      }
 
       const { error } = await adminClient.from("candidate_profiles").upsert(upsertData, { onConflict: "user_id" });
       if (error) throw error;

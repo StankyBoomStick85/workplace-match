@@ -110,9 +110,15 @@ Write to close the knowledge gap between non-traditional backgrounds and corpora
 Based on this information, generate exactly five sections with these exact headings:
 
 ## CAPABILITY_PROFILE
-List each distinct capability as a separate item using this exact format. Do not use numbered lists, bullet points, or any other structure — only the bold-title format below:
+List each distinct capability as a separate item. A verification tag is required on every entry. Use this exact format — no numbered lists, bullets, or other structure:
 
-**[Capability Name]**: [Detailed description of this specific capability grounded in their background — what decisions they made, what systems they managed, what constraints they worked under, what results they produced. Do not use generic traits without specifics.]
+**[Capability Name]** [VERIFIED]: [Description]
+or
+**[Capability Name]** [USER_PROVIDED]: [Description]
+
+Tagging rules:
+- Tag [VERIFIED] only when the specific claim is directly supported by an official uploaded document: a diploma, professional certification, DD214, military service record, or professional license. A resume is NOT an official document and does NOT qualify for [VERIFIED].
+- Tag [USER_PROVIDED] for everything else — skills from a resume, information entered on the profile form, or any self-reported detail.
 
 List between 4 and 7 capabilities.
 
