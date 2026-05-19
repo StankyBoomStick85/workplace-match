@@ -1346,7 +1346,10 @@ export function ApplicantJobsMap() {
           );
         })}
 
-        {visibleExternalJobs.map((job) => {
+        {visibleExternalJobs.filter((job) => {
+          const score = matchScores[job.id];
+          return score === undefined || score >= 50;
+        }).map((job) => {
           const extScore = matchScores[job.id];
           const isSaved = savedExternalJobIds.has(job.id);
           return (
