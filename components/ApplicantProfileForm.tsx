@@ -575,11 +575,15 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ correctionMessage }),
       });
-      const result = await res.json();
+      const rawText = await res.text();
+      console.log("[handleRegenerate] status:", res.status, "body:", rawText);
       if (!res.ok) {
-        setRegenerateError(result.error ?? "Regeneration failed.");
+        let message = "Regeneration failed.";
+        try { message = JSON.parse(rawText)?.error ?? message; } catch { /* non-JSON body */ }
+        setRegenerateError(message);
         return;
       }
+      const result = JSON.parse(rawText);
       setProfile((prev) => prev ? {
         ...prev,
         capabilityProfile: result.capabilitySummary ?? "",
@@ -592,7 +596,8 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
       setIsApproved(false);
       setIsCorrectionModalOpen(false);
       setCorrectionMessage("");
-    } catch {
+    } catch (err) {
+      console.error("[handleRegenerate] threw:", err);
       setRegenerateError("An unexpected error occurred.");
     } finally {
       setIsRegenerating(false);
