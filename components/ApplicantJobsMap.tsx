@@ -17,6 +17,7 @@ import {
   type MatchThreadContext
 } from "../lib/matchMessages";
 import { logAdminEvent } from "../lib/adminEvents";
+import { logError } from "../lib/logError";
 import {
   addInterest as addSupabaseInterest,
   addMutualMatch as addSupabaseMutualMatch,
@@ -154,6 +155,20 @@ type JobGroup = {
   jobs: JobListing[];
 };
 
+type ExternalJob = {
+  id: string;
+  title: string;
+  company: string;
+  location: string;
+  lat: number;
+  lng: number;
+  salary_min: number | null;
+  salary_max: number | null;
+  job_type: string | null;
+  url: string;
+  source: "adzuna";
+};
+
 const applicantAccountKey = "workplace_match_candidate";
 const applicantAccountsKey = "workplace_match_candidate_accounts";
 const employerAccountKey = "workplace_match_employer";
@@ -253,6 +268,7 @@ export function ApplicantJobsMap() {
   const [hoveredResultJobId, setHoveredResultJobId] = useState("");
   const [selectedResultJobId, setSelectedResultJobId] = useState("");
   const [geocodedZipCenter, setGeocodedZipCenter] = useState<Coordinates | null>(null);
+  const [externalJobs, setExternalJobs] = useState<ExternalJob[]>([]);
   const clusterMarkerRefs = useRef<Record<string, L.Marker | null>>({});
   const singleJobMarkerRefs = useRef<Record<string, L.Marker | null>>({});
   const detailPanelRef = useRef<HTMLDivElement | null>(null);
@@ -322,6 +338,31 @@ export function ApplicantJobsMap() {
       .catch(() => {});
     return () => { cancelled = true; };
   }, [zipToGeocode]);
+
+  useEffect(() => {
+    if (!applicantAreaPosition) {
+      setExternalJobs([]);
+      return;
+    }
+    let cancelled = false;
+    const [lat, lng] = applicantAreaPosition;
+    const radius = searchMiles ?? 25;
+    fetch(`/api/jobs/external?lat=${lat}&lng=${lng}&radius=${radius}`)
+      .then((r) => r.json())
+      .then((data: { jobs?: ExternalJob[] }) => {
+        if (!cancelled) setExternalJobs(data.jobs ?? []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        logError({
+          route: "/applicant/job-map",
+          errorMessage: err instanceof Error ? err.message : String(err),
+          errorType: "api_error",
+          severity: "medium"
+        });
+      });
+    return () => { cancelled = true; };
+  }, [applicantAreaPosition?.[0], applicantAreaPosition?.[1], searchMiles]);
 
   const applicantAreaCenter = useMemo(
     () => applicantAreaPosition ?? geocodedZipCenter ?? stLouisCenter,
@@ -1122,7 +1163,48 @@ export function ApplicantJobsMap() {
             </Marker>
           );
         })}
+
+        {externalJobs.map((job) => (
+          <Marker
+            key={job.id}
+            position={[job.lat, job.lng]}
+            icon={createExternalJobIcon()}
+          >
+            <Popup maxWidth={320}>
+              <div className="box-border w-[min(18rem,calc(100vw-6rem))] max-w-full space-y-2 px-1 py-1">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{job.company}</p>
+                <h2 className="text-base font-bold text-zinc-950">{job.title}</h2>
+                {job.location ? <p className="text-xs text-zinc-500">{job.location}</p> : null}
+                {job.salary_min || job.salary_max ? (
+                  <p className="text-xs font-semibold text-zinc-700">{formatExternalSalary(job.salary_min, job.salary_max)}</p>
+                ) : null}
+                {job.job_type ? <p className="text-xs text-zinc-500">{job.job_type}</p> : null}
+                <a
+                  href={job.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 inline-flex items-center justify-center rounded-md bg-slate-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
+                >
+                  View Job ↗
+                </a>
+              </div>
+            </Popup>
+          </Marker>
+        ))}
       </MapContainer>
+
+      <div className="absolute bottom-8 left-1/2 z-[900] -translate-x-1/2 pointer-events-none">
+        <div className="flex items-center gap-4 rounded-full border border-gray-200 bg-white/95 px-4 py-2 shadow-soft">
+          <span className="flex items-center gap-1.5 text-xs font-semibold text-zinc-700">
+            <span style={{ display: "inline-block", width: 12, height: 12, borderRadius: "9999px", background: "#dc2626" }} />
+            WPM Match
+          </span>
+          <span className="flex items-center gap-1.5 text-xs font-semibold text-zinc-700">
+            <span style={{ display: "inline-block", width: 12, height: 12, borderRadius: "9999px", background: "#334155" }} />
+            External Listing
+          </span>
+        </div>
+      </div>
 
       <div
         className={`absolute left-4 top-4 z-[900] w-[14rem] transition-transform ${
@@ -2695,6 +2777,28 @@ function createGroupedJobIcon(count: number, interestState: InterestState, isHig
     iconAnchor: [36, 28],
     popupAnchor: [0, -20]
   });
+}
+
+function createExternalJobIcon(isHighlighted = false) {
+  const glow = isHighlighted
+    ? "0 0 0 4px rgba(51,65,85,0.28), 0 8px 20px rgba(0,0,0,0.25)"
+    : "0 4px 12px rgba(0,0,0,0.22)";
+  const scale = isHighlighted ? "scale(1.12)" : "scale(1)";
+  return L.divIcon({
+    className: "",
+    html: `<div style="display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9999px;border:2.5px solid white;background:#334155;color:white;font-size:10px;font-weight:800;letter-spacing:0.04em;box-shadow:${glow};transform:${scale};transition:transform 150ms ease,box-shadow 150ms ease;">EXT</div>`,
+    iconSize: [36, 36],
+    iconAnchor: [18, 18],
+    popupAnchor: [0, -18]
+  });
+}
+
+function formatExternalSalary(min: number | null, max: number | null): string {
+  const fmt = (n: number) => n >= 1000 ? `$${Math.round(n / 1000)}k` : `$${Math.round(n)}`;
+  if (min && max) return `${fmt(min)} – ${fmt(max)}/yr`;
+  if (min) return `${fmt(min)}+/yr`;
+  if (max) return `Up to ${fmt(max)}/yr`;
+  return "";
 }
 
 function calculateSkillMatch(requiredSkillsValue: string[], candidateSkillsValue: string[], jobTitle = "") {
