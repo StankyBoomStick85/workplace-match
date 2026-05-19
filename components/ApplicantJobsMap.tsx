@@ -524,14 +524,19 @@ export function ApplicantJobsMap() {
     [visibleJobs, mapZoom]
   );
   const visibleExternalJobs = useMemo(() => {
-    console.log("[visibleExternalJobs] applicantAreaCenter:", applicantAreaCenter, "searchMiles:", searchMiles, "externalJobs.length:", externalJobs.length);
-    if (hasCustomArea || !searchMiles) return externalJobs;
+    console.log("[visibleExternalJobs] applicantAreaCenter:", applicantAreaCenter, "searchMiles:", searchMiles, "externalJobs.length:", externalJobs.length, "hasCustomArea:", hasCustomArea);
+    if (hasCustomArea || !searchMiles) {
+      console.log("[visibleExternalJobs] early-return (no filter) returning:", externalJobs.length);
+      return externalJobs;
+    }
     externalJobs.slice(0, 3).forEach((job) => {
       console.log("[visibleExternalJobs] sample job lat:", job.lat, "lng:", job.lng, "distance:", getDistanceMiles(applicantAreaCenter, [job.lat, job.lng]));
     });
-    return externalJobs.filter(
+    const filtered = externalJobs.filter(
       (job) => getDistanceMiles(applicantAreaCenter, [job.lat, job.lng]) <= searchMiles
     );
+    console.log("[visibleExternalJobs] filtered result:", filtered.length, "of", externalJobs.length);
+    return filtered;
   }, [externalJobs, searchMiles, applicantAreaCenter, hasCustomArea]);
   const selectedResultJob = useMemo(
     () => jobs.find((job) => job.id === selectedResultJobId) ?? null,
