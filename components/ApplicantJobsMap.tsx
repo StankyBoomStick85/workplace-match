@@ -246,7 +246,7 @@ export function ApplicantJobsMap() {
   const [applicantInterests, setApplicantInterests] = useState<ApplicantInterest[]>([]);
   const [employerInterests, setEmployerInterests] = useState<EmployerInterest[]>([]);
   const [mutualMatches, setMutualMatches] = useState<MutualMatch[]>([]);
-  const [searchMiles, setSearchMiles] = useState<number | null>(null);
+  const [searchMiles, setSearchMiles] = useState<number | null>(35);
   const [customMiles, setCustomMiles] = useState("");
   const [isDrawingCustomArea, setIsDrawingCustomArea] = useState(false);
   const [customAreaPoints, setCustomAreaPoints] = useState<Coordinates[]>([]);
@@ -829,6 +829,7 @@ export function ApplicantJobsMap() {
       pollIntervalRef.current = null;
     }
     setScoringInProgress(true);
+    console.log("[startScorePolling] firing score-jobs fetch | mode:", mode, "forceRescore:", forceRescore);
     fetch("/api/scoring/score-jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
