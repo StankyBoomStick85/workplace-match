@@ -17,11 +17,19 @@ type AdzunaResult = {
 };
 
 export async function GET(request: Request) {
+  const appId = process.env.ADZUNA_APP_ID;
+  const appKey = process.env.ADZUNA_APP_KEY;
+
   console.log('[jobs/external] env check:', {
-    hasAppId: !!process.env.ADZUNA_APP_ID,
-    hasAppKey: !!process.env.ADZUNA_APP_KEY,
-    appIdValue: process.env.ADZUNA_APP_ID
+    hasAppId: !!appId,
+    hasAppKey: !!appKey,
+    appIdValue: appId
   });
+
+  if (!appId || !appKey) {
+    console.error("[jobs/external] aborting — ADZUNA_APP_ID and/or ADZUNA_APP_KEY are not set in environment variables");
+    return NextResponse.json({ error: "Adzuna not configured.", jobs: [] }, { status: 500 });
+  }
 
   const { searchParams } = new URL(request.url);
   const lat = parseFloat(searchParams.get("lat") ?? "");
@@ -33,17 +41,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "lat and lng are required." }, { status: 400 });
   }
 
-  const appId = process.env.ADZUNA_APP_ID;
-  const appKey = process.env.ADZUNA_APP_KEY;
-
-  console.log("[jobs/external] env check — ADZUNA_APP_ID:", appId ? "present" : "MISSING", "| ADZUNA_APP_KEY:", appKey ? "present" : "MISSING");
-
-  if (!appId || !appKey) {
-    console.error("[jobs/external] aborting — ADZUNA_APP_ID and/or ADZUNA_APP_KEY are not set in environment variables");
-    return NextResponse.json({ error: "Adzuna not configured.", jobs: [] }, { status: 500 });
-  }
-
-  const radiusKm = Math.round(radiusMiles * 1.60934);
+  const distanceKm = Math.round(radiusMiles * 1.60934);
 
   const params = new URLSearchParams({
     app_id: appId,
@@ -51,19 +49,20 @@ export async function GET(request: Request) {
     results_per_page: "50",
     latitude: String(lat),
     longitude: String(lng),
-    distance: String(radiusKm),
-    "content-type": "application/json",
+    distance_km: String(distanceKm),
     ...(keywords ? { what: keywords } : {})
   });
 
+  const adzunaUrl = `https://api.adzuna.com/v1/api/jobs/us/search/1?${params.toString()}`;
+  console.log("[jobs/external] calling Adzuna:", adzunaUrl);
+
   try {
-    const response = await fetch(
-      `https://api.adzuna.com/v1/api/jobs/us/search/1?${params.toString()}`,
-      { headers: { Accept: "application/json" } }
-    );
+    const response = await fetch(adzunaUrl, { headers: { Accept: "application/json" } });
 
     if (!response.ok) {
-      throw new Error(`Adzuna responded ${response.status}: ${await response.text()}`);
+      const body = await response.text();
+      console.error(`[jobs/external] Adzuna error ${response.status}:`, body);
+      throw new Error(`Adzuna responded ${response.status}: ${body}`);
     }
 
     const data = await response.json();
