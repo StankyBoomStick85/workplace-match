@@ -17,6 +17,12 @@ type AdzunaResult = {
 };
 
 export async function GET(request: Request) {
+  console.log('[jobs/external] env check:', {
+    hasAppId: !!process.env.ADZUNA_APP_ID,
+    hasAppKey: !!process.env.ADZUNA_APP_KEY,
+    appIdValue: process.env.ADZUNA_APP_ID
+  });
+
   const { searchParams } = new URL(request.url);
   const lat = parseFloat(searchParams.get("lat") ?? "");
   const lng = parseFloat(searchParams.get("lng") ?? "");
@@ -30,8 +36,11 @@ export async function GET(request: Request) {
   const appId = process.env.ADZUNA_APP_ID;
   const appKey = process.env.ADZUNA_APP_KEY;
 
+  console.log("[jobs/external] env check — ADZUNA_APP_ID:", appId ? "present" : "MISSING", "| ADZUNA_APP_KEY:", appKey ? "present" : "MISSING");
+
   if (!appId || !appKey) {
-    return NextResponse.json({ error: "Adzuna not configured." }, { status: 500 });
+    console.error("[jobs/external] aborting — ADZUNA_APP_ID and/or ADZUNA_APP_KEY are not set in environment variables");
+    return NextResponse.json({ error: "Adzuna not configured.", jobs: [] }, { status: 500 });
   }
 
   const radiusKm = Math.round(radiusMiles * 1.60934);
@@ -93,6 +102,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ jobs });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
+    console.error("[jobs/external] caught error:", errorMessage, err);
     await logError({
       route: "/api/jobs/external",
       errorMessage,
