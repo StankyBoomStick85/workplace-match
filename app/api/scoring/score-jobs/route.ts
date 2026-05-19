@@ -164,8 +164,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ scored: 0, skipped });
   }
 
-  // Cap at 100 jobs per call to keep prompt manageable
-  const batch = jobsToScore.slice(0, 100);
+  // Cap at 20 jobs per call — keeps prompt latency well under Vercel's timeout
+  const batch = jobsToScore.slice(0, 20);
 
   const capabilityTags = Array.isArray(profile.capability_tags) ? profile.capability_tags.join(", ") : "Not specified";
   const jobTypes = Array.isArray(profile.job_types) ? profile.job_types.join(", ") : "Not specified";
@@ -240,11 +240,14 @@ No preamble, no explanation, just the array.`;
   let scored = 0;
   try {
     const anthropic = new Anthropic({ apiKey });
-    const message = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 2048,
-      messages: [{ role: "user", content: prompt }]
-    });
+    const message = await anthropic.messages.create(
+      {
+        model: "claude-sonnet-4-6",
+        max_tokens: 1024,
+        messages: [{ role: "user", content: prompt }]
+      },
+      { timeout: 10_000 }
+    );
 
     const text = message.content.find((b) => b.type === "text")?.text ?? "";
     const results = parseJsonArray(text);
@@ -300,6 +303,11 @@ No preamble, no explanation, just the array.`;
     }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
+    const isTimeout = errorMessage.toLowerCase().includes("timeout") || (err instanceof Error && err.name === "APIConnectionTimeoutError");
+    if (isTimeout) {
+      console.warn("[score-jobs] Anthropic call timed out after 10s — returning partial results (scored:", scored, ")");
+      return NextResponse.json({ scored, skipped, timedOut: true });
+    }
     console.error("[score-jobs] error:", errorMessage);
     await logError({
       route: "/api/scoring/score-jobs",
