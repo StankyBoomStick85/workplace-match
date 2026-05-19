@@ -56,7 +56,8 @@ export async function GET(request: Request) {
       .from("adzuna_cache")
       .select("id, title, company, location, lat, lng, salary_min, salary_max, job_type, url, description")
       .eq("region", region)
-      .gt("expires_at", new Date().toISOString());
+      .gt("expires_at", new Date().toISOString())
+      .limit(1000);
 
     if (error) {
       console.error("[jobs/external] cache read error:", error);
