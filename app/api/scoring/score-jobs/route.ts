@@ -36,6 +36,7 @@ export async function POST(request: Request) {
   const candidateId = typeof body.candidateId === "string" ? body.candidateId : "";
   const scoringMode: "quick" | "career" = body.scoringMode === "quick" ? "quick" : "career";
   const forceRescore: boolean = body.forceRescore === true;
+  console.log("[score-jobs] scoringMode:", scoringMode, "forceRescore:", forceRescore);
 
   if (!candidateId || candidateId !== user.id) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 403 });
@@ -95,6 +96,9 @@ export async function POST(request: Request) {
       .eq("candidate_id", candidateId)
       .gt("expires_at", new Date().toISOString());
     (existingScores ?? []).forEach((row: { job_id: string }) => scoredJobIds.add(row.job_id));
+    console.log("[score-jobs] cache check: found", scoredJobIds.size, "existing scores (will skip these)");
+  } else {
+    console.log("[score-jobs] forceRescore=true: skipping cache check, will score all jobs fresh");
   }
 
   // Build the list of jobs that need scoring (skip already-scored)
@@ -215,6 +219,8 @@ ${scoringMode === "quick"
 
 Return ONLY a JSON array: [{"job_id": string, "score": number}]
 No preamble, no explanation, just the array.`;
+
+  console.log("[score-jobs] prompt mode block (first 100 chars):", prompt.slice(0, 100));
 
   let scored = 0;
   try {
