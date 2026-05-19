@@ -523,6 +523,12 @@ export function ApplicantJobsMap() {
     () => groupJobsByLocation(visibleJobs, mapZoom),
     [visibleJobs, mapZoom]
   );
+  const visibleExternalJobs = useMemo(() => {
+    if (hasCustomArea || !searchMiles) return externalJobs;
+    return externalJobs.filter(
+      (job) => getDistanceMiles(applicantAreaCenter, [job.lat, job.lng]) <= searchMiles
+    );
+  }, [externalJobs, searchMiles, applicantAreaCenter, hasCustomArea]);
   const selectedResultJob = useMemo(
     () => jobs.find((job) => job.id === selectedResultJobId) ?? null,
     [selectedResultJobId, jobs]
@@ -1329,7 +1335,7 @@ export function ApplicantJobsMap() {
           );
         })}
 
-        {externalJobs.map((job) => {
+        {visibleExternalJobs.map((job) => {
           const extScore = matchScores[job.id];
           const isSaved = savedExternalJobIds.has(job.id);
           return (

@@ -74,7 +74,7 @@ export async function GET(request: Request) {
     console.log("[jobs/external] cache returned:", rows.length, "jobs for region:", region);
 
     const jobs = rows
-      .filter((row) => isFinite(Number(row.lat)) && isFinite(Number(row.lng)))
+      .filter((row) => row.lat != null && row.lng != null && isFinite(Number(row.lat)) && isFinite(Number(row.lng)))
       .map((row) => ({
         id: row.id as string,
         title: row.title as string,
