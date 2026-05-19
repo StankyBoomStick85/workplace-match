@@ -60,8 +60,22 @@ export async function GET(request: Request) {
     const data = await response.json();
     const rawJobs: AdzunaResult[] = data.results ?? [];
 
-    const jobs = rawJobs
-      .filter((job) => isFinite(job.latitude ?? NaN) && isFinite(job.longitude ?? NaN))
+    console.log("[jobs/external] Adzuna total results:", data.count ?? "unknown");
+    console.log("[jobs/external] rawJobs returned:", rawJobs.length);
+    if (rawJobs[0]) {
+      console.log("[jobs/external] first result shape:", JSON.stringify({
+        id: rawJobs[0].id,
+        title: rawJobs[0].title,
+        latitude: rawJobs[0].latitude,
+        longitude: rawJobs[0].longitude,
+        location: rawJobs[0].location
+      }));
+    }
+
+    const jobsWithCoords = rawJobs.filter((job) => isFinite(job.latitude ?? NaN) && isFinite(job.longitude ?? NaN));
+    console.log("[jobs/external] jobs with coordinates:", jobsWithCoords.length, "of", rawJobs.length);
+
+    const jobs = jobsWithCoords
       .map((job) => ({
         id: `adzuna-${job.id}`,
         title: job.title,

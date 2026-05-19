@@ -339,21 +339,27 @@ export function ApplicantJobsMap() {
     return () => { cancelled = true; };
   }, [zipToGeocode]);
 
+  const applicantAreaCenter = useMemo(
+    () => applicantAreaPosition ?? geocodedZipCenter ?? stLouisCenter,
+    [applicantAreaPosition, geocodedZipCenter]
+  );
+  const mapCenter = useMemo(() => getInitialMapCenter(applicantAreaCenter), [applicantAreaCenter]);
+
   useEffect(() => {
-    if (!applicantAreaPosition) {
-      setExternalJobs([]);
-      return;
-    }
     let cancelled = false;
-    const [lat, lng] = applicantAreaPosition;
+    const [lat, lng] = applicantAreaCenter;
     const radius = searchMiles ?? 25;
+    console.log("[jobs/external] fetching", { lat, lng, radius });
     fetch(`/api/jobs/external?lat=${lat}&lng=${lng}&radius=${radius}`)
       .then((r) => r.json())
       .then((data: { jobs?: ExternalJob[] }) => {
-        if (!cancelled) setExternalJobs(data.jobs ?? []);
+        if (cancelled) return;
+        console.log("[jobs/external] received", data.jobs?.length ?? 0, "jobs");
+        setExternalJobs(data.jobs ?? []);
       })
       .catch((err) => {
         if (cancelled) return;
+        console.error("[jobs/external] fetch error", err);
         logError({
           route: "/applicant/job-map",
           errorMessage: err instanceof Error ? err.message : String(err),
@@ -362,13 +368,7 @@ export function ApplicantJobsMap() {
         });
       });
     return () => { cancelled = true; };
-  }, [applicantAreaPosition?.[0], applicantAreaPosition?.[1], searchMiles]);
-
-  const applicantAreaCenter = useMemo(
-    () => applicantAreaPosition ?? geocodedZipCenter ?? stLouisCenter,
-    [applicantAreaPosition, geocodedZipCenter]
-  );
-  const mapCenter = useMemo(() => getInitialMapCenter(applicantAreaCenter), [applicantAreaCenter]);
+  }, [applicantAreaCenter[0], applicantAreaCenter[1], searchMiles]);
   const hasCustomArea = customAreaPoints.length >= 3;
   const filters: JobFilters = {
     minimumMatchPercent,
