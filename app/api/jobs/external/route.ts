@@ -1,20 +1,8 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import { logError } from "../../../../lib/logError";
 
 export const dynamic = "force-dynamic";
-
-type AdzunaResult = {
-  id: string;
-  title: string;
-  company: { display_name: string };
-  location: { display_name: string };
-  latitude?: number;
-  longitude?: number;
-  salary_min?: number;
-  salary_max?: number;
-  contract_type?: string;
-  redirect_url: string;
-};
 
 async function reverseGeocode(lat: number, lng: number): Promise<string> {
   try {
@@ -40,101 +28,78 @@ async function reverseGeocode(lat: number, lng: number): Promise<string> {
 }
 
 export async function GET(request: Request) {
-  const appId = process.env.ADZUNA_APP_ID;
-  const appKey = process.env.ADZUNA_APP_KEY;
-
-  console.log("[jobs/external] env check:", {
-    hasAppId: !!appId,
-    hasAppKey: !!appKey,
-    appIdValue: appId
-  });
-
-  if (!appId || !appKey) {
-    console.error("[jobs/external] aborting — ADZUNA_APP_ID and/or ADZUNA_APP_KEY not set");
-    return NextResponse.json({ error: "Adzuna not configured.", jobs: [] }, { status: 500 });
-  }
-
   const { searchParams } = new URL(request.url);
   const lat = parseFloat(searchParams.get("lat") ?? "");
   const lng = parseFloat(searchParams.get("lng") ?? "");
-  const radiusMiles = parseFloat(searchParams.get("radius") ?? "25");
-  const keywords = searchParams.get("keywords") ?? "";
 
   if (!isFinite(lat) || !isFinite(lng)) {
     return NextResponse.json({ error: "lat and lng are required." }, { status: 400 });
   }
 
-  const where = await reverseGeocode(lat, lng);
-  console.log("[jobs/external] resolved where:", where);
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  const url = new URL("https://api.adzuna.com/v1/api/jobs/us/search/1");
-  url.searchParams.set("app_id", appId);
-  url.searchParams.set("app_key", appKey);
-  url.searchParams.set("results_per_page", "50");
-  url.searchParams.set("where", where);
-  url.searchParams.set("distance", String(Math.round(radiusMiles)));
-  url.searchParams.set("what", keywords);
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    console.error("[jobs/external] Supabase env not configured");
+    return NextResponse.json({ jobs: [] });
+  }
 
-  console.log("[jobs/external] calling Adzuna URL:", url.toString());
+  const region = await reverseGeocode(lat, lng);
+  console.log("[jobs/external] reading cache for region:", region);
+
+  const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false }
+  });
 
   try {
-    const response = await fetch(url.toString(), {
-      headers: {
-        "Accept": "application/json",
-        "Content-Type": "application/json"
-      }
-    });
+    const { data, error } = await adminClient
+      .from("adzuna_cache")
+      .select("id, title, company, location, lat, lng, salary_min, salary_max, job_type, url, description")
+      .eq("region", region)
+      .gt("expires_at", new Date().toISOString());
 
-    if (!response.ok) {
-      const body = await response.text();
-      console.error(`[jobs/external] Adzuna error ${response.status}:`, body);
-      throw new Error(`Adzuna responded ${response.status}: ${body}`);
+    if (error) {
+      console.error("[jobs/external] cache read error:", error);
+      await logError({
+        route: "/api/jobs/external",
+        errorMessage: error.message,
+        errorType: "database",
+        severity: "medium",
+        metadata: { region }
+      });
+      return NextResponse.json({ jobs: [] });
     }
 
-    const data = await response.json();
-    const rawJobs: AdzunaResult[] = data.results ?? [];
+    const rows = data ?? [];
+    console.log("[jobs/external] cache returned:", rows.length, "jobs for region:", region);
 
-    console.log("[jobs/external] Adzuna total results:", data.count ?? "unknown");
-    console.log("[jobs/external] rawJobs returned:", rawJobs.length);
-    if (rawJobs[0]) {
-      console.log("[jobs/external] first result shape:", JSON.stringify({
-        id: rawJobs[0].id,
-        title: rawJobs[0].title,
-        latitude: rawJobs[0].latitude,
-        longitude: rawJobs[0].longitude,
-        location: rawJobs[0].location
+    const jobs = rows
+      .filter((row) => isFinite(Number(row.lat)) && isFinite(Number(row.lng)))
+      .map((row) => ({
+        id: row.id as string,
+        title: row.title as string,
+        company: (row.company as string) ?? "Unknown company",
+        location: (row.location as string) ?? "",
+        lat: Number(row.lat),
+        lng: Number(row.lng),
+        salary_min: row.salary_min != null ? Number(row.salary_min) : null,
+        salary_max: row.salary_max != null ? Number(row.salary_max) : null,
+        job_type: (row.job_type as string) ?? null,
+        url: row.url as string,
+        description: (row.description as string) ?? undefined,
+        source: "adzuna" as const
       }));
-    }
-
-    const jobsWithCoords = rawJobs.filter(
-      (job) => isFinite(job.latitude ?? NaN) && isFinite(job.longitude ?? NaN)
-    );
-    console.log("[jobs/external] jobs with coordinates:", jobsWithCoords.length, "of", rawJobs.length);
-
-    const jobs = jobsWithCoords.map((job) => ({
-      id: `adzuna-${job.id}`,
-      title: job.title,
-      company: job.company?.display_name ?? "Unknown company",
-      location: job.location?.display_name ?? "",
-      lat: job.latitude as number,
-      lng: job.longitude as number,
-      salary_min: job.salary_min ?? null,
-      salary_max: job.salary_max ?? null,
-      job_type: job.contract_type ?? null,
-      url: job.redirect_url,
-      source: "adzuna" as const
-    }));
 
     return NextResponse.json({ jobs });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
-    console.error("[jobs/external] caught error:", errorMessage, err);
+    console.error("[jobs/external] caught error:", errorMessage);
     await logError({
       route: "/api/jobs/external",
       errorMessage,
-      errorType: "api_error",
+      errorType: "database",
       severity: "medium",
-      metadata: { lat, lng, radiusMiles, where }
+      metadata: { region }
     });
     return NextResponse.json({ jobs: [] });
   }

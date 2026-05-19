@@ -29,6 +29,7 @@ import {
   getMutualMatches,
   removeInterest as removeSupabaseInterest
 } from "../lib/supabaseMvpData";
+import { supabase } from "../lib/supabase";
 import { RemoveInterestConfirmationModal } from "./RemoveInterestConfirmationModal";
 
 type ApplicantAccount = {
@@ -166,6 +167,7 @@ type ExternalJob = {
   salary_max: number | null;
   job_type: string | null;
   url: string;
+  description?: string;
   source: "adzuna";
 };
 
@@ -269,6 +271,11 @@ export function ApplicantJobsMap() {
   const [selectedResultJobId, setSelectedResultJobId] = useState("");
   const [geocodedZipCenter, setGeocodedZipCenter] = useState<Coordinates | null>(null);
   const [externalJobs, setExternalJobs] = useState<ExternalJob[]>([]);
+  const [matchScores, setMatchScores] = useState<Record<string, number>>({});
+  const [scoringInProgress, setScoringInProgress] = useState(false);
+  const [savedExternalJobIds, setSavedExternalJobIds] = useState<Set<string>>(new Set());
+  const pollAttemptsRef = useRef(0);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const clusterMarkerRefs = useRef<Record<string, L.Marker | null>>({});
   const singleJobMarkerRefs = useRef<Record<string, L.Marker | null>>({});
   const detailPanelRef = useRef<HTMLDivElement | null>(null);
@@ -297,12 +304,73 @@ export function ApplicantJobsMap() {
       setAccount(parsedAccount);
       setProfile(savedProfile ?? getApplicantMapProfileFromAccount(parsedAccount));
       setHasAcknowledgedPrivacyNotice(true);
+
+      // Load already-saved external job IDs
+      const { data: savedRows } = await supabase
+        .from("saved_jobs")
+        .select("job_id")
+        .eq("candidate_id", user.id);
+      if (savedRows) {
+        setSavedExternalJobIds(new Set((savedRows as Array<{ job_id: string }>).map((r) => r.job_id)));
+      }
+
+      // Load any already-computed scores
+      const { data: scoreRows } = await supabase
+        .from("match_scores")
+        .select("job_id, score")
+        .eq("candidate_id", user.id)
+        .gt("expires_at", new Date().toISOString());
+      if (scoreRows && scoreRows.length > 0) {
+        const initial: Record<string, number> = {};
+        (scoreRows as Array<{ job_id: string; score: number }>).forEach((r) => { initial[r.job_id] = r.score; });
+        setMatchScores(initial);
+      }
+
+      // Fire-and-forget: trigger AI scoring, then poll for results
+      if (user.id) {
+        setScoringInProgress(true);
+        fetch("/api/scoring/score-jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ candidateId: user.id })
+        }).catch(() => {});
+
+        pollAttemptsRef.current = 0;
+        const interval = setInterval(async () => {
+          pollAttemptsRef.current += 1;
+          const { data: polledScores } = await supabase
+            .from("match_scores")
+            .select("job_id, score")
+            .eq("candidate_id", user.id)
+            .gt("expires_at", new Date().toISOString());
+          if (polledScores && polledScores.length > 0) {
+            const updated: Record<string, number> = {};
+            (polledScores as Array<{ job_id: string; score: number }>).forEach((r) => { updated[r.job_id] = r.score; });
+            setMatchScores(updated);
+          }
+          if (pollAttemptsRef.current >= 5) {
+            clearInterval(interval);
+            pollIntervalRef.current = null;
+            setScoringInProgress(false);
+          }
+        }, 3000);
+        pollIntervalRef.current = interval;
+      }
       setJobs(getEmployerCreatedJobs(savedJobs as JobListing[]));
       setCompanyProfile(null);
       setApplicantInterests(savedApplicantInterests as ApplicantInterest[]);
       setEmployerInterests(savedEmployerInterests as EmployerInterest[]);
       setMutualMatches(savedMutualMatches as MutualMatch[]);
     }
+  }, []);
+
+  // Cleanup polling interval on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
   }, []);
 
   const candidateId = profile ? getApplicantInterestId(profile) : "candidate-profile:local-mvp";
@@ -349,24 +417,37 @@ export function ApplicantJobsMap() {
     let cancelled = false;
     const [lat, lng] = applicantAreaCenter;
     const radius = searchMiles ?? 25;
-    console.log("[jobs/external] fetching", { lat, lng, radius });
-    fetch(`/api/jobs/external?lat=${lat}&lng=${lng}&radius=${radius}`)
-      .then((r) => r.json())
-      .then((data: { jobs?: ExternalJob[] }) => {
+
+    async function loadExternalJobs() {
+      try {
+        // Step 1: ensure cache is populated for this region
+        await fetch("/api/scoring/refresh-adzuna-cache", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lat, lng, radius })
+        });
         if (cancelled) return;
-        console.log("[jobs/external] received", data.jobs?.length ?? 0, "jobs");
+
+        // Step 2: read from cache
+        const res = await fetch(`/api/jobs/external?lat=${lat}&lng=${lng}`);
+        if (cancelled) return;
+        const data: { jobs?: ExternalJob[] } = await res.json();
+        if (cancelled) return;
+        console.log("[jobs/external] cache returned", data.jobs?.length ?? 0, "jobs");
         setExternalJobs(data.jobs ?? []);
-      })
-      .catch((err) => {
+      } catch (err) {
         if (cancelled) return;
-        console.error("[jobs/external] fetch error", err);
+        console.error("[jobs/external] error", err);
         logError({
           route: "/applicant/job-map",
           errorMessage: err instanceof Error ? err.message : String(err),
           errorType: "api_error",
           severity: "medium"
         });
-      });
+      }
+    }
+
+    loadExternalJobs();
     return () => { cancelled = true; };
   }, [applicantAreaCenter[0], applicantAreaCenter[1], searchMiles]);
   const hasCustomArea = customAreaPoints.length >= 3;
@@ -663,7 +744,8 @@ export function ApplicantJobsMap() {
   }
 
   function getJobPopupData(job: JobListing) {
-    const matchPercent = calculateSkillMatch(job.requiredSkills, getApplicantMatchSignals(profile), job.title).percentage;
+    const clientScore = calculateSkillMatch(job.requiredSkills, getApplicantMatchSignals(profile), job.title).percentage;
+    const matchPercent = matchScores[job.id] ?? clientScore;
     const interestState = getJobInterestState(job);
     const commuteEstimate = getJobCommuteEstimate(job, applicantAreaPosition);
     const companyName =
@@ -680,6 +762,28 @@ export function ApplicantJobsMap() {
       senderLabel,
       jobTitle: job.title
     });
+  }
+
+  async function handleSaveExternalJob(job: ExternalJob) {
+    if (!account?.id) return;
+    const isSaved = savedExternalJobIds.has(job.id);
+    if (isSaved) {
+      await supabase.from("saved_jobs").delete().eq("candidate_id", account.id).eq("job_id", job.id);
+      setSavedExternalJobIds((prev) => { const next = new Set(prev); next.delete(job.id); return next; });
+    } else {
+      await supabase.from("saved_jobs").upsert({
+        candidate_id: account.id,
+        job_id: job.id,
+        job_source: "adzuna",
+        job_title: job.title,
+        company: job.company,
+        location: job.location,
+        salary_min: job.salary_min,
+        salary_max: job.salary_max,
+        url: job.url
+      }, { onConflict: "candidate_id,job_id" });
+      setSavedExternalJobIds((prev) => new Set(prev).add(job.id));
+    }
   }
 
   function getMatchThread(job: JobListing): MatchThreadContext {
@@ -1164,33 +1268,69 @@ export function ApplicantJobsMap() {
           );
         })}
 
-        {externalJobs.map((job) => (
-          <Marker
-            key={job.id}
-            position={[job.lat, job.lng]}
-            icon={createExternalJobIcon()}
-          >
-            <Popup maxWidth={320}>
-              <div className="box-border w-[min(18rem,calc(100vw-6rem))] max-w-full space-y-2 px-1 py-1">
-                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{job.company}</p>
-                <h2 className="text-base font-bold text-zinc-950">{job.title}</h2>
-                {job.location ? <p className="text-xs text-zinc-500">{job.location}</p> : null}
-                {job.salary_min || job.salary_max ? (
-                  <p className="text-xs font-semibold text-zinc-700">{formatExternalSalary(job.salary_min, job.salary_max)}</p>
-                ) : null}
-                {job.job_type ? <p className="text-xs text-zinc-500">{job.job_type}</p> : null}
-                <a
-                  href={job.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-2 inline-flex items-center justify-center rounded-md bg-slate-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
-                >
-                  View Job ↗
-                </a>
-              </div>
-            </Popup>
-          </Marker>
-        ))}
+        {externalJobs.map((job) => {
+          const extScore = matchScores[job.id];
+          const isSaved = savedExternalJobIds.has(job.id);
+          return (
+            <Marker
+              key={job.id}
+              position={[job.lat, job.lng]}
+              icon={createExternalJobIcon(false, extScore, scoringInProgress)}
+            >
+              <Popup maxWidth={340}>
+                <div className="box-border w-[min(20rem,calc(100vw-6rem))] max-w-full space-y-2 px-1 py-1">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{job.company}</p>
+                      <h2 className="text-base font-bold text-zinc-950">{job.title}</h2>
+                    </div>
+                    {extScore !== undefined ? (
+                      <span className="shrink-0 rounded-full bg-slate-700 px-2.5 py-1 text-xs font-bold text-white">
+                        {extScore}%
+                      </span>
+                    ) : scoringInProgress ? (
+                      <span className="shrink-0 rounded-full bg-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-500">
+                        Scoring...
+                      </span>
+                    ) : null}
+                  </div>
+                  {job.location ? <p className="text-xs text-zinc-500">{job.location}</p> : null}
+                  {job.salary_min || job.salary_max ? (
+                    <p className="text-xs font-semibold text-zinc-700">{formatExternalSalary(job.salary_min, job.salary_max)}</p>
+                  ) : null}
+                  {job.job_type ? <p className="text-xs text-zinc-500">{job.job_type}</p> : null}
+                  {job.description ? (
+                    <p className="max-h-20 overflow-y-auto rounded border border-gray-200 bg-gray-50 px-2 py-1.5 text-xs leading-5 text-zinc-600">
+                      {job.description}
+                    </p>
+                  ) : null}
+                  <div className="flex items-center gap-2 pt-1">
+                    <a
+                      href={job.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex flex-1 items-center justify-center rounded-md bg-slate-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
+                    >
+                      View Job ↗
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => handleSaveExternalJob(job)}
+                      className={`inline-flex items-center justify-center rounded-md border px-3 py-2 text-xs font-semibold transition ${
+                        isSaved
+                          ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200"
+                          : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                      }`}
+                      aria-label={isSaved ? "Unsave job" : "Save job"}
+                    >
+                      {isSaved ? "♥ Saved" : "♡ Save"}
+                    </button>
+                  </div>
+                </div>
+              </Popup>
+            </Marker>
+          );
+        })}
       </MapContainer>
 
       <div className="absolute bottom-8 left-1/2 z-[900] -translate-x-1/2 pointer-events-none">
@@ -2779,14 +2919,21 @@ function createGroupedJobIcon(count: number, interestState: InterestState, isHig
   });
 }
 
-function createExternalJobIcon(isHighlighted = false) {
+function createExternalJobIcon(isHighlighted = false, score?: number, scoringInProgress = false) {
   const glow = isHighlighted
     ? "0 0 0 4px rgba(51,65,85,0.28), 0 8px 20px rgba(0,0,0,0.25)"
     : "0 4px 12px rgba(0,0,0,0.22)";
   const scale = isHighlighted ? "scale(1.12)" : "scale(1)";
+  const label =
+    score !== undefined
+      ? `${score}%`
+      : scoringInProgress
+      ? "···"
+      : "EXT";
+  const fontSize = score !== undefined ? "11px" : "10px";
   return L.divIcon({
     className: "",
-    html: `<div style="display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9999px;border:2.5px solid white;background:#334155;color:white;font-size:10px;font-weight:800;letter-spacing:0.04em;box-shadow:${glow};transform:${scale};transition:transform 150ms ease,box-shadow 150ms ease;">EXT</div>`,
+    html: `<div style="display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9999px;border:2.5px solid white;background:#334155;color:white;font-size:${fontSize};font-weight:800;letter-spacing:0.04em;box-shadow:${glow};transform:${scale};transition:transform 150ms ease,box-shadow 150ms ease;">${label}</div>`,
     iconSize: [36, 36],
     iconAnchor: [18, 18],
     popupAnchor: [0, -18]
