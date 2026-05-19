@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AccountSettings } from "./AccountSettings";
+import { SupportSettings } from "./SupportSettings";
 
-type Tab = "dark-mode" | "account" | "plan";
+type Tab = "dark-mode" | "account" | "plan" | "support";
 
 export function SettingsModal() {
   const [isOpen, setIsOpen] = useState(false);
@@ -39,6 +40,7 @@ export function SettingsModal() {
     { id: "dark-mode", label: "Dark Mode" },
     { id: "account", label: "Account" },
     { id: "plan", label: "Plan" },
+    { id: "support", label: "Support" },
   ];
 
   return (
@@ -125,7 +127,7 @@ export function SettingsModal() {
                 </div>
               ) : activeTab === "account" ? (
                 <AccountSettings role="candidate" inModal />
-              ) : (
+              ) : activeTab === "plan" ? (
                 <div className="px-6 py-6">
                   <h3 className="text-sm font-bold text-zinc-900">Your Plan</h3>
                   <p className="mt-1 text-sm text-zinc-500">Manage your subscription.</p>
@@ -143,6 +145,8 @@ export function SettingsModal() {
                     </button>
                   </div>
                 </div>
+              ) : (
+                <SupportSettings />
               )}
             </div>
           </div>
