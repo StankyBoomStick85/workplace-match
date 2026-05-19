@@ -821,11 +821,18 @@ export function ApplicantJobsMap() {
     pollAttemptsRef.current = 0;
     const interval = setInterval(async () => {
       pollAttemptsRef.current += 1;
-      const { data: polledScores } = await supabase
+      const { data: polledScores, error: pollError } = await supabase
         .from("match_scores")
         .select("job_id, score")
         .eq("candidate_id", userId)
         .gt("expires_at", new Date().toISOString());
+      if (pollError) {
+        // Stop immediately on auth/permission errors — retrying won't help
+        clearInterval(interval);
+        pollIntervalRef.current = null;
+        setScoringInProgress(false);
+        return;
+      }
       if (polledScores && polledScores.length > 0) {
         const updated: Record<string, number> = {};
         (polledScores as Array<{ job_id: string; score: number }>).forEach((r) => { updated[r.job_id] = r.score; });
