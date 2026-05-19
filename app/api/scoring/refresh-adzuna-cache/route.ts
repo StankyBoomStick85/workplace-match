@@ -101,8 +101,8 @@ export async function POST(request: Request) {
 
     function buildAdzunaUrl(where: string, distance: number, page: number): string {
       const url = new URL(`https://api.adzuna.com/v1/api/jobs/us/search/${page}`);
-      url.searchParams.set("app_id", appId);
-      url.searchParams.set("app_key", appKey);
+      url.searchParams.set("app_id", appId!);
+      url.searchParams.set("app_key", appKey!);
       url.searchParams.set("results_per_page", "50");
       url.searchParams.set("where", where);
       url.searchParams.set("distance", String(Math.round(distance)));
