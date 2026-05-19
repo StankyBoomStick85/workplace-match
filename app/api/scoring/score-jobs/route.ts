@@ -87,7 +87,20 @@ export async function POST(request: Request) {
     console.error("[score-jobs] adzuna_cache fetch error:", cacheError);
   }
 
-  // Fetch existing non-expired scores for this candidate (skipped when forceRescore)
+  // When force-rescoring, delete all existing scores so the poll doesn't return stale data
+  if (forceRescore) {
+    const { error: deleteError, count } = await adminClient
+      .from("match_scores")
+      .delete({ count: "exact" })
+      .eq("candidate_id", candidateId);
+    if (deleteError) {
+      console.error("[score-jobs] forceRescore: failed to delete existing scores:", deleteError);
+    } else {
+      console.log("[score-jobs] forceRescore: deleted", count, "existing match_scores rows");
+    }
+  }
+
+  // Fetch remaining non-expired scores to skip (empty when forceRescore deleted them)
   const scoredJobIds = new Set<string>();
   if (!forceRescore) {
     const { data: existingScores } = await adminClient
@@ -96,9 +109,7 @@ export async function POST(request: Request) {
       .eq("candidate_id", candidateId)
       .gt("expires_at", new Date().toISOString());
     (existingScores ?? []).forEach((row: { job_id: string }) => scoredJobIds.add(row.job_id));
-    console.log("[score-jobs] cache check: found", scoredJobIds.size, "existing scores (will skip these)");
-  } else {
-    console.log("[score-jobs] forceRescore=true: skipping cache check, will score all jobs fresh");
+    console.log("[score-jobs] cache: found", scoredJobIds.size, "existing scores, will skip");
   }
 
   // Build the list of jobs that need scoring (skip already-scored)
@@ -182,11 +193,19 @@ Score high (70-95) whenever the candidate has the baseline capability to do the 
 Score low (below 50) only when there is a genuine capability gap — the candidate lacks skills or physical/technical requirements to perform the role.
 Do NOT penalize for the role being below the candidate's career level. That is irrelevant in this mode.`
     : `Mode: CAREER MOVE
-Focus: Does this job represent a good use of this candidate's full capability profile?
-Consider: skill utilization, compensation alignment, career trajectory, seniority match, and growth potential.
-A fast food or entry-level role for a senior operations leader should score 15-25% — it wastes their capability.
-A management, director, or leadership role that matches their experience and pay expectations should score 80-95%.
-Penalize significant underutilization of the candidate's skills and seniority.`;
+Focus: Is this job a worthy use of this candidate's full career capability and trajectory?
+
+STRICT UNDERUTILIZATION RULE: If this job significantly underutilizes the candidate's demonstrated experience, leadership, or capability level — score it 10-25%, period. Do NOT score it higher just because the candidate "can" do it physically. Career Move scores whether this job SHOULD be in their career trajectory.
+
+Concrete scoring examples:
+- Uber/Lyft driver, fast food worker, cashier, warehouse picker for a senior operations manager, military officer, or experienced professional → 10-20%
+- Any entry-level, unskilled, or gig role for a candidate with management or advanced experience → 10-25%
+- Skilled trade or individual contributor role for a senior director-level candidate → 25-40%
+- Mid-level supervisor role for a senior director-level candidate → 35-50%
+- Management role that reasonably matches the candidate's experience level → 60-75%
+- Director, VP, or leadership role that fully utilizes their highest capabilities → 80-95%
+
+If this job represents significant underutilization of the candidate's demonstrated capability level, score it 10-25%. Only score above 70% if the role genuinely challenges and utilizes their highest capabilities.`;
 
   const prompt = `You are a job match scorer. Given a candidate profile and a list of jobs, return a JSON array of match scores.
 
@@ -220,7 +239,7 @@ ${scoringMode === "quick"
 Return ONLY a JSON array: [{"job_id": string, "score": number}]
 No preamble, no explanation, just the array.`;
 
-  console.log("[score-jobs] prompt mode block (first 100 chars):", prompt.slice(0, 100));
+  console.log("[score-jobs] prompt variant:", scoringMode, "| mode instructions (first 120):", modeInstructions.slice(0, 120));
 
   let scored = 0;
   try {
@@ -239,7 +258,9 @@ No preamble, no explanation, just the array.`;
       return NextResponse.json({ scored: 0, skipped });
     }
 
-    console.log("[score-jobs] Claude scored", results.length, "jobs");
+    const firstResult = results[0];
+    const firstJobTitle = batch.find((j) => j.job_id === firstResult.job_id)?.title ?? "unknown";
+    console.log("[score-jobs] mode:", scoringMode, "| scored", results.length, "jobs | first:", firstJobTitle, "→", firstResult.score);
 
     // Map job_id → source for expiry calculation
     const sourceMap = new Map(batch.map((j) => [j.job_id, j.source]));
