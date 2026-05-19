@@ -4,28 +4,10 @@ import { logError } from "../../../../lib/logError";
 
 export const dynamic = "force-dynamic";
 
-async function reverseGeocode(lat: number, lng: number): Promise<string> {
-  try {
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
-      { headers: { "Accept-Language": "en", "User-Agent": "WorkplaceMatch/1.0" } }
-    );
-    if (!res.ok) return "Missouri";
-    const data = await res.json();
-    const city =
-      data?.address?.city ??
-      data?.address?.town ??
-      data?.address?.village ??
-      data?.address?.county ??
-      "";
-    const state = data?.address?.state ?? "";
-    if (city && state) return `${city}, ${state}`;
-    if (state) return state;
-  } catch {
-    // fall through to fallback
-  }
-  return "Missouri";
-}
+// Bounding-box half-widths: ~100 miles in each direction.
+// Precise radius filtering is handled client-side in visibleExternalJobs.
+const LAT_DELTA = 1.5;
+const LNG_DELTA = 1.5;
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -44,9 +26,6 @@ export async function GET(request: Request) {
     return NextResponse.json({ jobs: [] });
   }
 
-  const region = await reverseGeocode(lat, lng);
-  console.log("[jobs/external] reading cache for region:", region);
-
   const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false }
   });
@@ -55,8 +34,11 @@ export async function GET(request: Request) {
     const { data, error } = await adminClient
       .from("adzuna_cache")
       .select("id, title, company, location, lat, lng, salary_min, salary_max, job_type, url, description")
-      .eq("region", region)
       .gt("expires_at", new Date().toISOString())
+      .gte("lat", lat - LAT_DELTA)
+      .lte("lat", lat + LAT_DELTA)
+      .gte("lng", lng - LNG_DELTA)
+      .lte("lng", lng + LNG_DELTA)
       .limit(1000);
 
     if (error) {
@@ -66,13 +48,13 @@ export async function GET(request: Request) {
         errorMessage: error.message,
         errorType: "database",
         severity: "medium",
-        metadata: { region }
+        metadata: { lat, lng }
       });
       return NextResponse.json({ jobs: [] });
     }
 
     const rows = data ?? [];
-    console.log("[jobs/external] cache returned:", rows.length, "jobs for region:", region);
+    console.log("[jobs/external] cache returned:", rows.length, "jobs near", lat, lng);
 
     const jobs = rows
       .filter((row) => row.lat != null && row.lng != null && isFinite(Number(row.lat)) && isFinite(Number(row.lng)))
@@ -100,7 +82,7 @@ export async function GET(request: Request) {
       errorMessage,
       errorType: "database",
       severity: "medium",
-      metadata: { region }
+      metadata: { lat, lng }
     });
     return NextResponse.json({ jobs: [] });
   }
