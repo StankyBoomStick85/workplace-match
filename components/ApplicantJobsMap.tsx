@@ -260,6 +260,7 @@ export function ApplicantJobsMap() {
   const [hasAcknowledgedPrivacyNotice, setHasAcknowledgedPrivacyNotice] = useState(true);
   const [minimumMatchPercent, setMinimumMatchPercent] = useState(0);
   const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
+  const [isResultsPanelOpen, setIsResultsPanelOpen] = useState(false);
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
   const [commuteMaxMinutes, setCommuteMaxMinutes] = useState<number | null>(null);
   const [jobTypeFilter, setJobTypeFilter] = useState("");
@@ -1490,7 +1491,10 @@ export function ApplicantJobsMap() {
             </span>
             <select
               value={sortMode}
-              onChange={(event) => setSortMode(event.target.value as JobSortMode)}
+              onChange={(event) => {
+                setSortMode(event.target.value as JobSortMode);
+                setIsResultsPanelOpen(true);
+              }}
               className="field"
             >
               {sortOptions.map((option) => (
@@ -1500,6 +1504,13 @@ export function ApplicantJobsMap() {
               ))}
             </select>
           </label>
+          <button
+            type="button"
+            onClick={() => setIsResultsPanelOpen(true)}
+            className="mt-2 w-full rounded-md bg-red-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
+          >
+            View results
+          </button>
           <div className="mt-4 border-t border-gray-200 pt-3">
             <button
               type="button"
@@ -1744,7 +1755,19 @@ export function ApplicantJobsMap() {
       </div>
       </div>
 
-      <div className="absolute bottom-4 right-4 top-4 z-[900] flex w-80 flex-col gap-3">
+      <div
+        className={`absolute bottom-4 right-4 top-4 z-[900] flex w-80 flex-col gap-3 transition-transform ${
+          isResultsPanelOpen ? "translate-x-0" : "translate-x-[calc(100%+1rem)]"
+        }`}
+      >
+        <button
+          type="button"
+          onClick={() => setIsResultsPanelOpen((current) => !current)}
+          aria-label={isResultsPanelOpen ? "Collapse results panel" : "Expand results panel"}
+          className="absolute left-0 top-1/2 z-10 -translate-x-full -translate-y-1/2 cursor-pointer rounded-l-xl bg-white/95 px-2 py-4 text-sm font-bold text-zinc-700 shadow-[-4px_4px_12px_rgba(0,0,0,0.08)] transition hover:bg-zinc-50 hover:shadow-[-5px_5px_14px_rgba(0,0,0,0.1)]"
+        >
+          {isResultsPanelOpen ? ">>" : "<<"}
+        </button>
         <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden rounded-lg border border-gray-200 bg-white/95 p-4 shadow-soft">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-800">Ranked results</p>
           <h2 className="mt-2 text-lg font-bold text-zinc-950">{visibleJobs.length} visible jobs</h2>
