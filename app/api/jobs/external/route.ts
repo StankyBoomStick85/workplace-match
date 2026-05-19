@@ -16,18 +16,41 @@ type AdzunaResult = {
   redirect_url: string;
 };
 
+async function reverseGeocode(lat: number, lng: number): Promise<string> {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
+      { headers: { "Accept-Language": "en", "User-Agent": "WorkplaceMatch/1.0" } }
+    );
+    if (!res.ok) return "Missouri";
+    const data = await res.json();
+    const city =
+      data?.address?.city ??
+      data?.address?.town ??
+      data?.address?.village ??
+      data?.address?.county ??
+      "";
+    const state = data?.address?.state ?? "";
+    if (city && state) return `${city}, ${state}`;
+    if (state) return state;
+  } catch {
+    // fall through to fallback
+  }
+  return "Missouri";
+}
+
 export async function GET(request: Request) {
   const appId = process.env.ADZUNA_APP_ID;
   const appKey = process.env.ADZUNA_APP_KEY;
 
-  console.log('[jobs/external] env check:', {
+  console.log("[jobs/external] env check:", {
     hasAppId: !!appId,
     hasAppKey: !!appKey,
     appIdValue: appId
   });
 
   if (!appId || !appKey) {
-    console.error("[jobs/external] aborting — ADZUNA_APP_ID and/or ADZUNA_APP_KEY are not set in environment variables");
+    console.error("[jobs/external] aborting — ADZUNA_APP_ID and/or ADZUNA_APP_KEY not set");
     return NextResponse.json({ error: "Adzuna not configured.", jobs: [] }, { status: 500 });
   }
 
@@ -41,21 +64,26 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "lat and lng are required." }, { status: 400 });
   }
 
-  const distanceKm = Math.round(radiusMiles * 1.60934);
+  const where = await reverseGeocode(lat, lng);
+  console.log("[jobs/external] resolved where:", where);
 
   const url = new URL("https://api.adzuna.com/v1/api/jobs/us/search/1");
   url.searchParams.set("app_id", appId);
   url.searchParams.set("app_key", appKey);
   url.searchParams.set("results_per_page", "50");
-  url.searchParams.set("lat", String(lat));
-  url.searchParams.set("lng", String(lng));
-  url.searchParams.set("distance", String(distanceKm));
-  if (keywords) url.searchParams.set("what", keywords);
+  url.searchParams.set("where", where);
+  url.searchParams.set("distance", String(Math.round(radiusMiles)));
+  url.searchParams.set("what", keywords);
 
-  console.log('[jobs/external] calling Adzuna URL:', url.toString());
+  console.log("[jobs/external] calling Adzuna URL:", url.toString());
 
   try {
-    const response = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+    const response = await fetch(url.toString(), {
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+      }
+    });
 
     if (!response.ok) {
       const body = await response.text();
@@ -78,23 +106,24 @@ export async function GET(request: Request) {
       }));
     }
 
-    const jobsWithCoords = rawJobs.filter((job) => isFinite(job.latitude ?? NaN) && isFinite(job.longitude ?? NaN));
+    const jobsWithCoords = rawJobs.filter(
+      (job) => isFinite(job.latitude ?? NaN) && isFinite(job.longitude ?? NaN)
+    );
     console.log("[jobs/external] jobs with coordinates:", jobsWithCoords.length, "of", rawJobs.length);
 
-    const jobs = jobsWithCoords
-      .map((job) => ({
-        id: `adzuna-${job.id}`,
-        title: job.title,
-        company: job.company?.display_name ?? "Unknown company",
-        location: job.location?.display_name ?? "",
-        lat: job.latitude as number,
-        lng: job.longitude as number,
-        salary_min: job.salary_min ?? null,
-        salary_max: job.salary_max ?? null,
-        job_type: job.contract_type ?? null,
-        url: job.redirect_url,
-        source: "adzuna" as const
-      }));
+    const jobs = jobsWithCoords.map((job) => ({
+      id: `adzuna-${job.id}`,
+      title: job.title,
+      company: job.company?.display_name ?? "Unknown company",
+      location: job.location?.display_name ?? "",
+      lat: job.latitude as number,
+      lng: job.longitude as number,
+      salary_min: job.salary_min ?? null,
+      salary_max: job.salary_max ?? null,
+      job_type: job.contract_type ?? null,
+      url: job.redirect_url,
+      source: "adzuna" as const
+    }));
 
     return NextResponse.json({ jobs });
   } catch (err) {
@@ -105,7 +134,7 @@ export async function GET(request: Request) {
       errorMessage,
       errorType: "api_error",
       severity: "medium",
-      metadata: { lat, lng, radiusMiles }
+      metadata: { lat, lng, radiusMiles, where }
     });
     return NextResponse.json({ jobs: [] });
   }
