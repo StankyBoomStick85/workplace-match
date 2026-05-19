@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useState, useEffect, type FormEvent } from "react";
 import { supabase } from "../lib/supabase";
 
 const PROFILE_PICTURE_BUCKET = "profile-pictures";
@@ -45,25 +45,31 @@ type ApplicantProfile = {
   futurePositions?: string;
   employerSummary?: string;
   summaryPriority?: string;
+  isApproved?: boolean;
+  correctionNotes?: string;
 };
 
 function splitSkills(value: string) {
   return value.split(",").map((s) => s.trim()).filter(Boolean);
 }
 
-function parseAccordionItems(text: string): Array<{ title: string; content: string }> {
+type AccordionEntry = { title: string; content: string; tag?: "VERIFIED" | "USER_PROVIDED" };
+
+function parseAccordionItems(text: string): AccordionEntry[] {
   return text
     .split(/\n(?=\*\*)/)
     .flatMap((part) => {
-      const match = part.match(/^\*\*(.+?)\*\*[:\s]*([\s\S]*)$/);
+      const match = part.match(/^\*\*(.+?)\*\*\s*(\[VERIFIED\]|\[USER_PROVIDED\])?\s*[:\s]*([\s\S]*)$/);
       if (!match) return [];
       const title = match[1].trim();
-      const content = match[2].trim();
-      return title && content ? [{ title, content }] : [];
+      const tagRaw = match[2] as string | undefined;
+      const content = match[3].trim();
+      const tag: AccordionEntry["tag"] = tagRaw === "[VERIFIED]" ? "VERIFIED" : tagRaw === "[USER_PROVIDED]" ? "USER_PROVIDED" : undefined;
+      return title && content ? [{ title, content, tag }] : [];
     });
 }
 
-function AccordionItem({ title, content }: { title: string; content: string }) {
+function AccordionItem({ title, content, tag }: { title: string; content: string; tag?: "VERIFIED" | "USER_PROVIDED" }) {
   const [isOpen, setIsOpen] = useState(false);
   return (
     <div className="rounded-md border border-gray-200">
@@ -72,7 +78,15 @@ function AccordionItem({ title, content }: { title: string; content: string }) {
         onClick={() => setIsOpen((v) => !v)}
         className="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-gray-50"
       >
-        <span className="text-sm font-semibold text-zinc-900">{title}</span>
+        <span className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold text-zinc-900">{title}</span>
+          {tag === "VERIFIED" && (
+            <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-800">Verified</span>
+          )}
+          {tag === "USER_PROVIDED" && (
+            <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-zinc-600">Self-Reported</span>
+          )}
+        </span>
         <svg
           className={`h-4 w-4 shrink-0 text-zinc-400 transition-transform ${isOpen ? "rotate-180" : ""}`}
           viewBox="0 0 24 24"
@@ -110,7 +124,7 @@ function AccordionSection({ title, text }: { title: string; text: string }) {
       <h3 className="text-sm font-semibold text-zinc-900">{title}</h3>
       <div className="mt-2 space-y-1">
         {items.map((item, i) => (
-          <AccordionItem key={i} title={item.title} content={item.content} />
+          <AccordionItem key={i} title={item.title} content={item.content} tag={item.tag} />
         ))}
       </div>
     </div>
@@ -167,6 +181,13 @@ type Props = {
 };
 
 function mapProfileRow(userEmail: string, row: NonNullable<ProfileRow>): ApplicantProfile {
+  console.log("[mapProfileRow] AI fields from raw row:", {
+    capability_summary: row.capability_summary,
+    recommended_position: row.recommended_position,
+    entry_point: row.entry_point,
+    future_positions: row.future_positions,
+    employer_summary: row.employer_summary,
+  });
   return {
     candidateEmail: userEmail,
     profilePictureUrl: (row.profile_picture_url as string) ?? "",
@@ -185,6 +206,8 @@ function mapProfileRow(userEmail: string, row: NonNullable<ProfileRow>): Applica
     futurePositions: (row.future_positions as string) ?? "",
     employerSummary: (row.employer_summary as string) ?? "",
     summaryPriority: (row.summary_priority as string) ?? "",
+    isApproved: (row.is_approved as boolean) ?? false,
+    correctionNotes: (row.correction_notes as string) ?? "",
   };
 }
 
@@ -205,6 +228,12 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [isApproved, setIsApproved] = useState(mappedInitial?.isApproved ?? false);
+  const [isApproving, setIsApproving] = useState(false);
+  const [isCorrectionModalOpen, setIsCorrectionModalOpen] = useState(false);
+  const [correctionMessage, setCorrectionMessage] = useState("");
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [regenerateError, setRegenerateError] = useState("");
 
   const rawDocMeta = initialProfile
     ? (Array.isArray((initialProfile as Record<string, unknown>).document_metadata)
@@ -461,18 +490,34 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
         return;
       }
 
-      setProfile((prev) =>
-        prev
-          ? {
-              ...prev,
-              capabilityProfile: result.capabilitySummary ?? "",
-              recommendedPosition: result.recommendedPosition ?? "",
-              entryPoint: result.entryPoint ?? "",
-              futurePositions: result.futurePositions ?? "",
-              employerSummary: result.employerSummary ?? "",
-            }
-          : prev
-      );
+      setProfile((prev) => {
+        const base = prev ?? ({
+          candidateEmail: userEmail,
+          profilePictureUrl: "",
+          fullName: "",
+          zipCode: "",
+          desiredJobType: "",
+          workPreference: "open",
+          capabilitySummary: "",
+          topSkills: [],
+          experienceLevel: "",
+          educationLevel: "",
+          updatedAt: new Date().toISOString(),
+          summaryPriority: "",
+          isApproved: false,
+          correctionNotes: "",
+        } as ApplicantProfile);
+        return {
+          ...base,
+          capabilityProfile: result.capabilitySummary ?? "",
+          recommendedPosition: result.recommendedPosition ?? "",
+          entryPoint: result.entryPoint ?? "",
+          futurePositions: result.futurePositions ?? "",
+          employerSummary: result.employerSummary ?? "",
+          isApproved: false,
+        };
+      });
+      setIsApproved(false);
     } catch {
       setGenerateError("An unexpected error occurred. Please try again.");
     } finally {
@@ -507,6 +552,90 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
       body: JSON.stringify({ resource: "candidate-profile", data: { summaryPriority: priority } }),
     });
   }
+
+  async function handleApprove() {
+    setIsApproving(true);
+    await fetch("/api/mvp/write", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resource: "candidate-profile", data: { isApproved: true } }),
+    });
+    setIsApproved(true);
+    setProfile((prev) => prev ? { ...prev, isApproved: true } : prev);
+    setIsApproving(false);
+  }
+
+  async function handleRegenerate() {
+    if (!correctionMessage.trim()) return;
+    setIsRegenerating(true);
+    setRegenerateError("");
+    try {
+      const res = await fetch("/api/applicant/correct-capability", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ correctionMessage }),
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        setRegenerateError(result.error ?? "Regeneration failed.");
+        return;
+      }
+      setProfile((prev) => prev ? {
+        ...prev,
+        capabilityProfile: result.capabilitySummary ?? "",
+        recommendedPosition: result.recommendedPosition ?? "",
+        entryPoint: result.entryPoint ?? "",
+        futurePositions: result.futurePositions ?? "",
+        employerSummary: result.employerSummary ?? "",
+        isApproved: false,
+      } : prev);
+      setIsApproved(false);
+      setIsCorrectionModalOpen(false);
+      setCorrectionMessage("");
+    } catch {
+      setRegenerateError("An unexpected error occurred.");
+    } finally {
+      setIsRegenerating(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!isCorrectionModalOpen) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") { setIsCorrectionModalOpen(false); setCorrectionMessage(""); setRegenerateError(""); }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isCorrectionModalOpen]);
+
+  // Client-side fallback: if SSR didn't deliver AI-generated fields (initialProfile was null
+  // or the server query failed silently), fetch fresh from the API on mount.
+  useEffect(() => {
+    const ssrHasAI = Boolean(
+      mappedInitial?.capabilityProfile ||
+      mappedInitial?.recommendedPosition ||
+      mappedInitial?.entryPoint ||
+      mappedInitial?.futurePositions ||
+      mappedInitial?.employerSummary
+    );
+    if (ssrHasAI) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/mvp/read?resource=candidate-profile");
+        if (!res.ok || cancelled) return;
+        const { data } = await res.json();
+        if (!data || cancelled) return;
+        const mapped = mapProfileRow(userEmail, data);
+        setProfile(mapped);
+        setIsApproved(mapped.isApproved ?? false);
+      } catch {
+        // non-fatal: component falls back to whatever initialProfile provided
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const hasGeneratedContent = Boolean(
     profile?.capabilityProfile || profile?.recommendedPosition || profile?.entryPoint || profile?.futurePositions || profile?.employerSummary
@@ -814,6 +943,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
 
         <div className="mt-6">
           {hasGeneratedContent ? (
+            <>
             <div className="space-y-6">
               {profile?.recommendedPosition ? <RecommendedPositionCard content={profile.recommendedPosition} /> : null}
               {profile?.entryPoint ? <EntryPointCard content={profile.entryPoint} /> : null}
@@ -885,6 +1015,36 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
               ) : null}
               {profile?.capabilityProfile ? <AccordionSection title="Capability Profile" text={profile.capabilityProfile} /> : null}
             </div>
+            <div className="mt-6 flex flex-wrap items-center gap-3 border-t border-gray-200 pt-5">
+              {isApproved ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-3 py-1 text-sm font-semibold text-green-800">
+                  <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                  </svg>
+                  Approved — Visible to Employers
+                </span>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleApprove}
+                    disabled={isApproving}
+                    className="inline-flex items-center gap-2 rounded-md bg-green-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-800 disabled:opacity-60"
+                  >
+                    {isApproving ? "Approving…" : "Approve"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsCorrectionModalOpen(true)}
+                    className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-gray-50"
+                  >
+                    Edit / Correct
+                  </button>
+                  <p className="text-xs text-zinc-500">Approve to make this profile visible to employers.</p>
+                </>
+              )}
+            </div>
+            </>
           ) : (
             <div className="rounded-md border border-gray-200 bg-gray-50 p-6 text-center">
               <p className="text-sm font-semibold text-zinc-700">No capability profile generated yet.</p>
@@ -896,6 +1056,70 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
         </div>
       </div>
     </section>
+
+    {isCorrectionModalOpen ? (
+      <div
+        className="fixed inset-0 z-[1300] flex items-center justify-center bg-black/50 p-4"
+        onClick={() => { setIsCorrectionModalOpen(false); setCorrectionMessage(""); setRegenerateError(""); }}
+      >
+        <div
+          className="w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-bold text-zinc-950">Correct Your Profile</h2>
+            <button
+              type="button"
+              onClick={() => { setIsCorrectionModalOpen(false); setCorrectionMessage(""); setRegenerateError(""); }}
+              className="rounded-md p-1 text-zinc-400 transition hover:text-zinc-700"
+              aria-label="Close"
+            >
+              <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+              </svg>
+            </button>
+          </div>
+          <p className="mt-2 text-sm text-zinc-600">
+            Describe what the AI got wrong. It will regenerate the full profile with your correction applied.
+          </p>
+          <textarea
+            className="mt-4 w-full rounded-md border border-gray-300 bg-white p-3 text-sm leading-6 text-zinc-900 shadow-sm outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-300"
+            rows={5}
+            placeholder="Tell the AI what to correct — wrong dates, incorrect certifications, missing info, etc."
+            value={correctionMessage}
+            onChange={(e) => setCorrectionMessage(e.target.value)}
+            disabled={isRegenerating}
+          />
+          {regenerateError ? <p className="mt-2 text-sm text-red-700">{regenerateError}</p> : null}
+          <div className="mt-4 flex justify-end gap-3">
+            <button
+              type="button"
+              onClick={() => { setIsCorrectionModalOpen(false); setCorrectionMessage(""); setRegenerateError(""); }}
+              disabled={isRegenerating}
+              className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-gray-50 disabled:opacity-40"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleRegenerate}
+              disabled={isRegenerating || !correctionMessage.trim()}
+              className="inline-flex items-center gap-2 rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950 disabled:opacity-60"
+            >
+              {isRegenerating ? (
+                <>
+                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Regenerating…
+                </>
+              ) : "Regenerate"}
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null}
     </>
   );
 }

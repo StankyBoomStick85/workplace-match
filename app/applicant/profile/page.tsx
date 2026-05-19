@@ -35,11 +35,19 @@ export default async function ApplicantProfilePage() {
 
   if (!userRecord || userRecord.role !== "candidate") redirect("/applicant/login");
 
-  const { data: profileData } = await adminClient
+  const { data: profileData, error: profileError } = await adminClient
     .from("candidate_profiles")
     .select("*")
     .eq("user_id", user.id)
     .maybeSingle();
+
+  if (profileError) {
+    console.error("[ApplicantProfilePage] Failed to load candidate_profiles row", {
+      userId: user.id,
+      error: profileError.message,
+      code: profileError.code,
+    });
+  }
 
   return (
     <ApplicantProfileForm
