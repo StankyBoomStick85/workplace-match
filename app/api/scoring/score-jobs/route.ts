@@ -203,48 +203,47 @@ export async function POST(request: Request) {
   );
 
   const prompt = scoringMode === "quick"
-    ? `You are evaluating whether a candidate can perform each job. For each job:
-1. Extract what the job actually requires from its title and description.
-2. Compare those requirements against the candidate's capability profile using semantic equivalence — "led small unit operations under pressure" covers "project management and crisis decision-making".
-3. Score = what percentage of this job's requirements does this candidate cover?
-4. Overqualification is not penalized. If they cover 90% of requirements, score is 90.
-Score reflects: capability coverage only, not utilization or career fit.
+    ? `You are a job match scorer. Score each job 0-100 based on whether this candidate can physically perform this job today.
 
-Candidate profile:
+CANDIDATE:
 - Capability summary: ${profile.capability_summary ?? "Not provided"}
 - Capability tags: ${capabilityTags}
-- Recommended position: ${profile.recommended_position ?? "Not provided"}
-- Experience level: ${profile.experience_level ?? "Not specified"}
-- Desired pay: ${profile.desired_pay_min ?? "Not specified"} ${profile.pay_type ?? ""}
-- Job types wanted: ${jobTypes}
-- Work preference: ${profile.work_preference ?? "Not specified"}
 
-Jobs to score (return score 0-100 for each):
+SCORING:
+- 80-95: They can clearly do this job with their current skills
+- 60-79: They can do this job with minimal adjustment
+- 40-59: Possible but requires some skill gap bridging
+- 20-39: Significant gaps but not impossible
+- 5-19: Missing required credentials or physical requirements
+- Overqualification is NOT a penalty - a senior leader who can work a warehouse shift scores 80+
+- Military experience = physical capability, discipline, reliability, teamwork, following/giving instructions
+
+Jobs to score:
 ${jobListJson}
 
-Return ONLY a JSON array: [{"job_id": string, "score": number}]
-No preamble, no explanation, just the array.`
-    : `You are evaluating job fit for a candidate. For each job:
-1. Extract what capabilities, skills, and experience the job actually requires from its title and description.
-2. Compare those requirements against the candidate's capability profile using semantic equivalence — "led small unit operations under pressure" is equivalent to "project management and crisis decision-making".
-3. Score = what percentage of this job's actual requirements does this candidate's translated capability profile genuinely cover?
-4. Then apply a utilization multiplier: if the job only uses a small fraction of the candidate's total capability, reduce the score proportionally. A warehouse picker role using 3 of 20 capabilities = low score regardless of whether they can do it.
-Score reflects: capability coverage × utilization fit.
+Return ONLY: [{"job_id": string, "score": number}]`
+    : `You are a job match scorer. Score each job 0-100 based on how well it fits this candidate's career level and trajectory.
 
-Candidate profile:
+CANDIDATE:
 - Capability summary: ${profile.capability_summary ?? "Not provided"}
-- Capability tags: ${capabilityTags}
-- Recommended position: ${profile.recommended_position ?? "Not provided"}
+- Recommended role: ${profile.recommended_position ?? "Not provided"}
 - Experience level: ${profile.experience_level ?? "Not specified"}
-- Desired pay: ${profile.desired_pay_min ?? "Not specified"} ${profile.pay_type ?? ""}
-- Job types wanted: ${jobTypes}
-- Work preference: ${profile.work_preference ?? "Not specified"}
+- Capability tags: ${capabilityTags}
 
-Jobs to score (return score 0-100 for each):
+SCORING:
+- 75-95: Strong career fit - role matches their experience level and uses core capabilities
+- 50-74: Partial fit - related field or one level below their experience
+- 25-49: Weak fit - significant underutilization but they could do the job
+- 10-24: Poor fit - gig work or entry-level for a senior professional
+- 5-15: Not qualified - requires credentials or specialization they don't have
+- NEVER score 0-4 unless the candidate is completely unqualified
+- Military leadership translates to: operations management, logistics, training, program management, strategy, team leadership
+- Spread your scores - not everything should be the same number
+
+Jobs to score:
 ${jobListJson}
 
-Return ONLY a JSON array: [{"job_id": string, "score": number}]
-No preamble, no explanation, just the array.`;
+Return ONLY: [{"job_id": string, "score": number}]`;
 
   console.log("[score-jobs] prompt variant:", scoringMode, "| prompt (first 120):", prompt.slice(0, 120));
 
