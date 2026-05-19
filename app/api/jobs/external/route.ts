@@ -43,21 +43,19 @@ export async function GET(request: Request) {
 
   const distanceKm = Math.round(radiusMiles * 1.60934);
 
-  const params = new URLSearchParams({
-    app_id: appId,
-    app_key: appKey,
-    results_per_page: "50",
-    latitude: String(lat),
-    longitude: String(lng),
-    distance_km: String(distanceKm),
-    ...(keywords ? { what: keywords } : {})
-  });
+  const url = new URL("https://api.adzuna.com/v1/api/jobs/us/search/1");
+  url.searchParams.set("app_id", appId);
+  url.searchParams.set("app_key", appKey);
+  url.searchParams.set("results_per_page", "50");
+  url.searchParams.set("lat", String(lat));
+  url.searchParams.set("lng", String(lng));
+  url.searchParams.set("distance", String(distanceKm));
+  if (keywords) url.searchParams.set("what", keywords);
 
-  const adzunaUrl = `https://api.adzuna.com/v1/api/jobs/us/search/1?${params.toString()}`;
-  console.log("[jobs/external] calling Adzuna:", adzunaUrl);
+  console.log('[jobs/external] calling Adzuna URL:', url.toString());
 
   try {
-    const response = await fetch(adzunaUrl, { headers: { Accept: "application/json" } });
+    const response = await fetch(url.toString(), { headers: { Accept: "application/json" } });
 
     if (!response.ok) {
       const body = await response.text();
