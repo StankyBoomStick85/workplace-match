@@ -834,7 +834,14 @@ export function ApplicantJobsMap() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ candidateId: userId, scoringMode: mode, forceRescore })
-    }).catch(() => {});
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (data.scores && Object.keys(data.scores).length > 0) {
+          setMatchScores(data.scores);
+        }
+      })
+      .catch(() => {});
 
     pollAttemptsRef.current = 0;
     const interval = setInterval(async () => {

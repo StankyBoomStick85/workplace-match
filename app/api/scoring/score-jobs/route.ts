@@ -102,14 +102,25 @@ export async function POST(request: Request) {
 
   // Fetch remaining non-expired scores to skip (empty when forceRescore deleted them)
   const scoredJobIds = new Set<string>();
+  const cachedScoreMap: Record<string, number> = {};
   if (!forceRescore) {
     const { data: existingScores } = await adminClient
       .from("match_scores")
-      .select("job_id")
+      .select("job_id, score")
       .eq("candidate_id", candidateId)
       .gt("expires_at", new Date().toISOString());
-    (existingScores ?? []).forEach((row: { job_id: string }) => scoredJobIds.add(row.job_id));
-    console.log("[score-jobs] cache: found", scoredJobIds.size, "existing scores, will skip");
+    const rows = existingScores ?? [];
+    // Detect corrupt scoring run: if every score is <= 3, delete and rescore fresh
+    if (rows.length > 0 && rows.every((r: { score: number }) => r.score <= 3)) {
+      console.log("[score-jobs] all", rows.length, "existing scores are <= 3 (corrupt) — deleting and rescoring");
+      await adminClient.from("match_scores").delete().eq("candidate_id", candidateId);
+    } else {
+      rows.forEach((r: { job_id: string; score: number }) => {
+        scoredJobIds.add(r.job_id);
+        cachedScoreMap[r.job_id] = r.score;
+      });
+      console.log("[score-jobs] cache: found", scoredJobIds.size, "existing scores, will skip");
+    }
   }
 
   // Build the list of jobs that need scoring (skip already-scored)
@@ -160,8 +171,8 @@ export async function POST(request: Request) {
   const skipped = scoredJobIds.size;
 
   if (jobsToScore.length === 0) {
-    console.log("[score-jobs] all jobs already scored, skipped:", skipped);
-    return NextResponse.json({ scored: 0, skipped });
+    console.log("[score-jobs] all jobs already scored, returning", Object.keys(cachedScoreMap).length, "cached scores");
+    return NextResponse.json({ scored: 0, skipped, scores: cachedScoreMap });
   }
 
   // Cap at 20 jobs per call — keeps prompt latency well under Vercel's timeout
@@ -299,6 +310,7 @@ No preamble, no explanation, just the array.`;
       } else {
         scored = scoreRows.length;
         console.log("[score-jobs] upserted", scored, "scores");
+        scoreRows.forEach((r) => { cachedScoreMap[r.job_id] = r.score; });
       }
     }
   } catch (err) {
@@ -319,7 +331,7 @@ No preamble, no explanation, just the array.`;
     return NextResponse.json({ scored: 0, skipped, error: errorMessage });
   }
 
-  return NextResponse.json({ scored, skipped });
+  return NextResponse.json({ scored, skipped, scores: cachedScoreMap });
 }
 
 function parseJsonArray(text: string): Array<{ job_id: string; score: number }> {
