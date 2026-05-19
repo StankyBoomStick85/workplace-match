@@ -54,6 +54,8 @@ export function AccountSettings({ role: roleProp, inModal = false }: { role?: Ro
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [showPasswordSection, setShowPasswordSection] = useState(false);
+  const [supportMessage, setSupportMessage] = useState("");
+  const [supportStatus, setSupportStatus] = useState<"idle" | "sending" | "success" | "error">("idle");
 
   useEffect(() => {
     loadSettings();
@@ -244,6 +246,30 @@ export function AccountSettings({ role: roleProp, inModal = false }: { role?: Ro
     }
   }
 
+  async function handleSupportSubmit() {
+    if (!supportMessage.trim()) return;
+    setSupportStatus("sending");
+    try {
+      const res = await fetch("/api/contact-support", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: supportMessage,
+          userName: settings.displayName,
+          userEmail: settings.email
+        })
+      });
+      if (res.ok) {
+        setSupportStatus("success");
+        setSupportMessage("");
+      } else {
+        setSupportStatus("error");
+      }
+    } catch {
+      setSupportStatus("error");
+    }
+  }
+
   return (
     <>
       {isEditing && !inModal ? (
@@ -426,6 +452,38 @@ export function AccountSettings({ role: roleProp, inModal = false }: { role?: Ro
           {message ? <p className="mt-4 text-sm font-semibold text-green-700">{message}</p> : null}
           {error ? <p className="mt-4 text-sm font-semibold text-red-700">{error}</p> : null}
         </form>
+      </section>
+
+      <section className={`${inModal ? "px-6 py-4" : "mx-auto max-w-5xl px-4 pb-12"}`}>
+        <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
+          <p className="text-sm font-bold uppercase tracking-[0.16em] text-red-800">Contact Support</p>
+          <p className="mt-2 text-sm text-zinc-600">
+            Have a question, found a bug, or have an idea? Let us know.
+          </p>
+          <div className="mt-4 space-y-3">
+            <textarea
+              value={supportMessage}
+              onChange={(e) => { setSupportMessage(e.target.value); if (supportStatus !== "idle") setSupportStatus("idle"); }}
+              placeholder="Have a question, found a bug, or have an idea? Let us know."
+              rows={4}
+              className="field w-full resize-none"
+            />
+            <button
+              type="button"
+              onClick={handleSupportSubmit}
+              disabled={supportStatus === "sending" || !supportMessage.trim()}
+              className="rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950 disabled:opacity-50"
+            >
+              {supportStatus === "sending" ? "Sending…" : "Send Message"}
+            </button>
+            {supportStatus === "success" ? (
+              <p className="text-sm font-semibold text-green-700">Message sent. We&apos;ll be in touch.</p>
+            ) : null}
+            {supportStatus === "error" ? (
+              <p className="text-sm font-semibold text-red-700">Something went wrong. Please try again.</p>
+            ) : null}
+          </div>
+        </div>
       </section>
     </>
   );
