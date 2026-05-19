@@ -34,6 +34,8 @@ export async function POST(request: Request) {
 
   const body = await request.json().catch(() => ({}));
   const candidateId = typeof body.candidateId === "string" ? body.candidateId : "";
+  const scoringMode: "quick" | "career" = body.scoringMode === "quick" ? "quick" : "career";
+  const forceRescore: boolean = body.forceRescore === true;
 
   if (!candidateId || candidateId !== user.id) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 403 });
@@ -84,14 +86,16 @@ export async function POST(request: Request) {
     console.error("[score-jobs] adzuna_cache fetch error:", cacheError);
   }
 
-  // Fetch existing non-expired scores for this candidate
-  const { data: existingScores } = await adminClient
-    .from("match_scores")
-    .select("job_id")
-    .eq("candidate_id", candidateId)
-    .gt("expires_at", new Date().toISOString());
-
-  const scoredJobIds = new Set((existingScores ?? []).map((row: { job_id: string }) => row.job_id));
+  // Fetch existing non-expired scores for this candidate (skipped when forceRescore)
+  const scoredJobIds = new Set<string>();
+  if (!forceRescore) {
+    const { data: existingScores } = await adminClient
+      .from("match_scores")
+      .select("job_id")
+      .eq("candidate_id", candidateId)
+      .gt("expires_at", new Date().toISOString());
+    (existingScores ?? []).forEach((row: { job_id: string }) => scoredJobIds.add(row.job_id));
+  }
 
   // Build the list of jobs that need scoring (skip already-scored)
   type JobToScore = {
@@ -166,7 +170,23 @@ export async function POST(request: Request) {
     2
   );
 
+  const modeInstructions = scoringMode === "quick"
+    ? `Mode: QUICK WORK
+Focus: Can this candidate physically and practically perform this job given their current skills?
+Key rule: Overqualification is NOT a penalty. A senior operations leader who CAN work a retail or warehouse shift should score 80+.
+Score high (70-95) whenever the candidate has the baseline capability to do the job.
+Score low (below 50) only when there is a genuine capability gap — the candidate lacks skills or physical/technical requirements to perform the role.
+Do NOT penalize for the role being below the candidate's career level. That is irrelevant in this mode.`
+    : `Mode: CAREER MOVE
+Focus: Does this job represent a good use of this candidate's full capability profile?
+Consider: skill utilization, compensation alignment, career trajectory, seniority match, and growth potential.
+A fast food or entry-level role for a senior operations leader should score 15-25% — it wastes their capability.
+A management, director, or leadership role that matches their experience and pay expectations should score 80-95%.
+Penalize significant underutilization of the candidate's skills and seniority.`;
+
   const prompt = `You are a job match scorer. Given a candidate profile and a list of jobs, return a JSON array of match scores.
+
+${modeInstructions}
 
 Candidate profile:
 - Capability summary: ${profile.capability_summary ?? "Not provided"}
@@ -180,12 +200,18 @@ Candidate profile:
 Jobs to score (return score 0-100 for each):
 ${jobListJson}
 
-Rules:
-- 90-100: exceptional match, candidate is highly qualified and role aligns perfectly
-- 70-89: strong match, candidate meets most requirements
-- 50-69: partial match, candidate has transferable capability
-- 30-49: low match, some overlap but significant gaps
-- 0-29: poor match
+Score ranges:
+${scoringMode === "quick"
+  ? `- 80-95: candidate clearly has the capability to perform this job
+- 60-79: candidate can likely do this job with minimal ramp-up
+- 40-59: candidate could probably do this job
+- 20-39: significant capability gap
+- 0-19: candidate lacks basic capability for this role`
+  : `- 85-100: exceptional career fit — role fully utilizes candidate's capability and trajectory
+- 65-84: strong career fit — good skill utilization with appropriate seniority and pay
+- 45-64: partial fit — some skill use but underutilizes or mismatches candidate profile
+- 25-44: poor fit — role underutilizes or mismatches candidate's career level
+- 0-24: very poor fit — major career step-down or capability mismatch`}
 
 Return ONLY a JSON array: [{"job_id": string, "score": number}]
 No preamble, no explanation, just the array.`;

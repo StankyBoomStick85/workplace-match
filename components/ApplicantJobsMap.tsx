@@ -127,6 +127,7 @@ type InterestState = "none" | "candidate_interested" | "mutual_match";
 type SelectedJobSource = "cluster" | "single" | "results" | null;
 type InterestStatusFilter = "all" | "not_marked" | "interested" | "matched";
 type JobSortMode = "balanced" | "best_match" | "closest";
+type ScoringMode = "career" | "quick";
 type JobFilters = {
   minimumMatchPercent: number;
   commuteMaxMinutes: number | null;
@@ -271,6 +272,7 @@ export function ApplicantJobsMap() {
   const [selectedResultJobId, setSelectedResultJobId] = useState("");
   const [geocodedZipCenter, setGeocodedZipCenter] = useState<Coordinates | null>(null);
   const [externalJobs, setExternalJobs] = useState<ExternalJob[]>([]);
+  const [scoringMode, setScoringMode] = useState<ScoringMode>("career");
   const [matchScores, setMatchScores] = useState<Record<string, number>>({});
   const [scoringInProgress, setScoringInProgress] = useState(false);
   const [savedExternalJobIds, setSavedExternalJobIds] = useState<Set<string>>(new Set());
@@ -406,7 +408,7 @@ export function ApplicantJobsMap() {
         console.log("[jobs/external] cache returned", data.jobs?.length ?? 0, "jobs");
         setExternalJobs(data.jobs ?? []);
 
-        if (userId) startScorePolling(userId);
+        if (userId) startScorePolling(userId, scoringMode);
       } catch (err) {
         if (cancelled) return;
         console.error("[jobs/external] error", err);
@@ -458,7 +460,7 @@ export function ApplicantJobsMap() {
         console.log("[custom-area] filtered", filtered.length, "of", data.jobs?.length ?? 0, "jobs inside polygon");
         setExternalJobs(filtered);
 
-        if (userId) startScorePolling(userId);
+        if (userId) startScorePolling(userId, scoringMode);
       } catch (err) {
         if (cancelled) return;
         console.error("[custom-area] error", err);
@@ -821,7 +823,7 @@ export function ApplicantJobsMap() {
     }
   }
 
-  function startScorePolling(userId: string) {
+  function startScorePolling(userId: string, mode: ScoringMode = "career", forceRescore = false) {
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
@@ -830,7 +832,7 @@ export function ApplicantJobsMap() {
     fetch("/api/scoring/score-jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ candidateId: userId })
+      body: JSON.stringify({ candidateId: userId, scoringMode: mode, forceRescore })
     }).catch(() => {});
 
     pollAttemptsRef.current = 0;
@@ -1611,6 +1613,37 @@ export function ApplicantJobsMap() {
                 </button>
               </div>
             ) : null}
+          </div>
+          <div className="mt-4 space-y-2 border-t border-gray-200 pt-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
+              Scoring mode
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {(["career", "quick"] as ScoringMode[]).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => {
+                    if (mode === scoringMode) return;
+                    setScoringMode(mode);
+                    setMatchScores({});
+                    if (account?.id) startScorePolling(account.id, mode, true);
+                  }}
+                  className={`rounded-md px-3 py-2 text-sm font-semibold transition ${
+                    scoringMode === mode
+                      ? "bg-red-900 text-white hover:bg-red-950"
+                      : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
+                  }`}
+                >
+                  {mode === "career" ? "Career Move" : "Quick Work"}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs leading-4 text-zinc-400">
+              {scoringMode === "career"
+                ? "Scores how well each job fits your career level and goals."
+                : "Scores whether you can do the job — seniority ignored."}
+            </p>
           </div>
           <div className="mt-4 space-y-3 border-t border-gray-200 pt-3">
             <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
