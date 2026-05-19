@@ -265,7 +265,8 @@ No preamble, no explanation, just the array.`;
 
     if (results.length === 0) {
       console.error("[score-jobs] Claude returned no parseable scores. Raw:", text.slice(0, 300));
-      return NextResponse.json({ scored: 0, skipped });
+      console.log("[score-jobs] returning (no-parse path): cachedScoreMap size =", Object.keys(cachedScoreMap).length);
+      return NextResponse.json({ scored: 0, skipped, scores: cachedScoreMap });
     }
 
     const firstResult = results[0];
@@ -318,7 +319,8 @@ No preamble, no explanation, just the array.`;
     const isTimeout = errorMessage.toLowerCase().includes("timeout") || (err instanceof Error && err.name === "APIConnectionTimeoutError");
     if (isTimeout) {
       console.warn("[score-jobs] Anthropic call timed out after 10s — returning partial results (scored:", scored, ")");
-      return NextResponse.json({ scored, skipped, timedOut: true });
+      console.log("[score-jobs] returning (timeout path): cachedScoreMap size =", Object.keys(cachedScoreMap).length);
+      return NextResponse.json({ scored, skipped, timedOut: true, scores: cachedScoreMap });
     }
     console.error("[score-jobs] error:", errorMessage);
     await logError({
@@ -328,9 +330,11 @@ No preamble, no explanation, just the array.`;
       severity: "medium",
       userId: candidateId
     });
-    return NextResponse.json({ scored: 0, skipped, error: errorMessage });
+    console.log("[score-jobs] returning (error path): cachedScoreMap size =", Object.keys(cachedScoreMap).length);
+    return NextResponse.json({ scored: 0, skipped, error: errorMessage, scores: cachedScoreMap });
   }
 
+  console.log("[score-jobs] returning (success path): cachedScoreMap size =", Object.keys(cachedScoreMap).length, "| scored this call:", scored, "| skipped (cached):", skipped);
   return NextResponse.json({ scored, skipped, scores: cachedScoreMap });
 }
 
