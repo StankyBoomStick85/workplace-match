@@ -185,31 +185,13 @@ export async function POST(request: Request) {
     2
   );
 
-  const modeInstructions = scoringMode === "quick"
-    ? `Mode: QUICK WORK
-Focus: Can this candidate physically and practically perform this job given their current skills?
-Key rule: Overqualification is NOT a penalty. A senior operations leader who CAN work a retail or warehouse shift should score 80+.
-Score high (70-95) whenever the candidate has the baseline capability to do the job.
-Score low (below 50) only when there is a genuine capability gap — the candidate lacks skills or physical/technical requirements to perform the role.
-Do NOT penalize for the role being below the candidate's career level. That is irrelevant in this mode.`
-    : `Mode: CAREER MOVE
-Focus: Is this job a worthy use of this candidate's full career capability and trajectory?
-
-STRICT UNDERUTILIZATION RULE: If this job significantly underutilizes the candidate's demonstrated experience, leadership, or capability level — score it 10-25%, period. Do NOT score it higher just because the candidate "can" do it physically. Career Move scores whether this job SHOULD be in their career trajectory.
-
-Concrete scoring examples:
-- Uber/Lyft driver, fast food worker, cashier, warehouse picker for a senior operations manager, military officer, or experienced professional → 10-20%
-- Any entry-level, unskilled, or gig role for a candidate with management or advanced experience → 10-25%
-- Skilled trade or individual contributor role for a senior director-level candidate → 25-40%
-- Mid-level supervisor role for a senior director-level candidate → 35-50%
-- Management role that reasonably matches the candidate's experience level → 60-75%
-- Director, VP, or leadership role that fully utilizes their highest capabilities → 80-95%
-
-If this job represents significant underutilization of the candidate's demonstrated capability level, score it 10-25%. Only score above 70% if the role genuinely challenges and utilizes their highest capabilities.`;
-
-  const prompt = `You are a job match scorer. Given a candidate profile and a list of jobs, return a JSON array of match scores.
-
-${modeInstructions}
+  const prompt = scoringMode === "quick"
+    ? `You are evaluating whether a candidate can perform each job. For each job:
+1. Extract what the job actually requires from its title and description.
+2. Compare those requirements against the candidate's capability profile using semantic equivalence — "led small unit operations under pressure" covers "project management and crisis decision-making".
+3. Score = what percentage of this job's requirements does this candidate cover?
+4. Overqualification is not penalized. If they cover 90% of requirements, score is 90.
+Score reflects: capability coverage only, not utilization or career fit.
 
 Candidate profile:
 - Capability summary: ${profile.capability_summary ?? "Not provided"}
@@ -223,23 +205,31 @@ Candidate profile:
 Jobs to score (return score 0-100 for each):
 ${jobListJson}
 
-Score ranges:
-${scoringMode === "quick"
-  ? `- 80-95: candidate clearly has the capability to perform this job
-- 60-79: candidate can likely do this job with minimal ramp-up
-- 40-59: candidate could probably do this job
-- 20-39: significant capability gap
-- 0-19: candidate lacks basic capability for this role`
-  : `- 85-100: exceptional career fit — role fully utilizes candidate's capability and trajectory
-- 65-84: strong career fit — good skill utilization with appropriate seniority and pay
-- 45-64: partial fit — some skill use but underutilizes or mismatches candidate profile
-- 25-44: poor fit — role underutilizes or mismatches candidate's career level
-- 0-24: very poor fit — major career step-down or capability mismatch`}
+Return ONLY a JSON array: [{"job_id": string, "score": number}]
+No preamble, no explanation, just the array.`
+    : `You are evaluating job fit for a candidate. For each job:
+1. Extract what capabilities, skills, and experience the job actually requires from its title and description.
+2. Compare those requirements against the candidate's capability profile using semantic equivalence — "led small unit operations under pressure" is equivalent to "project management and crisis decision-making".
+3. Score = what percentage of this job's actual requirements does this candidate's translated capability profile genuinely cover?
+4. Then apply a utilization multiplier: if the job only uses a small fraction of the candidate's total capability, reduce the score proportionally. A warehouse picker role using 3 of 20 capabilities = low score regardless of whether they can do it.
+Score reflects: capability coverage × utilization fit.
+
+Candidate profile:
+- Capability summary: ${profile.capability_summary ?? "Not provided"}
+- Capability tags: ${capabilityTags}
+- Recommended position: ${profile.recommended_position ?? "Not provided"}
+- Experience level: ${profile.experience_level ?? "Not specified"}
+- Desired pay: ${profile.desired_pay_min ?? "Not specified"} ${profile.pay_type ?? ""}
+- Job types wanted: ${jobTypes}
+- Work preference: ${profile.work_preference ?? "Not specified"}
+
+Jobs to score (return score 0-100 for each):
+${jobListJson}
 
 Return ONLY a JSON array: [{"job_id": string, "score": number}]
 No preamble, no explanation, just the array.`;
 
-  console.log("[score-jobs] prompt variant:", scoringMode, "| mode instructions (first 120):", modeInstructions.slice(0, 120));
+  console.log("[score-jobs] prompt variant:", scoringMode, "| prompt (first 120):", prompt.slice(0, 120));
 
   let scored = 0;
   try {
