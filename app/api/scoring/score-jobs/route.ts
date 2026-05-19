@@ -170,6 +170,12 @@ export async function POST(request: Request) {
   const capabilityTags = Array.isArray(profile.capability_tags) ? profile.capability_tags.join(", ") : "Not specified";
   const jobTypes = Array.isArray(profile.job_types) ? profile.job_types.join(", ") : "Not specified";
 
+  console.log("[score-jobs] profile fields sent to Claude:");
+  console.log("  capability_summary:", profile.capability_summary ?? "(null)");
+  console.log("  recommended_position:", profile.recommended_position ?? "(null)");
+  console.log("  experience_level:", profile.experience_level ?? "(null)");
+  console.log("  capabilityTags:", capabilityTags);
+
   const jobListJson = JSON.stringify(
     batch.map((job) => ({
       job_id: job.job_id,
