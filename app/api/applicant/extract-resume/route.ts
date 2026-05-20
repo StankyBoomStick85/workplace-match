@@ -113,7 +113,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ extracted: null, message: "Could not extract text from Word document." });
       }
       const message = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
+        model: "claude-haiku-4-5-20251001",
         max_tokens: 800,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: `${USER_PROMPT}\n\n---\n\n${docText}` }],
@@ -121,7 +121,7 @@ export async function POST(request: Request) {
       rawText = message.content.find((b) => b.type === "text")?.text ?? "";
     } else if (isPdf) {
       const message = await anthropic.beta.messages.create({
-        model: "claude-sonnet-4-6",
+        model: "claude-haiku-4-5-20251001",
         max_tokens: 800,
         betas: ["pdfs-2024-09-25"],
         system: SYSTEM_PROMPT,
@@ -135,7 +135,7 @@ export async function POST(request: Request) {
     } else {
       const mediaType = contentType as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
       const message = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
+        model: "claude-haiku-4-5-20251001",
         max_tokens: 800,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: [
