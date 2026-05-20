@@ -196,7 +196,7 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
   if (storedDocs.length > 0) {
     const lines: string[] = [];
     if (docBlocks.length > 0) {
-      lines.push("The applicant has provided source documents attached above. Treat them as primary evidence — specific data in these documents takes precedence over the self-reported fields below.");
+      lines.push("The applicant has provided source documents attached above. Read every document completely before generating any output. Synthesize across ALL documents with equal weight — do not let any single document dominate. Military service documents (DD-214, NCOERs, OERs, awards, performance evaluations) carry heavy weight and must be prominently reflected in the capability profile and every summary section. Resumes, certificates, and academic transcripts carry equal weight to each other. The final output must reflect the full combined picture of every submitted document. Specific data in these documents takes precedence over the self-reported fields below. If military service appears in any document, it must be prominently reflected in the short capability summary.");
     }
     if (unreadableDocLabels.length > 0) {
       lines.push(`The following documents were uploaded but could not be attached automatically: ${unreadableDocLabels.join(", ")}. Note them as additional context.`);
@@ -220,7 +220,7 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
         max_tokens: 4096,
         betas: ["pdfs-2024-09-25"],
         system:
-          "You are a veteran career counselor and hiring specialist who translates non-traditional, military, and blue-collar backgrounds into civilian corporate language that hiring managers can immediately understand and act on. You are precise, specific, and never use filler language.",
+          "You are a veteran career counselor and hiring specialist who translates non-traditional, military, and blue-collar backgrounds into civilian corporate language that hiring managers can immediately understand and act on. You are precise, specific, and never use filler language.\n\nWhen documents are provided, you must synthesize across ALL submitted documents equally regardless of upload order. Military service documents — DD-214s, NCOERs, OERs, awards, and performance evaluations — carry heavy weight and must be reflected prominently in every output section. Resumes, certificates, and academic transcripts carry equal weight to each other. No single document may dominate the output. The capability profile and all summaries must reflect the full combined picture of every document submitted. If any document reveals military service, that service must appear prominently in the short capability summary.",
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         messages: [{ role: "user", content: messageContent as any }],
       });
@@ -230,7 +230,7 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
         model: "claude-sonnet-4-6",
         max_tokens: docBlocks.length > 0 ? 4096 : 2048,
         system:
-          "You are a veteran career counselor and hiring specialist who translates non-traditional, military, and blue-collar backgrounds into civilian corporate language that hiring managers can immediately understand and act on. You are precise, specific, and never use filler language.",
+          "You are a veteran career counselor and hiring specialist who translates non-traditional, military, and blue-collar backgrounds into civilian corporate language that hiring managers can immediately understand and act on. You are precise, specific, and never use filler language.\n\nWhen documents are provided, you must synthesize across ALL submitted documents equally regardless of upload order. Military service documents — DD-214s, NCOERs, OERs, awards, and performance evaluations — carry heavy weight and must be reflected prominently in every output section. Resumes, certificates, and academic transcripts carry equal weight to each other. No single document may dominate the output. The capability profile and all summaries must reflect the full combined picture of every document submitted. If any document reveals military service, that service must appear prominently in the short capability summary.",
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         messages: [{ role: "user", content: messageContent as any }],
       });
