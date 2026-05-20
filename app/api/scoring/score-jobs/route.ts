@@ -34,7 +34,8 @@ export async function POST(request: Request) {
 
   const body = await request.json().catch(() => ({}));
   const candidateId = typeof body.candidateId === "string" ? body.candidateId : "";
-  const scoringMode: "quick" | "career" = body.scoringMode === "quick" ? "quick" : "career";
+  const scoringMode: "quick" | "career" | "gig" =
+    body.scoringMode === "quick" ? "quick" : body.scoringMode === "gig" ? "gig" : "career";
   const forceRescore: boolean = body.forceRescore === true;
   const onlyCached: boolean = body.onlyCached === true;
   const priorityJobIds: string[] = Array.isArray(body.priorityJobIds) ? body.priorityJobIds : [];
@@ -218,7 +219,28 @@ export async function POST(request: Request) {
     2
   );
 
-  const prompt = scoringMode === "quick"
+  const prompt = scoringMode === "gig"
+    ? `You are a job match scorer for gig and flexible work. Score each job 0-100 based on how accessible and available this work is for the candidate.
+
+CANDIDATE:
+- Capability summary: ${profile.capability_summary ?? "Not provided"}
+- Capability tags: ${capabilityTags}
+
+SCORING:
+- 80-95: Classic gig/flex role — basic mobility and reliability are sufficient, candidate can start immediately
+- 60-79: Light skill requirement but candidate clearly qualifies
+- 40-59: Some barrier (vehicle type, license, equipment) but likely surmountable
+- 20-39: Significant requirement mismatch (CDL, heavy equipment, specialized certification)
+- 5-19: Not gig work or candidate is clearly unqualified
+- Availability and flexibility matter more than career fit or seniority
+- Never penalize overqualification — a senior professional can drive for DoorDash
+- Spread your scores — not every gig job is identical
+
+Jobs to score:
+${jobListJson}
+
+Return ONLY: [{"job_id": string, "score": number}]`
+    : scoringMode === "quick"
     ? `You are a job match scorer. Score each job 0-100 based on whether this candidate can physically perform this job today.
 
 CANDIDATE:

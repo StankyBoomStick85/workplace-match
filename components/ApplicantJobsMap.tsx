@@ -127,7 +127,7 @@ type InterestState = "none" | "candidate_interested" | "mutual_match";
 type SelectedJobSource = "cluster" | "single" | "results" | null;
 type InterestStatusFilter = "all" | "not_marked" | "interested" | "matched";
 type JobSortMode = "balanced" | "best_match" | "closest";
-type ScoringMode = "career" | "quick";
+type ScoringMode = "career" | "quick" | "all" | "gig";
 type JobFilters = {
   minimumMatchPercent: number;
   commuteMaxMinutes: number | null;
@@ -860,6 +860,9 @@ export function ApplicantJobsMap() {
           }
         }
 
+        // "all" mode only needs cached scores — no Claude scoring required
+        if (mode === "all") return;
+
         // Phase 2: score all remaining jobs, always sending visible viewport IDs
         // so they land in the first batch of 20 on each call.
         while (true) {
@@ -1375,16 +1378,20 @@ export function ApplicantJobsMap() {
         })}
 
         {visibleExternalJobs.filter((job) => {
+          if (scoringMode === "all") return true;
+          if (scoringMode === "gig") return isGigJob(job);
           const score = matchScores[job.id];
           return score === undefined || score >= 50;
         }).map((job) => {
           const extScore = matchScores[job.id];
           const isSaved = savedExternalJobIds.has(job.id);
+          const pinVariant: "default" | "neutral" | "gig" =
+            scoringMode === "all" ? "neutral" : scoringMode === "gig" ? "gig" : "default";
           return (
             <Marker
               key={job.id}
               position={[job.lat, job.lng]}
-              icon={createExternalJobIcon(false, extScore, scoringInProgress)}
+              icon={createExternalJobIcon(false, extScore, scoringMode !== "all" && scoringInProgress, pinVariant)}
             >
               <Popup maxWidth={340}>
                 <div className="box-border w-[min(20rem,calc(100vw-6rem))] max-w-full space-y-2 px-1 py-1">
@@ -1660,28 +1667,45 @@ export function ApplicantJobsMap() {
               Scoring mode
             </p>
             <div className="grid grid-cols-2 gap-2">
-              {(["career", "quick"] as ScoringMode[]).map((mode) => (
+              {([
+                { mode: "all" as ScoringMode, label: "All Jobs" },
+                { mode: "gig" as ScoringMode, label: "Gig Work" },
+                { mode: "quick" as ScoringMode, label: "Quick Work" },
+                { mode: "career" as ScoringMode, label: "Career Move" },
+              ]).map(({ mode, label }) => (
                 <button
                   key={mode}
                   type="button"
                   onClick={() => {
                     if (mode === scoringMode) return;
                     setScoringMode(mode);
-                    setMatchScores({});
-                    if (account?.id) startScorePolling(account.id, mode, true);
+                    if (mode === "all") {
+                      // keep existing scores, no rescore needed
+                    } else {
+                      setMatchScores({});
+                      if (account?.id) startScorePolling(account.id, mode, true);
+                    }
                   }}
                   className={`rounded-md px-3 py-2 text-sm font-semibold transition ${
                     scoringMode === mode
-                      ? "bg-red-900 text-white hover:bg-red-950"
+                      ? mode === "all"
+                        ? "bg-gray-500 text-white"
+                        : mode === "gig"
+                        ? "bg-amber-700 text-white hover:bg-amber-800"
+                        : "bg-red-900 text-white hover:bg-red-950"
                       : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
                   }`}
                 >
-                  {mode === "career" ? "Career Move" : "Quick Work"}
+                  {label}
                 </button>
               ))}
             </div>
             <p className="text-xs leading-4 text-zinc-400">
-              {scoringMode === "career"
+              {scoringMode === "all"
+                ? "Shows every job in range — unfiltered, no scoring required."
+                : scoringMode === "gig"
+                ? "Delivery, rideshare, flex, and temp work scored by proximity."
+                : scoringMode === "career"
                 ? "Scores how well each job fits your career level and goals."
                 : "Scores whether you can do the job — seniority ignored."}
             </p>
@@ -3094,21 +3118,32 @@ function createGroupedJobIcon(count: number, interestState: InterestState, isHig
   });
 }
 
-function createExternalJobIcon(isHighlighted = false, score?: number, scoringInProgress = false) {
+const GIG_KEYWORDS = ["uber", "lyft", "doordash", "delivery", "driver", "dasher", "courier", "rideshare", "temporary", "temp ", "flex", "gig"];
+
+function isGigJob(job: ExternalJob): boolean {
+  const text = `${job.title} ${job.job_type ?? ""}`.toLowerCase();
+  return GIG_KEYWORDS.some((kw) => text.includes(kw));
+}
+
+function createExternalJobIcon(isHighlighted = false, score?: number, scoringInProgress = false, variant: "default" | "neutral" | "gig" = "default") {
+  const bgColor = variant === "neutral" ? "#6b7280" : variant === "gig" ? "#b45309" : "#334155";
+  const glowRgb = variant === "neutral" ? "107,114,128" : variant === "gig" ? "180,83,9" : "51,65,85";
   const glow = isHighlighted
-    ? "0 0 0 4px rgba(51,65,85,0.28), 0 8px 20px rgba(0,0,0,0.25)"
+    ? `0 0 0 4px rgba(${glowRgb},0.28), 0 8px 20px rgba(0,0,0,0.25)`
     : "0 4px 12px rgba(0,0,0,0.22)";
   const scale = isHighlighted ? "scale(1.12)" : "scale(1)";
   const label =
     score !== undefined
       ? `${score}%`
+      : variant === "neutral"
+      ? "—"
       : scoringInProgress
       ? "···"
       : "EXT";
   const fontSize = score !== undefined ? "11px" : "10px";
   return L.divIcon({
     className: "",
-    html: `<div style="display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9999px;border:2.5px solid white;background:#334155;color:white;font-size:${fontSize};font-weight:800;letter-spacing:0.04em;box-shadow:${glow};transform:${scale};transition:transform 150ms ease,box-shadow 150ms ease;">${label}</div>`,
+    html: `<div style="display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9999px;border:2.5px solid white;background:${bgColor};color:white;font-size:${fontSize};font-weight:800;letter-spacing:0.04em;box-shadow:${glow};transform:${scale};transition:transform 150ms ease,box-shadow 150ms ease;">${label}</div>`,
     iconSize: [36, 36],
     iconAnchor: [18, 18],
     popupAnchor: [0, -18]
