@@ -28,29 +28,26 @@ export default function LandingPage() {
             Capability-first hiring.
           </h1>
 
-          <div className="mt-6 flex flex-wrap justify-center gap-2">
-            {["Verified Skills", "Mutual Interest", "Real Alignment"].map((label) => (
-              <span
-                key={label}
-                className="rounded-full border border-zinc-200 bg-zinc-100 px-4 py-1.5 text-sm font-medium text-zinc-700"
-              >
-                {label}
-              </span>
-            ))}
-          </div>
+          <p className="mt-6 text-sm text-zinc-500">
+            Verified Skills · Verified Education · Verified Experience
+          </p>
+
+          <p className="mt-3 text-base font-semibold text-zinc-800">
+            Unlocked Potential
+          </p>
 
           <div className="mt-10 flex flex-col gap-3 sm:flex-row">
             <Link
               href="/applicant/signup"
-              className="inline-flex items-center justify-center rounded-md bg-red-900 px-7 py-3 text-base font-semibold text-white transition hover:bg-red-950"
+              className="inline-flex items-center justify-center rounded-md bg-red-900 px-10 py-4 text-lg font-semibold text-white transition hover:bg-red-950"
             >
-              I&rsquo;m Looking for Work
+              Looking for Work
             </Link>
             <Link
               href="/employer/signup"
-              className="inline-flex items-center justify-center rounded-md border border-zinc-800 bg-white px-7 py-3 text-base font-semibold text-zinc-950 transition hover:bg-zinc-50"
+              className="inline-flex items-center justify-center rounded-md bg-red-900 px-10 py-4 text-lg font-semibold text-white transition hover:bg-red-950"
             >
-              I&rsquo;m Hiring
+              Looking to Hire
             </Link>
           </div>
         </div>
