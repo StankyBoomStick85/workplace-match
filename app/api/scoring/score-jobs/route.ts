@@ -178,6 +178,40 @@ export async function POST(request: Request) {
     return NextResponse.json({ scored: 0, skipped, scores: cachedScoreMap, remaining: 0 });
   }
 
+  // Career Move: pre-filter gig/delivery jobs — assign score 0 without calling Claude
+  const GIG_TITLE_KEYWORDS = ["uber", "lyft", "doordash", "delivery", "driver", "dasher", "courier", "rideshare"];
+  if (scoringMode === "career") {
+    const gigJobIds: string[] = [];
+    const nonGigJobs: typeof jobsToScore = [];
+    for (const job of jobsToScore) {
+      const titleLower = job.title.toLowerCase();
+      if (GIG_TITLE_KEYWORDS.some((kw) => titleLower.includes(kw))) {
+        gigJobIds.push(job.job_id);
+      } else {
+        nonGigJobs.push(job);
+      }
+    }
+    if (gigJobIds.length > 0) {
+      console.log("[score-jobs] career mode: pre-filtering", gigJobIds.length, "gig jobs → score 0");
+      const wpmExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      const adzunaExpiry = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString();
+      const gigRows = gigJobIds.map((id) => {
+        const src = jobsToScore.find((j) => j.job_id === id)?.source ?? "adzuna";
+        return {
+          candidate_id: candidateId,
+          job_id: id,
+          job_source: src,
+          score: 0,
+          scored_at: new Date().toISOString(),
+          expires_at: src === "wpm" ? wpmExpiry : adzunaExpiry
+        };
+      });
+      await adminClient.from("match_scores").upsert(gigRows, { onConflict: "candidate_id,job_id" });
+      gigJobIds.forEach((id) => { cachedScoreMap[id] = 0; });
+      jobsToScore.splice(0, jobsToScore.length, ...nonGigJobs);
+    }
+  }
+
   // Fast path: caller only wants already-stored scores, no Claude call needed
   if (onlyCached) {
     console.log("[score-jobs] onlyCached=true, returning", Object.keys(cachedScoreMap).length, "cached scores, remaining:", jobsToScore.length);
@@ -260,7 +294,7 @@ Jobs to score:
 ${jobListJson}
 
 Return ONLY: [{"job_id": string, "score": number}]`
-    : `You are a job match scorer. Score each job 0-100 based on how well it fits this candidate's career level and trajectory.
+    : `You are a job match scorer. Score each job 0-100 based on how well it represents genuine career advancement or growth for this candidate.
 
 CANDIDATE:
 - Capability summary: ${profile.capability_summary ?? "Not provided"}
@@ -269,12 +303,13 @@ CANDIDATE:
 - Capability tags: ${capabilityTags}
 
 SCORING:
-- 75-95: Strong career fit - role matches their experience level and uses core capabilities
-- 50-74: Partial fit - related field or one level below their experience
-- 25-49: Weak fit - significant underutilization but they could do the job
-- 10-24: Poor fit - gig work or entry-level for a senior professional
-- 5-15: Not qualified - requires credentials or specialization they don't have
-- NEVER score 0-4 unless the candidate is completely unqualified
+- 75-95: Strong career fit - role matches their experience level and advances their trajectory
+- 50-74: Partial fit - related field or one level below their demonstrated experience
+- 25-49: Weak fit - significant underutilization relative to their background
+- 10-24: Poor fit - entry-level role for a candidate with meaningful experience
+- 0: Gig, delivery, rideshare, or courier role (Uber, Lyft, DoorDash, dasher, driver, courier) — always score 0 in Career Move mode regardless of capability match
+- Score must reflect advancement potential, not just whether the candidate can physically do the job
+- A candidate with senior leadership, military command, or management experience scores LOW on entry-level roles even if technically capable — capability is not fit
 - Military leadership translates to: operations management, logistics, training, program management, strategy, team leadership
 - Spread your scores - not everything should be the same number
 
