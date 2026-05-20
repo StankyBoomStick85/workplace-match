@@ -86,6 +86,7 @@ export async function POST(request: Request) {
         .gt("expires_at", new Date().toISOString());
       console.log("[refresh-adzuna-cache] cache fresh, count:", count);
       await triggerUSAJobsRefresh(request);
+      void triggerMuseRefresh(request);
       return NextResponse.json({ cached: count ?? 0, fresh: true, region });
     }
 
@@ -210,6 +211,7 @@ export async function POST(request: Request) {
 
     console.log("[refresh-adzuna-cache] upserted:", rows.length, "rows");
     await triggerUSAJobsRefresh(request);
+    void triggerMuseRefresh(request);
     return NextResponse.json({ cached: rows.length, fresh: false, region });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
@@ -232,6 +234,17 @@ async function triggerUSAJobsRefresh(request: Request): Promise<void> {
     console.log("[refresh-adzuna-cache] USAJobs refresh:", data.cached, "cached, fresh:", data.fresh);
   } catch (err) {
     console.error("[refresh-adzuna-cache] USAJobs refresh failed:", err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function triggerMuseRefresh(request: Request): Promise<void> {
+  try {
+    const baseUrl = new URL(request.url).origin;
+    const data = await fetch(`${baseUrl}/api/scoring/refresh-muse-cache`, { method: "POST" })
+      .then((r) => r.json());
+    console.log("[refresh-adzuna-cache] Muse refresh:", data.cached, "cached, fresh:", data.fresh);
+  } catch (err) {
+    console.error("[refresh-adzuna-cache] Muse refresh failed:", err instanceof Error ? err.message : String(err));
   }
 }
 
