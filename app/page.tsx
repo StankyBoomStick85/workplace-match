@@ -1,4 +1,4 @@
-import { ArrowRight, BriefcaseBusiness, MapPin, Scale, Sparkles } from "lucide-react";
+import { MapPin, Scale, Sparkles } from "lucide-react";
 import Link from "next/link";
 
 const features = [
@@ -23,60 +23,35 @@ export default function LandingPage() {
   return (
     <>
       <section className="border-b border-gray-200 bg-white">
-        <div className="mx-auto grid max-w-6xl items-center gap-6 px-4 py-8 md:min-h-[560px] md:gap-10 md:py-14 lg:grid-cols-[1.05fr_0.95fr]">
-          <div>
-            <p className="mb-4 text-sm font-semibold uppercase tracking-[0.18em] text-red-800">
-              Capability-based matching
-            </p>
-            <h1 className="max-w-3xl text-3xl font-bold leading-tight tracking-normal text-zinc-950 sm:text-4xl md:text-5xl lg:text-6xl">
-              Show capability, not narratives.
-            </h1>
-            <p className="mt-5 max-w-2xl text-lg leading-8 text-zinc-700">
-              Workplace Match connects applicants and employers using practical
-              signals: capability, location, pay, and fit.
-            </p>
-            <div className="mt-6 flex flex-wrap gap-3 md:mt-8">
-              <Link
-                href="/applicant/signup"
-                className="inline-flex items-center justify-center gap-2 rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
+        <div className="mx-auto flex max-w-3xl flex-col items-center px-4 py-16 text-center md:py-24">
+          <h1 className="text-4xl font-bold leading-tight tracking-tight text-zinc-950 sm:text-5xl md:text-6xl">
+            Capability-first hiring.
+          </h1>
+
+          <div className="mt-6 flex flex-wrap justify-center gap-2">
+            {["Verified Skills", "Mutual Interest", "Real Alignment"].map((label) => (
+              <span
+                key={label}
+                className="rounded-full border border-zinc-200 bg-zinc-100 px-4 py-1.5 text-sm font-medium text-zinc-700"
               >
-                I&rsquo;m looking for work <ArrowRight size={17} />
-              </Link>
-              <Link
-                href="/employer/signup"
-                className="inline-flex items-center justify-center rounded-md border border-zinc-800 bg-white px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-50"
-              >
-                I&rsquo;m hiring
-              </Link>
-            </div>
+                {label}
+              </span>
+            ))}
           </div>
 
-          <div className="hidden rounded-lg border border-gray-200 bg-gray-50 p-5 shadow-soft md:block">
-            <div className="mb-5 flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-md bg-white text-red-800">
-                <BriefcaseBusiness size={22} />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-zinc-950">Example match</p>
-                <p className="text-sm text-zinc-600">Operations associate</p>
-              </div>
-            </div>
-            <div className="space-y-3 text-sm">
-              {[
-                ["Location", "Austin, TX"],
-                ["Capability", "Scheduling, inventory, customer service"],
-                ["Pay range", "$22-$28/hr"],
-                ["Fit score", "86%"]
-              ].map(([label, value]) => (
-                <div
-                  key={label}
-                  className="flex items-center justify-between gap-4 rounded-md border border-gray-200 bg-white px-3 py-3"
-                >
-                  <span className="text-zinc-600">{label}</span>
-                  <span className="text-right font-semibold text-zinc-950">{value}</span>
-                </div>
-              ))}
-            </div>
+          <div className="mt-10 flex flex-col gap-3 sm:flex-row">
+            <Link
+              href="/applicant/signup"
+              className="inline-flex items-center justify-center rounded-md bg-red-900 px-7 py-3 text-base font-semibold text-white transition hover:bg-red-950"
+            >
+              I&rsquo;m Looking for Work
+            </Link>
+            <Link
+              href="/employer/signup"
+              className="inline-flex items-center justify-center rounded-md border border-zinc-800 bg-white px-7 py-3 text-base font-semibold text-zinc-950 transition hover:bg-zinc-50"
+            >
+              I&rsquo;m Hiring
+            </Link>
           </div>
         </div>
       </section>
