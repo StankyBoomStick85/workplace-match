@@ -279,6 +279,7 @@ export function ApplicantJobsMap() {
   const [savedExternalJobIds, setSavedExternalJobIds] = useState<Set<string>>(new Set());
   const pollAttemptsRef = useRef(0);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const visibleExternalJobsRef = useRef<ExternalJob[]>([]);
   const clusterMarkerRefs = useRef<Record<string, L.Marker | null>>({});
   const singleJobMarkerRefs = useRef<Record<string, L.Marker | null>>({});
   const detailPanelRef = useRef<HTMLDivElement | null>(null);
@@ -541,6 +542,12 @@ export function ApplicantJobsMap() {
     console.log("[visibleExternalJobs] filtered result:", filtered.length, "of", externalJobs.length);
     return filtered;
   }, [externalJobs, searchMiles, applicantAreaCenter, hasCustomArea]);
+
+  // Keep ref current so startScorePolling always reads the latest viewport
+  useEffect(() => {
+    visibleExternalJobsRef.current = visibleExternalJobs;
+  }, [visibleExternalJobs]);
+
   const selectedResultJob = useMemo(
     () => jobs.find((job) => job.id === selectedResultJobId) ?? null,
     [selectedResultJobId, jobs]
@@ -834,16 +841,38 @@ export function ApplicantJobsMap() {
     (async () => {
       let firstCall = true;
       try {
-        // Loop until the server scores 0 new jobs (all remaining are already cached)
+        // Phase 1: immediately surface any scores already stored in the DB —
+        // no Claude call, no wait. Users see cached scores before batch 1 fires.
+        if (!forceRescore) {
+          console.log("[startScorePolling] phase 1 — fetching cached scores");
+          const cachedRes = await fetch("/api/scoring/score-jobs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ candidateId: userId, scoringMode: mode, onlyCached: true })
+          });
+          if (cachedRes.ok) {
+            const cachedData = await cachedRes.json();
+            if (cachedData.scores && Object.keys(cachedData.scores).length > 0) {
+              setMatchScores((prev) => ({ ...prev, ...cachedData.scores }));
+            }
+            console.log("[startScorePolling] phase 1 done | cached:", Object.keys(cachedData.scores ?? {}).length, "remaining:", cachedData.remaining);
+            if ((cachedData.remaining ?? 1) === 0) return;
+          }
+        }
+
+        // Phase 2: score all remaining jobs, always sending visible viewport IDs
+        // so they land in the first batch of 20 on each call.
         while (true) {
-          console.log("[startScorePolling] batch fetch | mode:", mode, "forceRescore:", firstCall && forceRescore);
+          const priorityJobIds = visibleExternalJobsRef.current.map((j) => j.id);
+          console.log("[startScorePolling] batch fetch | mode:", mode, "forceRescore:", firstCall && forceRescore, "priorityIds:", priorityJobIds.length);
           const res = await fetch("/api/scoring/score-jobs", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               candidateId: userId,
               scoringMode: mode,
-              forceRescore: firstCall && forceRescore
+              forceRescore: firstCall && forceRescore,
+              priorityJobIds
             })
           });
           firstCall = false;
@@ -853,7 +882,6 @@ export function ApplicantJobsMap() {
             setMatchScores((prev) => ({ ...prev, ...data.scores }));
           }
           console.log("[startScorePolling] batch result | scored:", data.scored, "skipped:", data.skipped, "scores returned:", Object.keys(data.scores ?? {}).length);
-          // Server returned 0 new scores → all jobs are now cached, stop looping
           if ((data.scored ?? 0) === 0) break;
         }
       } catch {

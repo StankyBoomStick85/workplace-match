@@ -36,7 +36,9 @@ export async function POST(request: Request) {
   const candidateId = typeof body.candidateId === "string" ? body.candidateId : "";
   const scoringMode: "quick" | "career" = body.scoringMode === "quick" ? "quick" : "career";
   const forceRescore: boolean = body.forceRescore === true;
-  console.log("[score-jobs] scoringMode:", scoringMode, "forceRescore:", forceRescore);
+  const onlyCached: boolean = body.onlyCached === true;
+  const priorityJobIds: string[] = Array.isArray(body.priorityJobIds) ? body.priorityJobIds : [];
+  console.log("[score-jobs] scoringMode:", scoringMode, "forceRescore:", forceRescore, "onlyCached:", onlyCached, "priorityIds:", priorityJobIds.length);
 
   if (!candidateId || candidateId !== user.id) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 403 });
@@ -172,7 +174,21 @@ export async function POST(request: Request) {
 
   if (jobsToScore.length === 0) {
     console.log("[score-jobs] all jobs already scored, returning", Object.keys(cachedScoreMap).length, "cached scores");
-    return NextResponse.json({ scored: 0, skipped, scores: cachedScoreMap });
+    return NextResponse.json({ scored: 0, skipped, scores: cachedScoreMap, remaining: 0 });
+  }
+
+  // Fast path: caller only wants already-stored scores, no Claude call needed
+  if (onlyCached) {
+    console.log("[score-jobs] onlyCached=true, returning", Object.keys(cachedScoreMap).length, "cached scores, remaining:", jobsToScore.length);
+    return NextResponse.json({ scored: 0, skipped, scores: cachedScoreMap, remaining: jobsToScore.length });
+  }
+
+  // Prioritise visible-viewport jobs so they land in the first batch
+  if (priorityJobIds.length > 0) {
+    const prioritySet = new Set(priorityJobIds);
+    jobsToScore.sort((a, b) =>
+      (prioritySet.has(a.job_id) ? 0 : 1) - (prioritySet.has(b.job_id) ? 0 : 1)
+    );
   }
 
   // Cap at 20 jobs per call — keeps prompt latency well under Vercel's timeout
