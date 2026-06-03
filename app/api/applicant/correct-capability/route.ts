@@ -54,7 +54,7 @@ export async function POST(request: Request) {
 
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("job_types, experience_level, work_preference, capability_tags, summary, document_metadata, summary_priority, capability_summary, recommended_position, entry_point, future_positions, employer_summary")
+    .select("job_types, experience_level, work_preference, capability_tags, summary, document_metadata, summary_priority")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -106,17 +106,8 @@ Structure the summary in three parts:
 
 Write to close the knowledge gap between non-traditional backgrounds and corporate expectations. Translate experience into business impact language the employer already knows. Do not use jargon the applicant used. Never frame the summary in a way that diminishes what the candidate has built regardless of their experience level.`;
 
-  const existingProfile = [
-    profile.capability_summary ? `## Existing CAPABILITY_PROFILE\n${profile.capability_summary}` : "",
-    profile.recommended_position ? `## Existing RECOMMENDED_POSITION\n${profile.recommended_position}` : "",
-    profile.entry_point ? `## Existing ENTRY_POINT\n${profile.entry_point}` : "",
-    profile.future_positions ? `## Existing FUTURE_POSITIONS\n${profile.future_positions}` : "",
-    profile.employer_summary ? `## Existing EMPLOYER_SUMMARY\n${profile.employer_summary}` : "",
-  ].filter(Boolean).join("\n\n");
-
-  const correctionPreamble = existingProfile
-    ? `Here is the candidate's existing capability profile:\n\n${existingProfile}\n\nThe candidate has provided a correction. Apply the correction and regenerate the full profile.\n\nCorrection: "${correctionMessage}"\n\nAny claim introduced or changed by this correction must be tagged [USER_PROVIDED].\n\n`
-    : `The candidate has provided a correction to apply when generating their capability profile.\n\nCorrection: "${correctionMessage}"\n\nAny claim introduced or changed by this correction must be tagged [USER_PROVIDED].\n\n`;
+  // Prompt built from raw profile inputs only - never feed prior AI-generated outputs back into this prompt
+  const correctionPreamble = `The candidate has provided a correction to apply when generating their capability profile.\n\nCorrection: "${correctionMessage}"\n\nAny claim introduced or changed by this correction must be tagged [USER_PROVIDED].\n\n`;
 
   const userPrompt = `${correctionPreamble}An applicant has provided the following profile information:
 

@@ -99,6 +99,7 @@ Structure the summary in three parts:
 
 Write to close the knowledge gap between non-traditional backgrounds and corporate expectations. Translate experience into business impact language the employer already knows. Do not use jargon the applicant used. Never frame the summary in a way that diminishes what the candidate has built regardless of their experience level.`;
 
+  // Prompt built from raw profile inputs only - never feed prior AI-generated outputs back into this prompt
   const userPrompt = `An applicant has provided the following profile information:
 
 - Desired role/industry: ${desiredRole}
