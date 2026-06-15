@@ -292,7 +292,6 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
   ];
 
   const hasPdfs = docBlocks.some((b) => b.type === "document");
-  const anthropic = new Anthropic({ apiKey });
 
   let text = "";
   try {

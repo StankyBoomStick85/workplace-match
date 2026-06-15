@@ -47,20 +47,25 @@ export async function POST(request: Request) {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
-  // 1. Get contentType from storage metadata
-  const { data: fileInfo, error: metaErr } = await adminClient.storage
+  // 1. Get contentType from storage metadata via list()
+  const pathParts = path.split('/');
+  const fileName = pathParts.pop();
+  const folderPath = pathParts.join('/');
+  const { data: listData, error: listErr } = await adminClient.storage
     .from("candidate-documents")
-    .getMetadata(path);
+    .list(folderPath, { search: fileName });
 
-  if (metaErr || !fileInfo) {
-    console.error("[process-document] getMetadata failed", metaErr);
+  if (listErr || !listData || listData.length === 0) {
+    console.error("[process-document] storage list() failed", listErr);
     return NextResponse.json({ error: "Could not read document metadata from storage." }, { status: 500 });
   }
+
+  const contentType = listData[0]?.metadata?.mimetype || "";
 
   // 2. Run extraction using shared helper
   const { extractedText, extractionStatus } = await extractDocumentText(
     path,
-    fileInfo.mimetype || "",
+    contentType,
     adminClient,
     anthropicApiKey
   );

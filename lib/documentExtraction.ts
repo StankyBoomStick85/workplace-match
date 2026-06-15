@@ -1,6 +1,6 @@
-import { createClient } from "@supabase/supabase-js";
 import mammoth from "mammoth";
-import pdf from "pdf-parse";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const pdf: (buffer: Buffer) => Promise<{ text: string }> = require("pdf-parse");
 import Anthropic from "@anthropic-ai/sdk";
 
 const VISION_PROMPT = `Transcribe all readable text from this document and describe its relevant content. 
@@ -22,7 +22,8 @@ export type ExtractionResult = {
 export async function extractDocumentText(
   storagePath: string,
   contentType: string,
-  adminClient: ReturnType<typeof createClient>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  adminClient: any,
   anthropicApiKey?: string
 ): Promise<ExtractionResult> {
   let extractedText = "";

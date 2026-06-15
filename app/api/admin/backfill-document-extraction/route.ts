@@ -31,7 +31,7 @@ export async function GET(request: Request) {
   });
 
   try {
-    let targetProfiles = [];
+    let targetProfiles: any[] = [];
     if (userIdParam) {
       const { data, error } = await adminClient
         .from("candidate_profiles")
@@ -57,7 +57,7 @@ export async function GET(request: Request) {
     let processedUserIds: string[] = [];
 
     // Process only ONE user who needs work to avoid timeouts
-    let userToProcess = null;
+    let userToProcess: any = null;
     for (const profile of targetProfiles) {
       const docs = Array.isArray(profile.document_metadata) ? profile.document_metadata : [];
       const needsWork = docs.some((doc: any) => !doc.extractedText && doc.extractionStatus !== "complete");
@@ -81,10 +81,13 @@ export async function GET(request: Request) {
           // Get contentType if missing
           let contentType = doc.contentType;
           if (!contentType) {
-            const { data: fileInfo } = await adminClient.storage
+            const pathParts = doc.path.split('/');
+            const fileName = pathParts.pop();
+            const folderPath = pathParts.join('/');
+            const { data: listData } = await adminClient.storage
               .from("candidate-documents")
-              .getMetadata(doc.path);
-            contentType = fileInfo?.mimetype || "";
+              .list(folderPath, { search: fileName });
+            contentType = listData?.[0]?.metadata?.mimetype || "";
           }
 
           const { extractedText, extractionStatus } = await extractDocumentText(
