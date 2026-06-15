@@ -2,23 +2,10 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
-import mammoth from "mammoth";
-import pdf from "pdf-parse";
-import Anthropic from "@anthropic-ai/sdk";
+import { extractDocumentText } from "../../../../lib/documentExtraction";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
-
-const VISION_PROMPT = `Transcribe all readable text from this document and describe its relevant content. 
-This document may be a certification, award order, military record (NCOER/OER), diploma, or credential screenshot.
-
-Guidelines:
-- Preserve all names, dates, ratings, and specific achievement language exactly as written.
-- Maintain the original structure and context as much as possible.
-- If it is a form or certificate, clearly label the fields and values.
-- Do not summarize or paraphrase key evidence; the capability profile relies on these specific details.
-
-Return the transcription and description in a clear, readable format.`;
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
@@ -60,82 +47,23 @@ export async function POST(request: Request) {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
-  // 1. Download document
-  const { data: blob, error: dlErr } = await adminClient.storage
+  // 1. Get contentType from storage metadata
+  const { data: fileInfo, error: metaErr } = await adminClient.storage
     .from("candidate-documents")
-    .download(path);
+    .getMetadata(path);
 
-  if (dlErr || !blob) {
-    console.error("[process-document] download failed", dlErr);
-    return NextResponse.json({ error: "Could not read document from storage." }, { status: 500 });
+  if (metaErr || !fileInfo) {
+    console.error("[process-document] getMetadata failed", metaErr);
+    return NextResponse.json({ error: "Could not read document metadata from storage." }, { status: 500 });
   }
 
-  const bytes = await blob.arrayBuffer();
-  const buffer = Buffer.from(bytes);
-  let extractedText = "";
-  let extractionStatus: "complete" | "failed" = "complete";
-
-  // 2. Extract text based on file type
-  const contentType = blob.type;
-  try {
-    if (contentType === "application/pdf") {
-      const data = await pdf(buffer);
-      extractedText = data.text;
-
-      // If text is empty or near-empty, treat as scanned PDF and use Claude Vision
-      if (extractedText.trim().length < 20 && anthropicApiKey) {
-        console.log("[process-document] PDF text layer is empty, falling back to Vision");
-        const anthropic = new Anthropic({ apiKey: anthropicApiKey });
-        const b64 = buffer.toString("base64");
-        
-        const message = await anthropic.beta.messages.create({
-          model: "claude-sonnet-4-6",
-          max_tokens: 4096,
-          betas: ["pdfs-2024-09-25"],
-          messages: [{
-            role: "user",
-            content: [
-              { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } } as any,
-              { type: "text", text: VISION_PROMPT },
-            ],
-          }],
-        });
-        extractedText = message.content.find((b) => b.type === "text")?.text ?? "";
-      }
-    } else if (
-      contentType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-      contentType === "application/msword"
-    ) {
-      const result = await mammoth.extractRawText({ buffer });
-      extractedText = result.value;
-    } else if (contentType.startsWith("image/") && anthropicApiKey) {
-      const anthropic = new Anthropic({ apiKey: anthropicApiKey });
-      const b64 = buffer.toString("base64");
-      const mediaType = contentType as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
-
-      const message = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 4096,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "image", source: { type: "base64", media_type: mediaType, data: b64 } },
-            { type: "text", text: VISION_PROMPT },
-          ],
-        }],
-      });
-      extractedText = message.content.find((b) => b.type === "text")?.text ?? "";
-    } else if (contentType.startsWith("image/")) {
-      // Vision not available
-      extractedText = "";
-      extractionStatus = "failed";
-    } else {
-      extractionStatus = "failed";
-    }
-  } catch (err) {
-    console.error("[process-document] extraction failed", err);
-    extractionStatus = "failed";
-  }
+  // 2. Run extraction using shared helper
+  const { extractedText, extractionStatus } = await extractDocumentText(
+    path,
+    fileInfo.mimetype || "",
+    adminClient,
+    anthropicApiKey
+  );
 
   // 3. Update metadata in Supabase
   try {
@@ -174,4 +102,3 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Failed to update document metadata." }, { status: 500 });
   }
 }
-
