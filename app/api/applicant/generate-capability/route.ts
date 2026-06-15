@@ -47,7 +47,7 @@ export async function POST() {
 
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("job_types, experience_level, work_preference, capability_tags, summary, document_metadata, summary_priority, capability_summary, recommended_position, entry_point, future_positions, employer_summary")
+    .select("job_types, experience_level, work_preference, capability_tags, summary, document_metadata, summary_priority")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -59,18 +59,6 @@ export async function POST() {
       { error: "No profile found. Please save your profile first." },
       { status: 400 }
     );
-  }
-
-  // Return cached result if already generated
-  if (profile.capability_summary) {
-    return NextResponse.json({
-      success: true,
-      capabilitySummary: profile.capability_summary,
-      recommendedPosition: profile.recommended_position,
-      entryPoint: profile.entry_point,
-      futurePositions: profile.future_positions,
-      employerSummary: profile.employer_summary
-    });
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
