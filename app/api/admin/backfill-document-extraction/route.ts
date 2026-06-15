@@ -73,11 +73,20 @@ export async function GET(request: Request) {
       const docs = Array.isArray(userToProcess.document_metadata) ? userToProcess.document_metadata : [];
       const updatedDocs = [...docs];
       
+      // Process ONE document per invocation to stay within Vercel's 60s function limit.
+      // Vision API calls alone can take 15–30s, so multi-doc batches reliably timeout.
+      let processedOneDoc = false;
       for (let i = 0; i < updatedDocs.length; i++) {
         const doc = updatedDocs[i];
         if (!doc.extractedText && doc.extractionStatus !== "complete") {
+          if (processedOneDoc) {
+            // More work remains for this user — caller should loop again
+            hasMore = true;
+            break;
+          }
+
           stats.processed++;
-          
+
           // Get contentType if missing
           let contentType = doc.contentType;
           if (!contentType) {
@@ -99,7 +108,7 @@ export async function GET(request: Request) {
 
           updatedDocs[i] = {
             ...doc,
-            contentType, // ensure it's saved if we had to look it up
+            contentType,
             extractedText,
             extractionStatus,
           };
@@ -107,20 +116,21 @@ export async function GET(request: Request) {
           if (extractionStatus === "complete") stats.succeeded++;
           else stats.failed++;
 
-          // Update after EACH document to preserve progress
+          // Persist after each document so progress survives if next call times out
           await adminClient
             .from("candidate_profiles")
             .update({ document_metadata: updatedDocs })
             .eq("user_id", userToProcess.user_id);
-            
-          // Short delay to respect rate limits
+
           await new Promise(resolve => setTimeout(resolve, 500));
+          processedOneDoc = true;
         } else {
           stats.skipped++;
         }
       }
       processedUserIds.push(userToProcess.user_id);
-      hasMore = !userIdParam; // Check for more in next call if we're doing global backfill
+      // hasMore already set to true above if more docs remain; otherwise check global backfill
+      if (!hasMore) hasMore = !userIdParam;
     }
 
     return NextResponse.json({
