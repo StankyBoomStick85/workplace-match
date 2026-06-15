@@ -179,7 +179,8 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
     : [];
 
   type ContentBlock = Record<string, unknown>;
-  const docBlocks: ContentBlock[] = [];
+  const rawDocBlocks: ContentBlock[] = [];
+  const extractedTexts: string[] = [];
   const unreadableDocLabels: string[] = [];
 
   for (const doc of storedDocs) {
@@ -187,18 +188,13 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
     const isPdf = doc.contentType === "application/pdf";
     const isWord = doc.contentType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || doc.contentType === "application/msword";
 
-    // 1. If we have complete extracted text for ANY document type, use it as the primary source.
+    // 1. If we have complete extracted text for ANY document type, collect it for batching.
     if (doc.extractionStatus === "complete" && doc.extractedText) {
-      docBlocks.push({
-        type: "text",
-        text: `--- START DOCUMENT: "${doc.label}" (${doc.filename}) ---\n${doc.extractedText}\n--- END DOCUMENT: "${doc.label}" ---`
-      });
+      extractedTexts.push(`--- START DOCUMENT: "${doc.label}" (${doc.filename}) ---\n${doc.extractedText}\n--- END DOCUMENT: "${doc.label}" ---`);
       continue;
     }
 
     // 2. Fallback: If extraction hasn't run or failed, handle based on type.
-    // Note: Word documents cannot be attached raw (Claude sonnet 4.6 only supports PDF/Images),
-    // so if extraction is not "complete", it remains unreadable.
     if (!isImage && !isPdf) {
       unreadableDocLabels.push(`"${doc.label}" (${doc.filename})`);
       continue;
@@ -217,10 +213,10 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
       const b64 = Buffer.from(bytes).toString("base64");
       if (isImage) {
         const mediaType = doc.contentType as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
-        docBlocks.push({ type: "image", source: { type: "base64", media_type: mediaType, data: b64 } });
-        docBlocks.push({ type: "text", text: `(Above image: "${doc.label}")` });
+        rawDocBlocks.push({ type: "image", source: { type: "base64", media_type: mediaType, data: b64 } });
+        rawDocBlocks.push({ type: "text", text: `(Above image: "${doc.label}")` });
       } else if (isPdf) {
-        docBlocks.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 }, title: doc.label });
+        rawDocBlocks.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 }, title: doc.label });
       }
     } catch (err) {
       console.error("[correct-capability] failed to load document", doc.path, err);
@@ -228,15 +224,73 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
     }
   }
 
+  // --- Batch Summarization & Doc Block Assembly ---
+  const anthropic = new Anthropic({ apiKey });
+  const docBlocks: ContentBlock[] = [];
+  const BATCH_THRESHOLD = 8000;
+  const totalExtractedLength = extractedTexts.reduce((sum, t) => sum + t.length, 0);
+
+  if (extractedTexts.length > 0) {
+    if (totalExtractedLength <= BATCH_THRESHOLD) {
+      // Optimization: If everything fits in one batch, skip Haiku and send raw text blocks to synthesis
+      for (const text of extractedTexts) {
+        docBlocks.push({ type: "text" as const, text });
+      }
+    } else {
+      // Perform chunked batch summarization
+      const batchSummaries: string[] = [];
+      let currentBatch = "";
+
+      const summarizeBatch = async (batch: string) => {
+        try {
+          const summaryMsg = await anthropic.messages.create({
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 1500,
+            system: "You are an expert at extracting capability-relevant signal from professional documents. Extract: specific skills demonstrated, leadership/management scope (personnel, budget, operations), technical proficiencies, certifications, and specific achievements. IMPORTANT: For every piece of information, you MUST clearly note the source document label (e.g. 'Source: [Document Label]') so that the final synthesis can determine verification status. Maintain high density of facts. Do not use filler language.",
+            messages: [{ role: "user", content: `Summarize the following document batch for a capability profile:\n\n${batch}` }],
+          });
+          return summaryMsg.content.find((b) => b.type === "text")?.text ?? "";
+        } catch (err) {
+          console.error("[correct-capability] Batch summarization failed", err);
+          return "";
+        }
+      };
+
+      for (const text of extractedTexts) {
+        if ((currentBatch.length + text.length) > BATCH_THRESHOLD && currentBatch.length > 0) {
+          const summary = await summarizeBatch(currentBatch);
+          if (summary) batchSummaries.push(summary);
+          currentBatch = text;
+        } else {
+          currentBatch += (currentBatch ? "\n\n" : "") + text;
+        }
+      }
+      if (currentBatch.length > 0) {
+        const summary = await summarizeBatch(currentBatch);
+        if (summary) batchSummaries.push(summary);
+      }
+
+      if (batchSummaries.length > 0) {
+        docBlocks.push({ 
+          type: "text" as const, 
+          text: "--- SUMMARIZED DOCUMENT SIGNAL ---\n" + batchSummaries.join("\n\n") + "\n--- END SUMMARIZED SIGNAL ---" 
+        });
+      }
+    }
+  }
+
+  // Add raw fallback blocks (images/PDFs)
+  docBlocks.push(...rawDocBlocks);
+
   // Prepend document context to the prompt when docs are present
   let fullPrompt = userPrompt;
   if (storedDocs.length > 0) {
     const lines: string[] = [];
     if (docBlocks.length > 0) {
-      lines.push("The applicant has provided source documents attached above. Treat them as primary evidence — specific data in these documents takes precedence over the self-reported fields below.");
+      lines.push("The applicant has provided source documents (attached below as text, summaries, or raw files). Read all document context completely before generating any output. Synthesize across ALL sources with equal weight — do not let any single document dominate. Military service signal (DD-214, NCOERs, OERs, awards, performance evaluations) carries heavy weight and must be prominently reflected in the capability profile and every summary section. Resumes, certificates, and academic transcripts carry equal weight to each other. The final output must reflect the full combined picture of every submitted source. Specific data in these documents takes precedence over the self-reported fields below. If military service appears in any source, it must be prominently reflected in the short capability summary.");
     }
     if (unreadableDocLabels.length > 0) {
-      lines.push(`The following documents were uploaded but could not be attached automatically: ${unreadableDocLabels.join(", ")}. Note them as additional context.`);
+      lines.push(`The following documents were uploaded but could not be processed automatically: ${unreadableDocLabels.join(", ")}. Note them as additional context.`);
     }
     fullPrompt = lines.join(" ") + "\n\n" + userPrompt;
   }
