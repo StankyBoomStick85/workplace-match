@@ -161,6 +161,8 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
     filename: string;
     path: string;
     contentType: string;
+    extractedText?: string;
+    extractionStatus?: "pending" | "complete" | "failed";
   };
 
   const storedDocs: StoredDoc[] = Array.isArray(profile.document_metadata)
@@ -174,10 +176,25 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
   for (const doc of storedDocs) {
     const isImage = doc.contentType.startsWith("image/");
     const isPdf = doc.contentType === "application/pdf";
+    const isWord = doc.contentType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || doc.contentType === "application/msword";
+
+    // 1. If we have extracted text for PDF or Word, use it as the primary source.
+    if ((isPdf || isWord) && doc.extractionStatus === "complete" && doc.extractedText) {
+      docBlocks.push({
+        type: "text",
+        text: `--- START DOCUMENT: "${doc.label}" (${doc.filename}) ---\n${doc.extractedText}\n--- END DOCUMENT: "${doc.label}" ---`
+      });
+      continue;
+    }
+
+    // 2. If it is an image, or a PDF that hasn't been extracted, fall back to raw download and attachment.
+    // Note: Word documents cannot be attached raw (Claude sonnet 4.6 only supports PDF/Images),
+    // so if extraction failed or hasn't run for Word, it is unreadable.
     if (!isImage && !isPdf) {
       unreadableDocLabels.push(`"${doc.label}" (${doc.filename})`);
       continue;
     }
+
     try {
       const { data: blob, error: dlErr } = await adminClient.storage
         .from("candidate-documents")
@@ -193,7 +210,7 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
         const mediaType = doc.contentType as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
         docBlocks.push({ type: "image", source: { type: "base64", media_type: mediaType, data: b64 } });
         docBlocks.push({ type: "text", text: `(Above image: "${doc.label}")` });
-      } else {
+      } else if (isPdf) {
         docBlocks.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 }, title: doc.label });
       }
     } catch (err) {

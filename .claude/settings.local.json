@@ -7,7 +7,11 @@
       "Bash(node -e \"require\\('mammoth'\\); console.log\\('found'\\)\")",
       "Bash(npm install *)",
       "PowerShell(Rename-Item *)",
-      "PowerShell(New-Item *)"
+      "PowerShell(New-Item *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(python -c ' *)"
     ]
   }
 }

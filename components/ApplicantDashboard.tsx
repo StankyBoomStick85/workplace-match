@@ -21,6 +21,8 @@ type DocumentMeta = {
   path: string;
   contentType: string;
   uploadedAt: string;
+  extractedText?: string;
+  extractionStatus?: "pending" | "complete" | "failed";
 };
 
 type ApplicantProfileState = {
@@ -162,6 +164,8 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
         path: storagePath,
         contentType: newDocFile.type,
         uploadedAt: new Date().toISOString(),
+        extractionStatus: "pending",
+        extractedText: "",
       };
       const updatedMeta = [...documentMeta, newMeta];
 
@@ -182,6 +186,13 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
       setNewDocFile(null);
       const fileInput = document.getElementById("onboardingDocFileInput") as HTMLInputElement | null;
       if (fileInput) fileInput.value = "";
+
+      // Trigger server-side text extraction
+      fetch("/api/applicant/process-document", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: storagePath, docId }),
+      }).catch((err) => console.error("[handleAddDocument] process-document trigger failed", err));
 
       // Attempt AI extraction to pre-fill the profile form
       const uploadedContentType = newDocFile.type;

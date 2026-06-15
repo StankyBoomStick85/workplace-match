@@ -133,12 +133,22 @@ Tagging rules:
 List between 4 and 7 capabilities.
 
 ## RECOMMENDED_POSITION
-State the single best job title this applicant should target right now based on their full background. Use this exact format:
+State the single best job title this applicant should target right now based on their full background. 
+
+Assessment Mandate: You must first assess the candidate's overall demonstrated capability tier from their FULL background (leadership scope, budget/program/personnel responsibility, safety oversight, scale of operations) BEFORE considering certifications or recent credentials. Certifications and recent training should be treated as supplementary qualifications, not as the primary driver of seniority level. The recommended position's seniority must match the candidate's demonstrated capability tier, not the tier implied by their most recent or most junior credential. 
+
+Do not use the words entry level, junior, senior, or any tier label. Do not pigeonhole based on what they have done. Surface what they are capable of becoming today.
+
+Use this exact format:
 
 **[Job Title]**: [Two to three sentences explaining specifically why this role is the right fit — what in their background maps to what this role demands day-to-day.]
 
 ## ENTRY_POINT
-State the single best starting role this applicant should pursue first to build toward their recommended position. This is especially important for candidates with non-traditional or military backgrounds who are highly capable but need civilian sector context first. Use this exact format:
+State the single best starting role this applicant should pursue first to build toward their recommended position. 
+
+Assessment Mandate: Only recommend a bridge or entry role if there is a genuine demonstrated gap between the candidate's overall capability tier and their stated desired role/industry. If the candidate's overall background already supports the seniority level of their recommended position, ENTRY_POINT should reflect an entry point AT that same tier (e.g. "Security Program Manager" or "Assistant Director of Security Operations"), not a generic junior role. Do not assume that candidates with non-traditional or military backgrounds need civilian sector context first.
+
+Use this exact format:
 
 **[Starting Role Title]**: [Two to three sentences explaining why this is the right entry point — what civilian experience it builds, how it bridges their background to their target role, and what makes it realistic to land now.]
 
@@ -160,6 +170,8 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
     filename: string;
     path: string;
     contentType: string;
+    extractedText?: string;
+    extractionStatus?: "pending" | "complete" | "failed";
   };
 
   const storedDocs: StoredDoc[] = Array.isArray(profile.document_metadata)
@@ -173,10 +185,25 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
   for (const doc of storedDocs) {
     const isImage = doc.contentType.startsWith("image/");
     const isPdf = doc.contentType === "application/pdf";
+    const isWord = doc.contentType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || doc.contentType === "application/msword";
+
+    // 1. If we have extracted text for PDF or Word, use it as the primary source.
+    if ((isPdf || isWord) && doc.extractionStatus === "complete" && doc.extractedText) {
+      docBlocks.push({
+        type: "text",
+        text: `--- START DOCUMENT: "${doc.label}" (${doc.filename}) ---\n${doc.extractedText}\n--- END DOCUMENT: "${doc.label}" ---`
+      });
+      continue;
+    }
+
+    // 2. If it is an image, or a PDF that hasn't been extracted, fall back to raw download and attachment.
+    // Note: Word documents cannot be attached raw (Claude sonnet 4.6 only supports PDF/Images),
+    // so if extraction failed or hasn't run for Word, it is unreadable.
     if (!isImage && !isPdf) {
       unreadableDocLabels.push(`"${doc.label}" (${doc.filename})`);
       continue;
     }
+
     try {
       const { data: blob, error: dlErr } = await adminClient.storage
         .from("candidate-documents")
@@ -192,7 +219,7 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
         const mediaType = doc.contentType as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
         docBlocks.push({ type: "image", source: { type: "base64", media_type: mediaType, data: b64 } });
         docBlocks.push({ type: "text", text: `(Above image: "${doc.label}")` });
-      } else {
+      } else if (isPdf) {
         docBlocks.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 }, title: doc.label });
       }
     } catch (err) {

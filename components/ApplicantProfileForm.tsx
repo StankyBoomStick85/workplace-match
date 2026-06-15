@@ -14,6 +14,8 @@ type DocumentMeta = {
   path: string;
   contentType: string;
   uploadedAt: string;
+  extractedText?: string;
+  extractionStatus?: "pending" | "complete" | "failed";
 };
 
 type AlternatePath = {
@@ -390,6 +392,8 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
         path: storagePath,
         contentType: newDocFile.type,
         uploadedAt: new Date().toISOString(),
+        extractionStatus: "pending",
+        extractedText: "",
       };
       const updatedMeta = [...documentMeta, newMeta];
 
@@ -411,6 +415,13 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
       const fileInput = document.getElementById("docFileInput") as HTMLInputElement | null;
       if (fileInput) fileInput.value = "";
       pathForExtraction = storagePath;
+
+      // Trigger server-side text extraction
+      fetch("/api/applicant/process-document", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: storagePath, docId }),
+      }).catch((err) => console.error("[handleAddDocument] process-document trigger failed", err));
     } catch (err) {
       console.error("[handleAddDocument] unexpected error", err);
       setDocError("An unexpected error occurred.");
