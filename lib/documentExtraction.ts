@@ -1,6 +1,4 @@
 import mammoth from "mammoth";
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const pdf: (buffer: Buffer) => Promise<{ text: string }> = require("pdf-parse");
 import Anthropic from "@anthropic-ai/sdk";
 
 const VISION_PROMPT = `Transcribe all readable text from this document and describe its relevant content. 
@@ -43,10 +41,24 @@ export async function extractDocumentText(
     const buffer = Buffer.from(bytes);
 
     if (contentType === "application/pdf") {
-      const data = await pdf(buffer);
-      extractedText = data.text;
+      // Lazy-load pdf-parse to avoid module-scope crash in Vercel's serverless runtime.
+      // Handles both pdf-parse v1 (default callable) and v2 (PDFParse class / .default).
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const pdfModule = require("pdf-parse");
+        const pdfFn: ((buf: Buffer) => Promise<{ text: string }>) | null =
+          typeof pdfModule === "function" ? pdfModule
+          : typeof pdfModule.default === "function" ? pdfModule.default
+          : null;
+        if (pdfFn) {
+          const data = await pdfFn(buffer);
+          extractedText = data.text;
+        }
+      } catch {
+        // load or parse failure — fall through to Vision below
+      }
 
-      // If text is empty or near-empty, treat as scanned PDF and use Claude Vision
+      // If text extraction failed or produced near-empty text, use Claude Vision
       if (extractedText.trim().length < 20 && anthropicApiKey) {
         const anthropic = new Anthropic({ apiKey: anthropicApiKey });
         const b64 = buffer.toString("base64");
