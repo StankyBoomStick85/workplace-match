@@ -187,8 +187,8 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
     const isPdf = doc.contentType === "application/pdf";
     const isWord = doc.contentType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || doc.contentType === "application/msword";
 
-    // 1. If we have extracted text for PDF or Word, use it as the primary source.
-    if ((isPdf || isWord) && doc.extractionStatus === "complete" && doc.extractedText) {
+    // 1. If we have complete extracted text for ANY document type, use it as the primary source.
+    if (doc.extractionStatus === "complete" && doc.extractedText) {
       docBlocks.push({
         type: "text",
         text: `--- START DOCUMENT: "${doc.label}" (${doc.filename}) ---\n${doc.extractedText}\n--- END DOCUMENT: "${doc.label}" ---`
@@ -196,9 +196,9 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
       continue;
     }
 
-    // 2. If it is an image, or a PDF that hasn't been extracted, fall back to raw download and attachment.
+    // 2. Fallback: If extraction hasn't run or failed, handle based on type.
     // Note: Word documents cannot be attached raw (Claude sonnet 4.6 only supports PDF/Images),
-    // so if extraction failed or hasn't run for Word, it is unreadable.
+    // so if extraction is not "complete", it remains unreadable.
     if (!isImage && !isPdf) {
       unreadableDocLabels.push(`"${doc.label}" (${doc.filename})`);
       continue;
