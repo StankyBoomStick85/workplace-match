@@ -120,6 +120,7 @@ or
 Tagging rules:
 - Tag [VERIFIED] only when the specific claim is directly supported by an official uploaded document: a diploma, professional certification, DD214, military service record, or professional license. A resume is NOT an official document and does NOT qualify for [VERIFIED].
 - Tag [USER_PROVIDED] for everything else — skills from a resume, information entered on the profile form, or any self-reported detail.
+- Provenance grouping rule: When grouping capability content into blocks, group ONLY by shared evidentiary source, never by topical or thematic similarity alone. Every piece of supporting evidence within a single capability block must derive from the same verification status. If a self-reported claim (no supporting document) is topically related to a verified capability but does not share its document source, it must NOT be merged into that block — it must either form its own separate, clearly self-reported block, or be omitted if not significant enough to stand alone. A block tagged VERIFIED must be entirely supported by verified evidence with no self-reported content blended in.
 
 List between 4 and 7 capabilities.
 
