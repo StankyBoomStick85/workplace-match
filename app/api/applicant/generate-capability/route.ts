@@ -19,6 +19,9 @@ function extractSection(text: string, heading: string, nextHeading?: string): st
 }
 
 export async function POST() {
+  const t0 = Date.now();
+  console.log("[generate-capability][timing] START t0=" + t0);
+
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -37,6 +40,8 @@ export async function POST() {
   });
 
   const { data: { user }, error: userError } = await authClient.auth.getUser();
+  const t1 = Date.now();
+  console.log("[generate-capability][timing] after getUser() t1=" + t1 + " delta=" + (t1 - t0) + "ms");
   if (userError || !user) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
@@ -60,6 +65,9 @@ export async function POST() {
       { status: 400 }
     );
   }
+
+  const t2 = Date.now();
+  console.log("[generate-capability][timing] after profile query t2=" + t2 + " delta=" + (t2 - t1) + "ms docCount=" + (profile.document_metadata?.length ?? "null"));
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -176,6 +184,9 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
     ? (profile.document_metadata as StoredDoc[])
     : [];
 
+  const t3b = Date.now();
+  console.log("[generate-capability][timing] before doc loop t3b=" + t3b + " delta=" + (t3b - t2) + "ms storedDocCount=" + storedDocs.length);
+
   type ContentBlock = Record<string, unknown>;
   const rawDocBlocks: ContentBlock[] = [];
   const extractedTexts: string[] = [];
@@ -222,6 +233,12 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
     }
   }
 
+  const t4 = Date.now();
+  console.log("[generate-capability][timing] after doc loop t4=" + t4 + " delta=" + (t4 - t3b) + "ms extractedCount=" + extractedTexts.length + " rawBlocks=" + rawDocBlocks.length + " unreadable=" + unreadableDocLabels.length);
+
+  let t5 = 0;
+  let t5b = 0;
+
   // --- Batch Summarization & Doc Block Assembly ---
   const anthropic = new Anthropic({ apiKey });
   const docBlocks: ContentBlock[] = [];
@@ -238,7 +255,9 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
       // Perform chunked batch summarization
       const batchSummaries: string[] = [];
 
-      const summarizeBatch = async (batch: string) => {
+      const summarizeBatch = async (batch: string, idx: number) => {
+        const tBatchStart = Date.now();
+        console.log("[generate-capability][timing] batch[" + idx + "] START t=" + tBatchStart + " batchLen=" + batch.length);
         try {
           const summaryMsg = await anthropic.messages.create({
             model: "claude-haiku-4-5-20251001",
@@ -246,9 +265,12 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
             system: "You are an expert at extracting capability-relevant signal from professional documents. Extract: specific skills demonstrated, leadership/management scope (personnel, budget, operations), technical proficiencies, certifications, and specific achievements. IMPORTANT: For every piece of information, you MUST clearly note the source document label (e.g. 'Source: [Document Label]') so that the final synthesis can determine verification status. Maintain high density of facts. Do not use filler language. When extracting capability-relevant content, preserve SPECIFIC evidentiary details rather than abstracting into generic competency descriptions. Keep named organizations, bodies, and levels of command (e.g. 'Office Under SECDEF', 'NATO', 'Detachment Commander'); keep specific roles, audiences, and contexts described in the source (who was briefed, advised, or engaged, and at what level); keep near-verbatim phrasing for duty descriptions where the source uses specific language. Do NOT collapse this into vague summary phrases like 'demonstrates strategic thinking' - instead extract something like 'assisted in briefing executive-level officials at the Office of the Under Secretary of Defense (OUSD); provided strategic problem-solving input,' preserving the Source: [Document Label] attribution as required. Keep this specific, but concise: 1-2 sentences per distinct capability or achievement is sufficient. Preserve the specific named detail within that length, rather than expanding into longer narrative prose.",
             messages: [{ role: "user", content: `Summarize the following document batch for a capability profile:\n\n${batch}` }],
           });
+          const tBatchEnd = Date.now();
+          console.log("[generate-capability][timing] batch[" + idx + "] END t=" + tBatchEnd + " delta=" + (tBatchEnd - tBatchStart) + "ms");
           return summaryMsg.content.find((b) => b.type === "text")?.text ?? "";
         } catch (err) {
-          console.error("[generate-capability] Batch summarization failed", err);
+          const tBatchErr = Date.now();
+          console.log("[generate-capability][timing] batch[" + idx + "] ERROR t=" + tBatchErr + " delta=" + (tBatchErr - tBatchStart) + "ms err=" + (err instanceof Error ? err.message : String(err)));
           return "";
         }
       };
@@ -268,7 +290,12 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
         batches.push(currentBatch);
       }
 
-      const results = await Promise.allSettled(batches.map((batch) => summarizeBatch(batch)));
+       const t5 = Date.now();
+       console.log("[generate-capability][timing] before batch summarizeBatch() calls t5=" + t5 + " delta=" + (t5 - t4) + "ms batchCount=" + batches.length);
+
+       const results = await Promise.allSettled(batches.map((batch, idx) => summarizeBatch(batch, idx)));
+       const t5b = Date.now();
+       console.log("[generate-capability][timing] after batch summarizeBatch() calls t5b=" + t5b + " delta=" + (t5b - t5) + "ms");
       for (const result of results) {
         if (result.status === "fulfilled" && result.value) {
           batchSummaries.push(result.value);
@@ -306,6 +333,10 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
   ];
 
   const hasPdfs = docBlocks.some((b) => b.type === "document");
+
+  const promptLength = fullPrompt.length + docBlocks.reduce((sum, b) => sum + JSON.stringify(b).length, 0);
+  const t6 = Date.now();
+  console.log("[generate-capability][timing] before Sonnet synthesis t6=" + t6 + " delta=" + (t6 - t5b) + "ms hasPdfs=" + hasPdfs + " docBlockCount=" + docBlocks.length + " promptLen=" + promptLength + " fullPromptLen=" + fullPrompt.length);
 
   let text = "";
   try {
