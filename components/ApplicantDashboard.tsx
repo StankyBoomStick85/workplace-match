@@ -215,7 +215,7 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
           if (ex.city) merged.city = ex.city;
           if (ex.state) merged.state = ex.state;
           if (ex.capabilitySummary && !draftProfile.capabilitySummary) merged.capabilitySummary = ex.capabilitySummary;
-          if (ex.topSkills && (!draftProfile.topSkills || draftProfile.topSkills.length === 0)) merged.topSkills = typeof ex.topSkills === "string" ? splitSkills(ex.topSkills) : ex.topSkills;
+          if (ex.topSkills && (!draftProfile.topSkills || draftProfile.topSkills.length === 0)) merged.topSkills = ex.topSkills;
           if (ex.experienceLevel) merged.experienceLevel = ex.experienceLevel;
           if (ex.educationLevel) merged.educationLevel = ex.educationLevel;
           if (ex.industriesOfInterest) merged.industriesOfInterest = ex.industriesOfInterest;
