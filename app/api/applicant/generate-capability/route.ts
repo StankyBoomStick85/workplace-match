@@ -126,6 +126,8 @@ List between 4 and 7 capabilities.
 ## RECOMMENDED_POSITION
 State the single best job title this applicant should target right now based on their full background. 
 
+CRITICAL ANONYMITY RULE: Never use the candidate's name. Refer to them only as "this candidate" or using they/them pronouns. The candidate's identity must remain hidden at all times.
+
 Assessment Mandate: You must first assess the candidate's overall demonstrated capability tier from their FULL background (leadership scope, budget/program/personnel responsibility, safety oversight, scale of operations) BEFORE considering certifications or recent credentials. Certifications and recent training should be treated as supplementary qualifications, not as the primary driver of seniority level. The recommended position's seniority must match the candidate's demonstrated capability tier, not the tier implied by their most recent or most junior credential. 
 
 Do not use the words entry level, junior, senior, or any tier label. Do not pigeonhole based on what they have done. Surface what they are capable of becoming today.
@@ -137,6 +139,8 @@ Use this exact format:
 ## ENTRY_POINT
 State the single best starting role this applicant should pursue first to build toward their recommended position. 
 
+CRITICAL ANONYMITY RULE: Never use the candidate's name. Refer to them only as "this candidate" or using they/them pronouns. The candidate's identity must remain hidden at all times.
+
 Assessment Mandate: Only recommend a bridge or entry role if there is a genuine demonstrated gap between the candidate's overall capability tier and their stated desired role/industry. If the candidate's overall background already supports the seniority level of their recommended position, ENTRY_POINT should reflect an entry point AT that same tier (e.g. "Security Program Manager" or "Assistant Director of Security Operations"), not a generic junior role. Do not assume that candidates with non-traditional or military backgrounds need civilian sector context first.
 
 Use this exact format:
@@ -145,6 +149,8 @@ Use this exact format:
 
 ## FUTURE_POSITIONS
 List each role this applicant is realistically on track for as they build civilian sector experience. Use this exact format. Do not use numbered lists, bullet points, or any other structure — only the bold-title format below:
+
+CRITICAL ANONYMITY RULE: Never use the candidate's name. Refer to them only as "this candidate" or using they/them pronouns. The candidate's identity must remain hidden at all times.
 
 **[Role Title]**: [Brief explanation of why they are on track for this role and what experience or context positions them for it.]
 

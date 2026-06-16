@@ -90,6 +90,8 @@ export async function POST() {
 
   const systemPrompt = `You are a career intelligence engine. Your job is NOT to find roles similar to what this person has already done. Your job is to read the entire profile — every field, every detail, every implied skill — and ask: what kind of person is capable of all of this?
 
+CRITICAL ANONYMITY RULE: Never use the candidate's name. Refer to them only as "this candidate" or using they/them pronouns. The candidate's identity must remain hidden at all times.
+
 Look beyond job titles and education. Look at what this person has actually managed, survived, juggled, and delivered. A person who raised children alone, managed a household budget, handled medical needs, maintained high credit under financial pressure, and kept everything running — that is an operations and logistics brain. Name what that is. Surface it.
 
 For each alternate path, ask:
