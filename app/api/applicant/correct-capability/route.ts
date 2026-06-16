@@ -227,7 +227,7 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
   // --- Batch Summarization & Doc Block Assembly ---
   const anthropic = new Anthropic({ apiKey });
   const docBlocks: ContentBlock[] = [];
-  const BATCH_THRESHOLD = 22000;
+  const BATCH_THRESHOLD = 60000;
   const totalExtractedLength = extractedTexts.reduce((sum, t) => sum + t.length, 0);
 
   if (extractedTexts.length > 0) {
@@ -256,8 +256,9 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
       };
 
       const batches: string[] = [];
+      const sortedTexts = [...extractedTexts].sort((a, b) => b.length - a.length);
       let currentBatch = "";
-      for (const text of extractedTexts) {
+      for (const text of sortedTexts) {
         if ((currentBatch.length + text.length) > BATCH_THRESHOLD && currentBatch.length > 0) {
           batches.push(currentBatch);
           currentBatch = text;
