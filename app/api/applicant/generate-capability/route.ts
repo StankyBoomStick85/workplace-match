@@ -218,7 +218,7 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
   // --- Batch Summarization & Doc Block Assembly ---
   const anthropic = new Anthropic({ apiKey });
   const docBlocks: ContentBlock[] = [];
-  const BATCH_THRESHOLD = 8000;
+  const BATCH_THRESHOLD = 22000;
   const totalExtractedLength = extractedTexts.reduce((sum, t) => sum + t.length, 0);
 
   if (extractedTexts.length > 0) {
@@ -230,7 +230,6 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
     } else {
       // Perform chunked batch summarization
       const batchSummaries: string[] = [];
-      let currentBatch = "";
 
       const summarizeBatch = async (batch: string) => {
         try {
@@ -247,18 +246,25 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
         }
       };
 
+      const batches: string[] = [];
+      let currentBatch = "";
       for (const text of extractedTexts) {
         if ((currentBatch.length + text.length) > BATCH_THRESHOLD && currentBatch.length > 0) {
-          const summary = await summarizeBatch(currentBatch);
-          if (summary) batchSummaries.push(summary);
+          batches.push(currentBatch);
           currentBatch = text;
         } else {
           currentBatch += (currentBatch ? "\n\n" : "") + text;
         }
       }
       if (currentBatch.length > 0) {
-        const summary = await summarizeBatch(currentBatch);
-        if (summary) batchSummaries.push(summary);
+        batches.push(currentBatch);
+      }
+
+      const results = await Promise.allSettled(batches.map((batch) => summarizeBatch(batch)));
+      for (const result of results) {
+        if (result.status === "fulfilled" && result.value) {
+          batchSummaries.push(result.value);
+        }
       }
 
       if (batchSummaries.length > 0) {
