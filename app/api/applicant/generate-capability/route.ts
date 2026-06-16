@@ -5,7 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 function extractSection(text: string, heading: string, nextHeading?: string): string {
   const lower = text.toLowerCase();
@@ -247,6 +247,7 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
 
   if (extractedTexts.length > 0) {
     if (totalExtractedLength <= BATCH_THRESHOLD) {
+      t5b = t4;
       // Optimization: If everything fits in one batch, skip Haiku and send raw text blocks to synthesis
       for (const text of extractedTexts) {
         docBlocks.push({ type: "text" as const, text });
@@ -293,9 +294,9 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
        const t5 = Date.now();
        console.log("[generate-capability][timing] before batch summarizeBatch() calls t5=" + t5 + " delta=" + (t5 - t4) + "ms batchCount=" + batches.length);
 
-       const results = await Promise.allSettled(batches.map((batch, idx) => summarizeBatch(batch, idx)));
-       const t5b = Date.now();
-       console.log("[generate-capability][timing] after batch summarizeBatch() calls t5b=" + t5b + " delta=" + (t5b - t5) + "ms");
+        const results = await Promise.allSettled(batches.map((batch, idx) => summarizeBatch(batch, idx)));
+        t5b = Date.now();
+        console.log("[generate-capability][timing] after batch summarizeBatch() calls t5b=" + t5b + " delta=" + (t5b - t5) + "ms");
       for (const result of results) {
         if (result.status === "fulfilled" && result.value) {
           batchSummaries.push(result.value);
@@ -363,10 +364,15 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
       text = message.content.find((b) => b.type === "text")?.text ?? "";
     }
   } catch (err) {
+    const t7Err = Date.now();
+    console.log("[generate-capability][timing] Sonnet FAILED t7=" + t7Err + " delta=" + (t7Err - t6) + "ms");
     console.error("[generate-capability] Anthropic API error", err);
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: `AI generation failed: ${message}` }, { status: 500 });
   }
+
+  const t7 = Date.now();
+  console.log("[generate-capability][timing] Sonnet complete t7=" + t7 + " delta=" + (t7 - t6) + "ms responseLen=" + text.length);
 
   const capabilitySummary = extractSection(text, "CAPABILITY_PROFILE", "RECOMMENDED_POSITION");
   const recommendedPosition = extractSection(text, "RECOMMENDED_POSITION", "ENTRY_POINT");
