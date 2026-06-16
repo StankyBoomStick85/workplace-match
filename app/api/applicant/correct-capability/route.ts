@@ -5,7 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 function extractSection(text: string, heading: string, nextHeading?: string): string {
   const lower = text.toLowerCase();
