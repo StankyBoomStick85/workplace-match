@@ -208,26 +208,25 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
 
         if (extractRes.ok && extractResult.extracted) {
           const ex = extractResult.extracted as Record<string, string | null>;
+
           const merged: Partial<ApplicantProfileState> = {};
           if (ex.fullName) merged.fullName = ex.fullName;
           if (ex.zipCode) merged.zipCode = ex.zipCode;
           if (ex.city) merged.city = ex.city;
           if (ex.state) merged.state = ex.state;
-          if (ex.capabilitySummary) merged.capabilitySummary = ex.capabilitySummary;
-          if (ex.topSkills) merged.topSkills = ex.topSkills;
+          if (ex.capabilitySummary && !draftProfile.capabilitySummary) merged.capabilitySummary = ex.capabilitySummary;
+          if (ex.topSkills && (!draftProfile.topSkills || draftProfile.topSkills.length === 0)) merged.topSkills = typeof ex.topSkills === "string" ? splitSkills(ex.topSkills) : ex.topSkills;
           if (ex.experienceLevel) merged.experienceLevel = ex.experienceLevel;
           if (ex.educationLevel) merged.educationLevel = ex.educationLevel;
           if (ex.industriesOfInterest) merged.industriesOfInterest = ex.industriesOfInterest;
           if (ex.phoneNumber) merged.phone = ex.phoneNumber as string;
 
-          const mergedProfile = { ...draftProfile, ...merged };
-          setDraftProfile(mergedProfile);
+          setDraftProfile((prev) => ({ ...prev, ...merged }));
           setMessage("");
           setError("");
           window.dispatchEvent(new CustomEvent("workplace-match-extraction-complete", {
             detail: { message: "Please verify your account information and profile details are correct" }
           }));
-          await performSave(mergedProfile);
         }
       } catch (err) {
         console.error("[extract-resume] extraction failed, skipping pre-fill", err);
