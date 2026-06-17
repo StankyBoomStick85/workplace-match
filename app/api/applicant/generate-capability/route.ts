@@ -128,9 +128,11 @@ or
 Tagging rules:
 - Tag [VERIFIED] only when the specific claim is directly supported by an official uploaded document: a diploma, professional certification, DD214, military service record, or professional license. A resume is NOT an official document and does NOT qualify for [VERIFIED].
 - Tag [USER_PROVIDED] for everything else — skills from a resume, information entered on the profile form, or any self-reported detail.
-- Provenance grouping rule: When grouping capability content into blocks, group ONLY by shared evidentiary source, never by topical or thematic similarity alone. Every piece of supporting evidence within a single capability block must derive from the same verification status. If a self-reported claim (no supporting document) is topically related to a verified capability but does not share its document source, it must NOT be merged into that block — it must either form its own separate, clearly self-reported block, or be omitted if not significant enough to stand alone. A block tagged VERIFIED must be entirely supported by verified evidence with no self-reported content blended in.
+- Provenance grouping rule: When grouping capability content into blocks, group ONLY by shared evidentiary source, never by topical or thematic similarity alone, and this applies even when two pieces of evidence share the same verification status. Two distinct VERIFIED capabilities must not be merged into one block solely because they relate to a similar theme or domain, each gets its own entry unless they describe the exact same underlying capability. Every piece of supporting evidence within a single capability block must derive from the same verification status. If a self-reported claim (no supporting document) is topically related to a verified capability but does not share its document source, it must NOT be merged into that block, it must form its own separate, clearly self-reported block, however minor the claim. A block tagged VERIFIED must be entirely supported by verified evidence with no self-reported content blended in.
 
-List between 4 and 7 capabilities.
+List every distinct capability supported by the evidence below, VERIFIED or USER_PROVIDED. Do not limit the count and do not select a subset of what's available — every distinct, demonstrated capability gets its own entry. Do not split one capability into multiple overlapping or near-duplicate entries, and do not list the same capability twice under different names.
+
+Cross-reference the self-reported capability tags provided in this profile. If a tag describes a capability not already captured by an entry above, add it as its own USER_PROVIDED entry. If a tag is already covered by an existing VERIFIED or USER_PROVIDED entry, do not duplicate it.
 
 ## RECOMMENDED_POSITION
 State the single best job title this applicant should target right now based on their full background. 
@@ -348,6 +350,7 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
         betas: ["pdfs-2024-09-25"],
         system:
           "You are a veteran career counselor and hiring specialist who translates non-traditional, military, and blue-collar backgrounds into civilian corporate language that hiring managers can immediately understand and act on. You are precise, specific, and never use filler language.\n\nWhen documents are provided, you must synthesize across ALL submitted documents equally regardless of upload order. Military service documents — DD-214s, NCOERs, OERs, awards, and performance evaluations — carry heavy weight and must be reflected prominently in every output section. Resumes, certificates, and academic transcripts carry equal weight to each other. No single document may dominate the output. The capability profile and all summaries must reflect the full combined picture of every document submitted. If any document reveals military service, that service must appear prominently in the short capability summary.",
+        temperature: 0.2,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         messages: [{ role: "user", content: messageContent as any }],
       });
@@ -358,6 +361,7 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
         max_tokens: docBlocks.length > 0 ? 4096 : 2048,
         system:
           "You are a veteran career counselor and hiring specialist who translates non-traditional, military, and blue-collar backgrounds into civilian corporate language that hiring managers can immediately understand and act on. You are precise, specific, and never use filler language.\n\nWhen documents are provided, you must synthesize across ALL submitted documents equally regardless of upload order. Military service documents — DD-214s, NCOERs, OERs, awards, and performance evaluations — carry heavy weight and must be reflected prominently in every output section. Resumes, certificates, and academic transcripts carry equal weight to each other. No single document may dominate the output. The capability profile and all summaries must reflect the full combined picture of every document submitted. If any document reveals military service, that service must appear prominently in the short capability summary.",
+        temperature: 0.2,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         messages: [{ role: "user", content: messageContent as any }],
       });
