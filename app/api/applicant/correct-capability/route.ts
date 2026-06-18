@@ -389,8 +389,8 @@ Respond with only the four sections above. No preamble, no closing remarks.`;
 
   let employerSummary = "";
   try {
-    const employerSystemPrompt = "You are a veteran career counselor writing a concise, compelling employer-facing summary for a hiring platform. Write in third person using they/them pronouns. Never use the candidate's name. Be specific, factual, and direct. No filler language.";
-    const employerUserPrompt = `Based on the following candidate profile sections, write a compelling employer-facing summary of up to 1,500 characters that tells a hiring manager exactly who this person is, what they can do at a high level, and why they are worth interviewing. Be specific. Do not use generic filler phrases.
+    const employerSystemPrompt = "You are a talent strategist writing employer-facing candidate summaries for a civilian hiring platform. Your audience is a hiring manager or HR director with zero military background. Write in third person using they/them pronouns. Never use the candidate's name. Never use military job titles, unit designations, MOS codes, operation names, military acronyms, or any jargon that requires military context to understand. Translate everything into plain business language. Focus on what this person can do, the scale at which they have done it, and why a civilian employer should be interested. Be specific and factual. No filler language.";
+    const employerUserPrompt = `Based on the following candidate profile sections, write a compelling employer-facing summary of up to 1,500 characters for a civilian hiring manager who has no military background. Describe what this person can do, at what scale, and why they are worth interviewing — entirely in plain business language. Do not use military titles, unit names, operation names, acronyms, or any term that requires military context. If a fact requires military context to be meaningful, translate it to its civilian equivalent or omit it.
 
 CAPABILITY PROFILE:
 ${capabilitySummary}
