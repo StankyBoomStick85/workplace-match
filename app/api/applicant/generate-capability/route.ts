@@ -176,6 +176,7 @@ CRITICAL ANONYMITY RULE: Never use the candidate's name. Refer to them only as "
 
 List only roles that genuinely fit. No minimum or maximum number.
 
+## EMPLOYER_SUMMARY
 ${employerSummaryInstruction}
 
 Respond with only the five sections above. No preamble, no closing remarks.`;
