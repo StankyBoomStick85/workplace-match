@@ -132,6 +132,13 @@ Based on this information, generate exactly five sections with these exact headi
 ## CAPABILITY_PROFILE
 List each distinct capability as a separate item. A verification tag is required on every entry. Use this exact format — no numbered lists, bullets, or other structure:
 
+Output capabilities in this exact category order, with no category labels or headers in the output itself:
+1. Leadership, management, and people development capabilities first
+2. Technical, operational, and domain-specific capabilities second
+3. Education, certifications, and formal credentials last
+
+Within each category, group self-reported capabilities alongside verified capabilities covering the same domain rather than separating them. Do not add category headers or labels to the output, just order the entries as described.
+
 **[Capability Name]** [VERIFIED]: [Description]
 or
 **[Capability Name]** [USER_PROVIDED]: [Description]

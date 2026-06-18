@@ -960,7 +960,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
 
       <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
         <p className="text-sm font-semibold uppercase tracking-[0.16em] text-red-800">AI-Powered</p>
-        <h2 className="mt-2 text-2xl font-bold text-zinc-950">Capability Profile</h2>
+        <h2 className="mt-2 text-2xl font-bold text-zinc-950">Verified Skills</h2>
         <p className="mt-3 text-sm leading-6 text-zinc-600">
           Generate a full capability translation of your background—including concrete operational skills, the best role to target now, future position recommendations, and a plain-language employer summary. Save your profile first, then generate.
         </p>
@@ -1060,7 +1060,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
                   )}
                 </div>
               ) : null}
-              {profile?.capabilityProfile ? <AccordionSection title="Capability Profile" text={profile.capabilityProfile} /> : null}
+              {profile?.capabilityProfile ? <AccordionSection title="Verified Skills" text={profile.capabilityProfile} /> : null}
             </div>
             <div className="mt-6 flex flex-wrap items-center gap-3 border-t border-gray-200 pt-5">
               {isApproved ? (

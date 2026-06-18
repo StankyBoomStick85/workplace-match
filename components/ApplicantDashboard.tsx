@@ -498,7 +498,7 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
                 </ProfileField>
               </ProfileSection>
 
-              <ProfileSection title="Capability Profile">
+              <ProfileSection title="Verified Skills">
                 <ProfileField label="Capability summary" id="capabilitySummary" fullWidth>
                   <textarea id="capabilitySummary" rows={4} value={draftProfile.capabilitySummary} onChange={(event) => updateDraft("capabilitySummary", event.target.value)} readOnly={!isEditing} className="field" />
                 </ProfileField>
