@@ -187,10 +187,7 @@ CRITICAL ANONYMITY RULE: Never use the candidate's name. Refer to them only as "
 
 List only roles that genuinely fit. No minimum or maximum number.
 
-## EMPLOYER_SUMMARY
-${employerSummaryInstruction}
-
-Respond with only the five sections above. No preamble, no closing remarks.`;
+Respond with only the four sections above. No preamble, no closing remarks.`;
 
   // --- Build document content blocks ---
   type StoredDoc = {
@@ -385,8 +382,54 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
   const capabilitySummary = extractSection(text, "CAPABILITY_PROFILE", "RECOMMENDED_POSITION");
   const recommendedPosition = extractSection(text, "RECOMMENDED_POSITION", "ENTRY_POINT");
   const entryPoint = extractSection(text, "ENTRY_POINT", "FUTURE_POSITIONS");
-  const futurePositions = extractSection(text, "FUTURE_POSITIONS", "EMPLOYER_SUMMARY");
-  const employerSummary = extractSection(text, "EMPLOYER_SUMMARY");
+  const futurePositions = extractSection(text, "FUTURE_POSITIONS");
+
+  const t8 = Date.now();
+  console.log("[correct-capability][timing] before employer summary call t8=" + t8 + " delta=" + (t8 - t7) + "ms");
+
+  let employerSummary = "";
+  try {
+    const employerSystemPrompt = "You are a veteran career counselor writing a concise, compelling employer-facing summary for a hiring platform. Write in third person using they/them pronouns. Never use the candidate's name. Be specific, factual, and direct. No filler language.";
+    const employerUserPrompt = `Based on the following candidate profile sections, write a compelling employer-facing summary of up to 1,500 characters that tells a hiring manager exactly who this person is, what they can do at a high level, and why they are worth interviewing. Be specific. Do not use generic filler phrases.
+
+CAPABILITY PROFILE:
+${capabilitySummary}
+
+RECOMMENDED POSITION:
+${recommendedPosition}
+
+ENTRY POINT:
+${entryPoint}`;
+
+    if (hasPdfs) {
+      const employerMessage = await anthropic.beta.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 2048,
+        betas: ["pdfs-2024-09-25"],
+        system: employerSystemPrompt,
+        temperature: 0.2,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        messages: [{ role: "user", content: employerUserPrompt }],
+      });
+      employerSummary = employerMessage.content.find((b) => b.type === "text")?.text ?? "";
+    } else {
+      const employerMessage = await anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 2048,
+        system: employerSystemPrompt,
+        temperature: 0.2,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        messages: [{ role: "user", content: employerUserPrompt }],
+      });
+      employerSummary = employerMessage.content.find((b) => b.type === "text")?.text ?? "";
+    }
+  } catch (err) {
+    console.error("[correct-capability] Employer summary API error", err);
+    employerSummary = "";
+  }
+
+  const t9 = Date.now();
+  console.log("[correct-capability][timing] employer summary complete t9=" + t9 + " delta=" + (t9 - t8) + "ms employerSummaryLen=" + employerSummary.length);
 
   const { error: updateError } = await adminClient
     .from("candidate_profiles")
