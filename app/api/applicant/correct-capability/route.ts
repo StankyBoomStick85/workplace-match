@@ -347,15 +347,16 @@ Respond with only the four sections above. No preamble, no closing remarks.`;
     if (hasPdfs) {
       const message = await anthropic.beta.messages.create({
         model: "claude-sonnet-4-6",
-        max_tokens: 4096,
+        max_tokens: docBlocks.length > 0 ? 4096 : 2048,
         betas: ["pdfs-2024-09-25"],
         system:
-          "You are a veteran career counselor and hiring specialist who translates non-traditional, military, and blue-collar backgrounds into civilian corporate language that hiring managers can immediately understand and act on. You are precise, specific, and never use filler language.",
+          "You are a veteran career counselor and hiring specialist who translates non-traditional, military, and blue-collar backgrounds into civilian corporate language that hiring managers can immediately understand and act on. You are precise, specific, and never use filler language.\n\nWhen documents are provided, you must synthesize across ALL submitted documents equally regardless of upload order. Military service documents — DD-214s, NCOERs, OERs, awards, and performance evaluations — carry heavy weight and must be reflected prominently in every output section. Resumes, certificates, and academic transcripts carry equal weight to each other. No single document may dominate the output. The capability profile and all summaries must reflect the full combined picture of every document submitted. If any document reveals military service, that service must appear prominently in the short capability summary.",
         temperature: 0.2,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         messages: [{ role: "user", content: messageContent as any }],
       });
       text = message.content.find((b) => b.type === "text")?.text ?? "";
+      console.log("[correct-capability][debug] raw response last 1000 chars:", typeof text === "string" ? text.slice(-1000) : "(empty)");
     } else {
       const message = await anthropic.messages.create({
         model: "claude-sonnet-4-6",
@@ -367,6 +368,7 @@ Respond with only the four sections above. No preamble, no closing remarks.`;
         messages: [{ role: "user", content: messageContent as any }],
       });
       text = message.content.find((b) => b.type === "text")?.text ?? "";
+      console.log("[correct-capability][debug] raw response last 1000 chars:", typeof text === "string" ? text.slice(-1000) : "(empty)");
     }
   } catch (err) {
     const t6b = Date.now();
@@ -383,6 +385,8 @@ Respond with only the four sections above. No preamble, no closing remarks.`;
   const recommendedPosition = extractSection(text, "RECOMMENDED_POSITION", "ENTRY_POINT");
   const entryPoint = extractSection(text, "ENTRY_POINT", "FUTURE_POSITIONS");
   const futurePositions = extractSection(text, "FUTURE_POSITIONS");
+
+  console.log("[correct-capability][debug] section lengths - capability:", capabilitySummary.length, "recommended:", recommendedPosition.length, "entry:", entryPoint.length, "future:", futurePositions.length);
 
   const t8 = Date.now();
   console.log("[correct-capability][timing] before employer summary call t8=" + t8 + " delta=" + (t8 - t7) + "ms");
