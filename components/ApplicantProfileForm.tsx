@@ -248,7 +248,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
     const interval = setInterval(() => {
       idx = (idx + 1) % messages.length;
       setFunMessage(messages[idx]);
-    }, 2500);
+    }, 4000);
     return () => clearInterval(interval);
   }, [isGenerating]);
   const [generateError, setGenerateError] = useState("");
