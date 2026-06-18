@@ -272,61 +272,48 @@ Respond with only the five sections above. No preamble, no closing remarks.`;
         docBlocks.push({ type: "text" as const, text });
       }
     } else {
-      // Perform chunked batch summarization
-      const batchSummaries: string[] = [];
+      // Summarize each document individually to preserve provenance
+      const extractLabelFromText = (text: string): string => {
+        const match = text.match(/--- START DOCUMENT: "(.+?)" \(/);
+        return match ? match[1] : "Unknown Document";
+      };
 
-      const summarizeBatch = async (batch: string, idx: number) => {
+      const summarizeSingleDoc = async (docText: string, label: string, idx: number): Promise<{label: string, summary: string}> => {
         const tBatchStart = Date.now();
-        console.log("[correct-capability][timing] batch[" + idx + "] START t=" + tBatchStart + " batchLen=" + batch.length);
+        console.log("[correct-capability][timing] batch[" + idx + "] START t=" + tBatchStart + " batchLen=" + docText.length);
         try {
           const summaryMsg = await anthropic.messages.create({
             model: "claude-haiku-4-5-20251001",
             max_tokens: 1500,
             system: "You are an expert at extracting capability-relevant signal from professional documents. Extract: specific skills demonstrated, leadership/management scope (personnel, budget, operations), technical proficiencies, certifications, and specific achievements. IMPORTANT: For every piece of information, you MUST clearly note the source document label (e.g. 'Source: [Document Label]') so that the final synthesis can determine verification status. Maintain high density of facts. Do not use filler language. When extracting capability-relevant content, preserve SPECIFIC evidentiary details rather than abstracting into generic competency descriptions. Keep named organizations, bodies, and levels of command (e.g. 'Office Under SECDEF', 'NATO', 'Detachment Commander'); keep specific roles, audiences, and contexts described in the source (who was briefed, advised, or engaged, and at what level); keep near-verbatim phrasing for duty descriptions where the source uses specific language. Do NOT collapse this into vague summary phrases like 'demonstrates strategic thinking' - instead extract something like 'assisted in briefing executive-level officials at the Office of the Under Secretary of Defense (OUSD); provided strategic problem-solving input,' preserving the Source: [Document Label] attribution as required. Keep this specific, but concise: 1-2 sentences per distinct capability or achievement is sufficient. Preserve the specific named detail within that length, rather than expanding into longer narrative prose.",
-            messages: [{ role: "user", content: `Summarize the following document batch for a capability profile:\n\n${batch}` }],
+            messages: [{ role: "user", content: `Summarize the following document batch for a capability profile:\n\n${docText}` }],
           });
           const tBatchEnd = Date.now();
           console.log("[correct-capability][timing] batch[" + idx + "] END t=" + tBatchEnd + " delta=" + (tBatchEnd - tBatchStart) + "ms");
-          return summaryMsg.content.find((b) => b.type === "text")?.text ?? "";
+          return { label, summary: summaryMsg.content.find((b) => b.type === "text")?.text ?? "" };
         } catch (err) {
           const tBatchErr = Date.now();
           console.log("[correct-capability][timing] batch[" + idx + "] ERROR t=" + tBatchErr + " delta=" + (tBatchErr - tBatchStart) + "ms err=" + (err instanceof Error ? err.message : String(err)));
-          return "";
+          return { label, summary: "" };
         }
       };
 
-      const batches: string[] = [];
-      const sortedTexts = [...extractedTexts].sort((a, b) => b.length - a.length);
-      let currentBatch = "";
-      for (const text of sortedTexts) {
-        if ((currentBatch.length + text.length) > BATCH_THRESHOLD && currentBatch.length > 0) {
-          batches.push(currentBatch);
-          currentBatch = text;
-        } else {
-          currentBatch += (currentBatch ? "\n\n" : "") + text;
-        }
-      }
-      if (currentBatch.length > 0) {
-        batches.push(currentBatch);
-      }
-
       const t5 = Date.now();
-      console.log("[correct-capability][timing] before batch summarizeBatch() calls t5=" + t5 + " delta=" + (t5 - t4) + "ms batchCount=" + batches.length);
+      console.log("[correct-capability][timing] before batch summarizeBatch() calls t5=" + t5 + " delta=" + (t5 - t4) + "ms docCount=" + extractedTexts.length);
 
-      const results = await Promise.allSettled(batches.map((batch, idx) => summarizeBatch(batch, idx)));
+      const docSummaryResults = await Promise.allSettled(
+        extractedTexts.map((text, idx) => summarizeSingleDoc(text, extractLabelFromText(text), idx))
+      );
       t5b = Date.now();
       console.log("[correct-capability][timing] after batch summarizeBatch() calls t5b=" + t5b + " delta=" + (t5b - t5) + "ms");
-      for (const result of results) {
-        if (result.status === "fulfilled" && result.value) {
-          batchSummaries.push(result.value);
-        }
-      }
 
-      if (batchSummaries.length > 0) {
-        docBlocks.push({ 
-          type: "text" as const, 
-          text: "--- SUMMARIZED DOCUMENT SIGNAL ---\n" + batchSummaries.join("\n\n") + "\n--- END SUMMARIZED SIGNAL ---" 
-        });
+      for (const result of docSummaryResults) {
+        if (result.status === "fulfilled" && result.value.summary) {
+          docBlocks.push({
+            type: "text" as const,
+            text: `--- DOCUMENT: "${result.value.label}" ---\n${result.value.summary}\n--- END DOCUMENT ---`
+          });
+        }
       }
     }
   }
