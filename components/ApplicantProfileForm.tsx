@@ -220,6 +220,37 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
   const [profilePictureDataUrl, setProfilePictureDataUrl] = useState(mappedInitial?.profilePictureUrl ?? "");
   const [pendingPictureFile, setPendingPictureFile] = useState<File | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [funMessage, setFunMessage] = useState("Jitterbugging...");
+
+  useEffect(() => {
+    if (!isGenerating) {
+      setFunMessage("Jitterbugging...");
+      return;
+    }
+    const messages = [
+      "Jitterbugging...",
+      "Combobulating...",
+      "Wrangling...",
+      "Herding cats...",
+      "Noodling on it...",
+      "Percolating...",
+      "Marinating...",
+      "Untangling...",
+      "Ruminating...",
+      "Doing the thing...",
+      "Crunching...",
+      "Finagling...",
+      "Discombobulating...",
+      "Twiddling the knobs...",
+      "Nearly there...",
+    ];
+    let idx = 0;
+    const interval = setInterval(() => {
+      idx = (idx + 1) % messages.length;
+      setFunMessage(messages[idx]);
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [isGenerating]);
   const [generateError, setGenerateError] = useState("");
   const [activePathTab, setActivePathTab] = useState<"primary" | "alternate">(
     (mappedInitial?.summaryPriority as "primary" | "alternate") || "primary"
@@ -943,11 +974,11 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
           >
             {isGenerating ? (
               <>
-                <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                Generating…
+                 <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                 </svg>
+                 {funMessage}
               </>
             ) : (
               "Generate My Capability Profile"
