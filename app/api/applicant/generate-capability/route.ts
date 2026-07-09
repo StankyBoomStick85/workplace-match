@@ -245,9 +245,22 @@ No markdown fences. No explanation. No text outside the JSON array.`;
     storedDocs.map((doc, idx) => extractEvidenceFromDoc(doc, idx))
   );
 
+  const step1PerDocCounts: number[] = [];
   for (const result of step1Results) {
-    if (result.status === "fulfilled") allEvidenceItems.push(...result.value);
+    if (result.status === "fulfilled") {
+      allEvidenceItems.push(...result.value);
+      step1PerDocCounts.push(result.value.length);
+    } else {
+      step1PerDocCounts.push(0);
+    }
   }
+
+  // --- DEBUG: per-document Step 1 summary ---
+  console.log("[generate-capability][debug][step1] per-doc extraction summary:");
+  storedDocs.forEach((doc, idx) => {
+    console.log("[generate-capability][debug][step1]   doc[" + idx + "] id=" + doc.id + " label=" + JSON.stringify(doc.label) + " contentType=" + doc.contentType + " extractionStatus=" + (doc.extractionStatus ?? "undefined") + " evidenceCount=" + (step1PerDocCounts[idx] ?? 0));
+  });
+  console.log("[generate-capability][debug][step1] unreadableDocLabels=" + JSON.stringify(unreadableDocLabels));
 
   // Add self-reported profile evidence as USER_PROVIDED items
   if (profile.summary) {
@@ -273,6 +286,13 @@ No markdown fences. No explanation. No text outside the JSON array.`;
 
   const t4 = Date.now();
   console.log("[generate-capability][timing] step1 complete t4=" + t4 + " delta=" + (t4 - t3b) + "ms totalEvidence=" + allEvidenceItems.length + " unreadable=" + unreadableDocLabels.length);
+
+  // --- DEBUG: non-official evidence items ---
+  const nonOfficialItems = allEvidenceItems.filter(e => !e.isOfficialDocument);
+  console.log("[generate-capability][debug][step1] non-official evidence items (" + nonOfficialItems.length + " of " + allEvidenceItems.length + " total):");
+  nonOfficialItems.forEach((e, i) => {
+    console.log("[generate-capability][debug][step1]   nonOfficial[" + i + "] sourceDocLabel=" + JSON.stringify(e.sourceDocLabel) + " sourceDocType=" + JSON.stringify(e.sourceDocType));
+  });
 
   // --- Step 2: Cross-document grouping pass ---
   const t5 = Date.now();
