@@ -18,6 +18,22 @@ function extractSection(text: string, heading: string, nextHeading?: string): st
   return text.slice(contentStart, end === -1 ? text.length : end).trim();
 }
 
+type EvidenceItem = {
+  claim: string;
+  sourceDocId: string;
+  sourceDocLabel: string;
+  sourceDocType: string;
+  isOfficialDocument: boolean;
+};
+
+type EvidenceGroup = {
+  groupId: string;
+  claims: string[];
+  verificationStatus: "VERIFIED" | "USER_PROVIDED";
+  primarySourceDocId: string;
+  corroboratingDocIds: string[];
+};
+
 export async function POST() {
   const t0 = Date.now();
   console.log("[generate-capability][timing] START t0=" + t0);
@@ -81,34 +97,306 @@ export async function POST() {
     ? profile.capability_tags.join(", ")
     : "Not specified";
 
-  const employerSummaryInstruction = profile.summary_priority === "alternate"
-    ? `## EMPLOYER_SUMMARY
-A plain-language, employer-facing paragraph (200-300 words) that a hiring manager can read in 60 seconds. Use they/them/their pronouns throughout. Do not include the candidate's name.
+  type StoredDoc = {
+    id: string;
+    label: string;
+    filename: string;
+    path: string;
+    contentType: string;
+    extractedText?: string;
+    extractionStatus?: "pending" | "complete" | "failed";
+  };
 
-Do not use generic experience tier labels such as "entry level," "junior," "mid-level," or "senior." Instead, use specific role titles that reflect actual capability (e.g. "project coordinator," "field operations lead"). Exception: if the candidate's background genuinely aligns to management or executive level, name that directly as it is directional and useful to the employer.
+  const storedDocs: StoredDoc[] = Array.isArray(profile.document_metadata)
+    ? (profile.document_metadata as StoredDoc[])
+    : [];
 
-Lead with the transferable skills that make this candidate competitive in roles outside their direct background — name those roles explicitly. Reference their direct experience as supporting context in the second half of the paragraph.
+  const t3b = Date.now();
+  console.log("[generate-capability][timing] before doc loop t3b=" + t3b + " delta=" + (t3b - t2) + "ms storedDocCount=" + storedDocs.length);
 
-Structure the summary in three parts:
-1. What this person can do right now and what specific role they are best suited for today based on their transferable skills — use a real job title, not a tier label
-2. What small gaps exist and what it would take to close them (a certification, specific experience, etc.)
-3. Where this person can realistically grow within your organization or industry given their trajectory
+  const anthropic = new Anthropic({ apiKey });
+  const allEvidenceItems: EvidenceItem[] = [];
+  const unreadableDocLabels: string[] = [];
 
-Write to close the knowledge gap between non-traditional backgrounds and corporate expectations. Translate experience into business impact language the employer already knows. Do not use jargon the applicant used. Never frame the summary in a way that diminishes what the candidate has built regardless of their experience level.`
-    : `## EMPLOYER_SUMMARY
-A plain-language, employer-facing paragraph (200-300 words) that a hiring manager can read in 60 seconds. Use they/them/their pronouns throughout. Do not include the candidate's name.
+  // --- Step 1: Per-document Haiku evidence extraction ---
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type ContentBlock = Record<string, any>;
 
-Do not use generic experience tier labels such as "entry level," "junior," "mid-level," or "senior." Instead, use specific role titles that reflect actual capability (e.g. "project coordinator," "field operations lead"). Exception: if the candidate's background genuinely aligns to management or executive level, name that directly as it is directional and useful to the employer.
+  const extractEvidenceFromDoc = async (doc: StoredDoc, idx: number): Promise<EvidenceItem[]> => {
+    const tDocStart = Date.now();
+    console.log("[generate-capability][timing] step1[" + idx + "] START docId=" + doc.id + " label=" + doc.label);
 
-Structure the summary in three parts:
-1. What this person can do right now and what specific role they are best suited for today - use a real job title, not a tier label
-2. What small gaps exist and what it would take to close them (a certification, specific experience, etc.)
-3. Where this person can realistically grow within your organization or industry given their trajectory
+    let docContent: ContentBlock[] = [];
+    let usesPdfBeta = false;
 
-Write to close the knowledge gap between non-traditional backgrounds and corporate expectations. Translate experience into business impact language the employer already knows. Do not use jargon the applicant used. Never frame the summary in a way that diminishes what the candidate has built regardless of their experience level.`;
+    if (doc.extractionStatus === "complete" && doc.extractedText) {
+      docContent = [{ type: "text", text: `Document: "${doc.label}" (${doc.filename})\n\n${doc.extractedText}` }];
+    } else {
+      const isImage = doc.contentType.startsWith("image/");
+      const isPdf = doc.contentType === "application/pdf";
 
-  // Prompt built from raw profile inputs only - never feed prior AI-generated outputs back into this prompt
-  const userPrompt = `An applicant has provided the following profile information:
+      if (!isImage && !isPdf) {
+        unreadableDocLabels.push(`"${doc.label}" (${doc.filename})`);
+        console.log("[generate-capability][timing] step1[" + idx + "] SKIP unreadable");
+        return [];
+      }
+
+      try {
+        const { data: blob, error: dlErr } = await adminClient.storage
+          .from("candidate-documents")
+          .download(doc.path);
+        if (dlErr || !blob) throw dlErr ?? new Error("empty download");
+        const bytes = await blob.arrayBuffer();
+        if (bytes.byteLength > 4 * 1024 * 1024) {
+          unreadableDocLabels.push(`"${doc.label}" (file too large)`);
+          console.log("[generate-capability][timing] step1[" + idx + "] SKIP too large");
+          return [];
+        }
+        const b64 = Buffer.from(bytes).toString("base64");
+
+        if (isImage) {
+          const mediaType = doc.contentType as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+          docContent = [
+            { type: "image", source: { type: "base64", media_type: mediaType, data: b64 } },
+            { type: "text", text: `(Above image document: "${doc.label}", filename: "${doc.filename}")` }
+          ];
+        } else {
+          docContent = [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 }, title: doc.label }];
+          usesPdfBeta = true;
+        }
+      } catch (err) {
+        console.error("[generate-capability] step1 failed to load doc", doc.path, err);
+        unreadableDocLabels.push(`"${doc.label}" (could not be read)`);
+        return [];
+      }
+    }
+
+    const extractionPrompt = `Extract all capability-relevant evidence from this document as a JSON array.
+
+Source document metadata — use these values exactly in every object you return:
+- sourceDocId: "${doc.id}"
+- sourceDocLabel: "${doc.label}"
+
+Determine sourceDocType from the document content. Choose exactly one of: resume, NCOER, OER, DD214, certification, diploma, professional license, copyright registration, publisher confirmation, award order, military service record, other
+
+Set isOfficialDocument to true ONLY for: diploma, certification, DD214, military service record, professional license, copyright registration, publisher confirmation, award order. Set false for resume and other self-reported sources.
+
+Extraction rules:
+- Capture duty descriptions (e.g. troop/equipment movement, communications, sensitive equipment accountability, logistics, training, operations) as distinct claims — not only named skill or cert lines. Duty claims are what allow later matching to find capabilities like "Operations Management."
+- Each distinct capability, duty, role responsibility, or achievement gets its own claim object.
+- Preserve specific language: named organizations, scope (personnel count, budget, unit level), and specific outcomes. "Supervised 15 soldiers during multi-week field operations" is better than "leadership."
+- Include ALL evidence: leadership, technical, operational, administrative, educational, credentialed.
+- Do NOT summarize or abstract: keep the specific evidence as stated.
+
+Return ONLY a valid JSON array. Each object must have exactly these five fields:
+claim, sourceDocId, sourceDocLabel, sourceDocType, isOfficialDocument
+
+No markdown fences. No explanation. No text outside the JSON array.`;
+
+    const messageContent: ContentBlock[] = [
+      ...docContent,
+      { type: "text", text: extractionPrompt }
+    ];
+
+    try {
+      let response;
+      if (usesPdfBeta) {
+        response = await anthropic.beta.messages.create({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 2000,
+          temperature: 0.2,
+          betas: ["pdfs-2024-09-25"],
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          messages: [{ role: "user", content: messageContent as any }],
+        });
+      } else {
+        response = await anthropic.messages.create({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 2000,
+          temperature: 0.2,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          messages: [{ role: "user", content: messageContent as any }],
+        });
+      }
+
+      const raw = response.content.find(b => b.type === "text")?.text ?? "[]";
+      const tDocEnd = Date.now();
+      console.log("[generate-capability][timing] step1[" + idx + "] END delta=" + (tDocEnd - tDocStart) + "ms rawLen=" + raw.length);
+
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? (parsed as EvidenceItem[]) : [];
+      } catch {
+        const match = raw.match(/\[[\s\S]*\]/);
+        if (match) {
+          try { return JSON.parse(match[0]) as EvidenceItem[]; } catch { /* fall through */ }
+        }
+        console.error("[generate-capability] step1[" + idx + "] JSON parse failed raw=" + raw.slice(0, 300));
+        return [];
+      }
+    } catch (err) {
+      const tDocErr = Date.now();
+      console.log("[generate-capability][timing] step1[" + idx + "] ERROR delta=" + (tDocErr - tDocStart) + "ms err=" + (err instanceof Error ? err.message : String(err)));
+      return [];
+    }
+  };
+
+  const step1Results = await Promise.allSettled(
+    storedDocs.map((doc, idx) => extractEvidenceFromDoc(doc, idx))
+  );
+
+  for (const result of step1Results) {
+    if (result.status === "fulfilled") allEvidenceItems.push(...result.value);
+  }
+
+  // Add self-reported profile evidence as USER_PROVIDED items
+  if (profile.summary) {
+    allEvidenceItems.push({
+      claim: profile.summary,
+      sourceDocId: "profile-self-reported",
+      sourceDocLabel: "Applicant Self-Reported Summary",
+      sourceDocType: "other",
+      isOfficialDocument: false,
+    });
+  }
+  if (Array.isArray(profile.capability_tags)) {
+    for (const tag of profile.capability_tags as string[]) {
+      allEvidenceItems.push({
+        claim: tag,
+        sourceDocId: "profile-self-reported",
+        sourceDocLabel: "Applicant Self-Reported Skills",
+        sourceDocType: "other",
+        isOfficialDocument: false,
+      });
+    }
+  }
+
+  const t4 = Date.now();
+  console.log("[generate-capability][timing] step1 complete t4=" + t4 + " delta=" + (t4 - t3b) + "ms totalEvidence=" + allEvidenceItems.length + " unreadable=" + unreadableDocLabels.length);
+
+  // --- Step 2: Cross-document grouping pass ---
+  const t5 = Date.now();
+  console.log("[generate-capability][timing] step2 START t5=" + t5 + " delta=" + (t5 - t4) + "ms evidenceCount=" + allEvidenceItems.length);
+
+  let evidenceGroups: EvidenceGroup[] = [];
+
+  if (allEvidenceItems.length > 0) {
+    const step2Prompt = `You are analyzing evidence items extracted from a job applicant's documents. Group items that describe the same underlying capability.
+
+EVIDENCE ITEMS:
+${JSON.stringify(allEvidenceItems, null, 2)}
+
+Grouping rules:
+- Group items ONLY when they share a common evidentiary basis for the same specific capability — not merely topical or thematic similarity.
+- Two distinct VERIFIED capabilities must NOT be merged solely because they relate to a similar theme or domain.
+- If sources conflict on a detail (e.g. resume vs NCOER on the same duty), keep the fact from the strongest official source, not whichever was first.
+- If ANY item in a group has isOfficialDocument=true, set verificationStatus="VERIFIED" and use that document's sourceDocId as primarySourceDocId.
+- Otherwise set verificationStatus="USER_PROVIDED".
+- Self-reported items (sourceDocId="profile-self-reported") may be grouped with document evidence ONLY when that document directly supports the exact same capability. Otherwise they form their own USER_PROVIDED group.
+- Military service signal (DD214, NCOERs, OERs, award orders) carries heavy weight — preserve these capabilities, do not collapse them into generic groups.
+- A block tagged VERIFIED must be entirely supported by verified evidence. Do not blend self-reported content into a VERIFIED block.
+
+Return ONLY a valid JSON array. Each object must have exactly these fields:
+{
+  "groupId": "g1",
+  "claims": ["claim string 1", "claim string 2"],
+  "verificationStatus": "VERIFIED" | "USER_PROVIDED",
+  "primarySourceDocId": "sourceDocId of the strongest/most official source",
+  "corroboratingDocIds": ["other sourceDocIds that also support this group"]
+}
+
+No markdown fences. No explanation. No text outside the JSON array.`;
+
+    try {
+      const step2Response = await anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 4096,
+        temperature: 0.2,
+        messages: [{ role: "user", content: step2Prompt }],
+      });
+
+      const raw2 = step2Response.content.find(b => b.type === "text")?.text ?? "[]";
+      const tStep2End = Date.now();
+      console.log("[generate-capability][timing] step2 END t=" + tStep2End + " delta=" + (tStep2End - t5) + "ms rawLen=" + raw2.length + " groupCount=" + (raw2.match(/"groupId"/g) ?? []).length);
+
+      try {
+        const parsed = JSON.parse(raw2);
+        evidenceGroups = Array.isArray(parsed) ? (parsed as EvidenceGroup[]) : [];
+      } catch {
+        const match = raw2.match(/\[[\s\S]*\]/);
+        if (match) {
+          try { evidenceGroups = JSON.parse(match[0]) as EvidenceGroup[]; } catch { /* fall through */ }
+        }
+        console.error("[generate-capability] step2 JSON parse failed raw=" + raw2.slice(0, 300));
+      }
+    } catch (err) {
+      console.error("[generate-capability] step2 Sonnet error", err);
+    }
+  }
+
+  const t5b = Date.now();
+  console.log("[generate-capability][timing] step2 complete t5b=" + t5b + " delta=" + (t5b - t5) + "ms groupCount=" + evidenceGroups.length);
+
+  // --- Step 3: Civilian-language naming pass ---
+  const t6 = Date.now();
+  console.log("[generate-capability][timing] step3 START t6=" + t6 + " delta=" + (t6 - t5b) + "ms groupCount=" + evidenceGroups.length);
+
+  let capabilitySummary = "";
+
+  if (evidenceGroups.length > 0) {
+    const step3Prompt = `You are a civilian career specialist. Convert these evidence groups into plain-business-language capability entries for a hiring manager.
+
+EVIDENCE GROUPS:
+${JSON.stringify(evidenceGroups, null, 2)}
+
+Your ONLY jobs are:
+1. Write a plain-business-language capability NAME and DESCRIPTION for each group.
+2. Order entries: leadership/management/people-development first, technical/operational/domain-specific second, education/certifications/credentials last.
+3. Apply the exact verification tag from each group's verificationStatus field.
+
+Naming rules:
+- Names must be immediately understandable to someone with zero military, trade, or specialized background.
+- NO duty titles, school names, MOS codes, "Jumpmaster," "insertion," "joint fires," "signature reduction," or any term whose meaning depends on knowing a specific military, trade, or industry context in the NAME. These belong in the description as supporting evidence.
+- Descriptions may include specific roles, organizations, schools, and contexts.
+- Do NOT re-decide grouping or verification — use exactly the groups and verificationStatus values provided.
+- Do NOT limit the count. Every group gets its own entry.
+- Do NOT split or merge groups.
+- Every capability name must describe what the person can DO or DELIVER, not a role title, credential name, or jargon term.
+
+Output ONLY the capability entries in this exact format (no ## heading, no preamble, no trailing text):
+
+**[Capability Name]** [VERIFIED]: [Description]
+
+or
+
+**[Capability Name]** [USER_PROVIDED]: [Description]
+
+One entry per line. No numbered lists. No bullets. No category headers in the output.`;
+
+    try {
+      const step3Response = await anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 4096,
+        temperature: 0.2,
+        messages: [{ role: "user", content: step3Prompt }],
+      });
+
+      capabilitySummary = step3Response.content.find(b => b.type === "text")?.text ?? "";
+      const tStep3End = Date.now();
+      console.log("[generate-capability][timing] step3 END t=" + tStep3End + " delta=" + (tStep3End - t6) + "ms capabilityLen=" + capabilitySummary.length);
+    } catch (err) {
+      console.error("[generate-capability] step3 Sonnet error", err);
+    }
+  }
+
+  const t6b = Date.now();
+  console.log("[generate-capability][timing] step3 complete t6b=" + t6b + " delta=" + (t6b - t6) + "ms capabilityLen=" + capabilitySummary.length);
+
+  // --- Step 4: RECOMMENDED_POSITION, ENTRY_POINT, FUTURE_POSITIONS ---
+  const t7 = Date.now();
+  console.log("[generate-capability][timing] step4 (positions) START t7=" + t7 + " delta=" + (t7 - t6b) + "ms");
+
+  const step4Prompt = `An applicant has provided the following profile information:
 
 - Desired role/industry: ${desiredRole}
 - Experience level: ${profile.experience_level ?? "Not specified"}
@@ -116,39 +404,18 @@ Write to close the knowledge gap between non-traditional backgrounds and corpora
 - Skills they listed: ${skills}
 - Background summary they wrote: ${profile.summary ?? "Not provided"}
 
-Based on this information, generate exactly five sections with these exact headings:
+Their verified capability profile is:
 
-## CAPABILITY_PROFILE
-List each distinct capability as a separate item. A verification tag is required on every entry. Use this exact format — no numbered lists, bullets, or other structure:
+${capabilitySummary}
 
-Output capabilities in this exact category order, with no category labels or headers in the output itself:
-1. Leadership, management, and people development capabilities first
-2. Technical, operational, and domain-specific capabilities second
-3. Education, certifications, and formal credentials last
-
-Within each category, group self-reported capabilities alongside verified capabilities covering the same domain rather than separating them. Do not add category headers or labels to the output, just order the entries as described.
-
-**[Capability Name]** [VERIFIED]: [Description]
-or
-**[Capability Name]** [USER_PROVIDED]: [Description]
-
-Tagging rules:
-- Tag [VERIFIED] only when the specific claim is directly supported by an official uploaded document: a diploma, professional certification, DD214, military service record, professional license, copyright registration certificate, or official publisher/rights-holder confirmation (for example, a KDP or publisher page confirming the person as the registered author or rights holder). A resume is NOT an official document and does NOT qualify for [VERIFIED].
-- Tag [USER_PROVIDED] for everything else — skills from a resume, information entered on the profile form, or any self-reported detail.
-- Provenance grouping rule: When grouping capability content into blocks, group ONLY by shared evidentiary source, never by topical or thematic similarity alone, and this applies even when two pieces of evidence share the same verification status. Two distinct VERIFIED capabilities must not be merged into one block solely because they relate to a similar theme or domain, each gets its own entry unless they describe the exact same underlying capability. Every piece of supporting evidence within a single capability block must derive from the same verification status. If a self-reported claim (no supporting document) is topically related to a verified capability but does not share its document source, it must NOT be merged into that block, it must form its own separate, clearly self-reported block, however minor the claim. A block tagged VERIFIED must be entirely supported by verified evidence with no self-reported content blended in.
-
-List every distinct capability supported by the evidence below, VERIFIED or USER_PROVIDED. Do not limit the count and do not select a subset of what's available — every distinct, demonstrated capability gets its own entry. Do not split one capability into multiple overlapping or near-duplicate entries, and do not list the same capability twice under different names.
-
-Cross-reference the self-reported capability tags provided in this profile against the evidence above. For each tag that describes a capability not already captured by an existing entry, add it as its own entry, applying the same Tagging rules used above: if an official uploaded document, diploma, professional certification, DD214, military service record, professional license, copyright registration certificate, or official publisher/rights-holder confirmation (for example, a KDP or publisher page confirming the person as the registered author or rights holder), directly supports that specific capability, tag it [VERIFIED]; otherwise tag it [USER_PROVIDED]. Do not default a cross-referenced tag to [USER_PROVIDED] without first checking whether supporting documentary evidence exists for it. If a tag is already covered by an existing VERIFIED or USER_PROVIDED entry, do not duplicate it.
-
-Every capability name must be written in plain business language any reader outside that person's specific field, branch, or trade would immediately understand, describing what they can do or deliver, never a duty title, role name, school name, qualification name, or internal jargon specific to their branch, trade, or employer. Examples of jargon to avoid in a capability name: "Master Breacher," "Jumpmaster," "insertion" (as in helicopter or water insertion), "joint fires," "signature reduction," an MOS code, or an internal job title. These are examples of the category to avoid, not an exhaustive list, apply the same standard to any term whose meaning depends on knowing a specific military, trade, or industry context. If a reader with zero background in that field would not understand the capability name on its own, with no other context, rewrite it. The specific role, school, qualification, or internal title belongs in the description as supporting evidence, not in the name itself.
+Based on this full picture, generate exactly three sections with these exact headings:
 
 ## RECOMMENDED_POSITION
-State the single best job title this applicant should target right now based on their full background. 
+State the single best job title this applicant should target right now based on their full background.
 
 CRITICAL ANONYMITY RULE: Never use the candidate's name. Refer to them only as "this candidate" or using they/them pronouns. The candidate's identity must remain hidden at all times.
 
-Assessment Mandate: You must first assess the candidate's overall demonstrated capability tier from their FULL background (leadership scope, budget/program/personnel responsibility, safety oversight, scale of operations) BEFORE considering certifications or recent credentials. Certifications and recent training should be treated as supplementary qualifications, not as the primary driver of seniority level. The recommended position's seniority must match the candidate's demonstrated capability tier, not the tier implied by their most recent or most junior credential. 
+Assessment Mandate: You must first assess the candidate's overall demonstrated capability tier from their FULL background (leadership scope, budget/program/personnel responsibility, safety oversight, scale of operations) BEFORE considering certifications or recent credentials. Certifications and recent training should be treated as supplementary qualifications, not as the primary driver of seniority level. The recommended position's seniority must match the candidate's demonstrated capability tier, not the tier implied by their most recent or most junior credential.
 
 Do not use the words entry level, junior, senior, or any tier label. Do not pigeonhole based on what they have done. Surface what they are capable of becoming today.
 
@@ -157,7 +424,7 @@ Use this exact format:
 **[Job Title]**: [Two to three sentences explaining specifically why this role is the right fit — what in their background maps to what this role demands day-to-day.]
 
 ## ENTRY_POINT
-State the single best starting role this applicant should pursue first to build toward their recommended position. 
+State the single best starting role this applicant should pursue first to build toward their recommended position.
 
 CRITICAL ANONYMITY RULE: Never use the candidate's name. Refer to them only as "this candidate" or using they/them pronouns. The candidate's identity must remain hidden at all times.
 
@@ -176,218 +443,70 @@ CRITICAL ANONYMITY RULE: Never use the candidate's name. Refer to them only as "
 
 List only roles that genuinely fit. No minimum or maximum number.
 
-Respond with only the four sections above. No preamble, no closing remarks.`;
+Respond with only the three sections above. No preamble, no closing remarks.`;
 
-  // --- Build document content blocks ---
-  type StoredDoc = {
-    id: string;
-    label: string;
-    filename: string;
-    path: string;
-    contentType: string;
-    extractedText?: string;
-    extractionStatus?: "pending" | "complete" | "failed";
-  };
-
-  const storedDocs: StoredDoc[] = Array.isArray(profile.document_metadata)
-    ? (profile.document_metadata as StoredDoc[])
-    : [];
-
-  const t3b = Date.now();
-  console.log("[generate-capability][timing] before doc loop t3b=" + t3b + " delta=" + (t3b - t2) + "ms storedDocCount=" + storedDocs.length);
-
-  type ContentBlock = Record<string, unknown>;
-  const rawDocBlocks: ContentBlock[] = [];
-  const extractedTexts: string[] = [];
-  const unreadableDocLabels: string[] = [];
-
-  for (const doc of storedDocs) {
-    const isImage = doc.contentType.startsWith("image/");
-    const isPdf = doc.contentType === "application/pdf";
-    const isWord = doc.contentType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || doc.contentType === "application/msword";
-
-    // 1. If we have complete extracted text for ANY document type, collect it for batching.
-    if (doc.extractionStatus === "complete" && doc.extractedText) {
-      extractedTexts.push(`--- START DOCUMENT: "${doc.label}" (${doc.filename}) ---\n${doc.extractedText}\n--- END DOCUMENT: "${doc.label}" ---`);
-      continue;
-    }
-
-    // 2. Fallback: If extraction hasn't run or failed, handle based on type.
-    if (!isImage && !isPdf) {
-      unreadableDocLabels.push(`"${doc.label}" (${doc.filename})`);
-      continue;
-    }
-
-    try {
-      const { data: blob, error: dlErr } = await adminClient.storage
-        .from("candidate-documents")
-        .download(doc.path);
-      if (dlErr || !blob) throw dlErr ?? new Error("empty download");
-      const bytes = await blob.arrayBuffer();
-      if (bytes.byteLength > 4 * 1024 * 1024) {
-        unreadableDocLabels.push(`"${doc.label}" (file too large to attach)`);
-        continue;
-      }
-      const b64 = Buffer.from(bytes).toString("base64");
-      if (isImage) {
-        const mediaType = doc.contentType as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
-        rawDocBlocks.push({ type: "image", source: { type: "base64", media_type: mediaType, data: b64 } });
-        rawDocBlocks.push({ type: "text", text: `(Above image: "${doc.label}")` });
-      } else if (isPdf) {
-        rawDocBlocks.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 }, title: doc.label });
-      }
-    } catch (err) {
-      console.error("[generate-capability] failed to load document", doc.path, err);
-      unreadableDocLabels.push(`"${doc.label}" (could not be read)`);
-    }
-  }
-
-  const t4 = Date.now();
-  console.log("[generate-capability][timing] after doc loop t4=" + t4 + " delta=" + (t4 - t3b) + "ms extractedCount=" + extractedTexts.length + " rawBlocks=" + rawDocBlocks.length + " unreadable=" + unreadableDocLabels.length);
-
-  let t5 = 0;
-  let t5b = 0;
-
-  // --- Batch Summarization & Doc Block Assembly ---
-  const anthropic = new Anthropic({ apiKey });
-  const docBlocks: ContentBlock[] = [];
-  const BATCH_THRESHOLD = 60000;
-  const totalExtractedLength = extractedTexts.reduce((sum, t) => sum + t.length, 0);
-
-  if (extractedTexts.length > 0) {
-    if (totalExtractedLength <= BATCH_THRESHOLD) {
-      t5b = t4;
-      // Optimization: If everything fits in one batch, skip Haiku and send raw text blocks to synthesis
-      for (const text of extractedTexts) {
-        docBlocks.push({ type: "text" as const, text });
-      }
-    } else {
-      // Summarize each document individually to preserve provenance
-      const extractLabelFromText = (text: string): string => {
-        const match = text.match(/--- START DOCUMENT: "(.+?)" \(/);
-        return match ? match[1] : "Unknown Document";
-      };
-
-      const summarizeSingleDoc = async (docText: string, label: string, idx: number): Promise<{label: string, summary: string}> => {
-        const tBatchStart = Date.now();
-        console.log("[generate-capability][timing] batch[" + idx + "] START t=" + tBatchStart + " batchLen=" + docText.length);
-        try {
-          const summaryMsg = await anthropic.messages.create({
-            model: "claude-haiku-4-5-20251001",
-            max_tokens: 1500,
-            system: "You are an expert at extracting capability-relevant signal from professional documents. Extract: specific skills demonstrated, leadership/management scope (personnel, budget, operations), technical proficiencies, certifications, and specific achievements. IMPORTANT: For every piece of information, you MUST clearly note the source document label (e.g. 'Source: [Document Label]') so that the final synthesis can determine verification status. Maintain high density of facts. Do not use filler language. When extracting capability-relevant content, preserve SPECIFIC evidentiary details rather than abstracting into generic competency descriptions. Keep named organizations, bodies, and levels of command (e.g. 'Office Under SECDEF', 'NATO', 'Detachment Commander'); keep specific roles, audiences, and contexts described in the source (who was briefed, advised, or engaged, and at what level); keep near-verbatim phrasing for duty descriptions where the source uses specific language. Do NOT collapse this into vague summary phrases like 'demonstrates strategic thinking' - instead extract something like 'assisted in briefing executive-level officials at the Office of the Under Secretary of Defense (OUSD); provided strategic problem-solving input,' preserving the Source: [Document Label] attribution as required. Keep this specific, but concise: 1-2 sentences per distinct capability or achievement is sufficient. Preserve the specific named detail within that length, rather than expanding into longer narrative prose.",
-            messages: [{ role: "user", content: `Summarize the following document batch for a capability profile:\n\n${docText}` }],
-          });
-          const tBatchEnd = Date.now();
-          console.log("[generate-capability][timing] batch[" + idx + "] END t=" + tBatchEnd + " delta=" + (tBatchEnd - tBatchStart) + "ms");
-          return { label, summary: summaryMsg.content.find((b) => b.type === "text")?.text ?? "" };
-        } catch (err) {
-          const tBatchErr = Date.now();
-          console.log("[generate-capability][timing] batch[" + idx + "] ERROR t=" + tBatchErr + " delta=" + (tBatchErr - tBatchStart) + "ms err=" + (err instanceof Error ? err.message : String(err)));
-          return { label, summary: "" };
-        }
-      };
-
-      const t5 = Date.now();
-      console.log("[generate-capability][timing] before batch summarizeBatch() calls t5=" + t5 + " delta=" + (t5 - t4) + "ms docCount=" + extractedTexts.length);
-
-      const docSummaryResults = await Promise.allSettled(
-        extractedTexts.map((text, idx) => summarizeSingleDoc(text, extractLabelFromText(text), idx))
-      );
-      t5b = Date.now();
-      console.log("[generate-capability][timing] after batch summarizeBatch() calls t5b=" + t5b + " delta=" + (t5b - t5) + "ms");
-
-      for (const result of docSummaryResults) {
-        if (result.status === "fulfilled" && result.value.summary) {
-          docBlocks.push({
-            type: "text" as const,
-            text: `--- DOCUMENT: "${result.value.label}" ---\n${result.value.summary}\n--- END DOCUMENT ---`
-          });
-        }
-      }
-    }
-  }
-
-  // Add raw fallback blocks (images/PDFs)
-  docBlocks.push(...rawDocBlocks);
-
-  // Prepend document context to the prompt when docs are present
-  let fullPrompt = userPrompt;
-  if (storedDocs.length > 0) {
-    const lines: string[] = [];
-    if (docBlocks.length > 0) {
-      lines.push("The applicant has provided source documents (attached below as text, summaries, or raw files). Read all document context completely before generating any output. Synthesize across ALL sources with equal weight — do not let any single document dominate. Military service signal (DD-214, NCOERs, OERs, awards, performance evaluations) carries heavy weight and must be prominently reflected in the capability profile and every summary section. Resumes, certificates, and academic transcripts carry equal weight to each other. The final output must reflect the full combined picture of every submitted source. Specific data in these documents takes precedence over the self-reported fields below. If military service appears in any source, it must be prominently reflected in the short capability summary.");
-    }
-    if (unreadableDocLabels.length > 0) {
-      lines.push(`The following documents were uploaded but could not be processed automatically: ${unreadableDocLabels.join(", ")}. Note them as additional context.`);
-    }
-    fullPrompt = lines.join(" ") + "\n\n" + userPrompt;
-  }
-
-  const messageContent = [
-    ...docBlocks,
-    { type: "text" as const, text: fullPrompt },
-  ];
-
-  const hasPdfs = docBlocks.some((b) => b.type === "document");
-
-  const promptLength = fullPrompt.length + docBlocks.reduce((sum, b) => sum + JSON.stringify(b).length, 0);
-  const t6 = Date.now();
-  console.log("[generate-capability][timing] before Sonnet synthesis t6=" + t6 + " delta=" + (t6 - t5b) + "ms hasPdfs=" + hasPdfs + " docBlockCount=" + docBlocks.length + " promptLen=" + promptLength + " fullPromptLen=" + fullPrompt.length);
-
-  let text = "";
+  let positionsText = "";
   try {
-    if (hasPdfs) {
-      const message = await anthropic.beta.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: docBlocks.length > 0 ? 4096 : 2048,
-        betas: ["pdfs-2024-09-25"],
-        system:
-          "You are a veteran career counselor and hiring specialist who translates non-traditional, military, and blue-collar backgrounds into civilian corporate language that hiring managers can immediately understand and act on. You are precise, specific, and never use filler language.\n\nWhen documents are provided, you must synthesize across ALL submitted documents equally regardless of upload order. Military service documents — DD-214s, NCOERs, OERs, awards, and performance evaluations — carry heavy weight and must be reflected prominently in every output section. Resumes, certificates, and academic transcripts carry equal weight to each other. No single document may dominate the output. The capability profile and all summaries must reflect the full combined picture of every document submitted. If any document reveals military service, that service must appear prominently in the short capability summary.",
-        temperature: 0.2,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        messages: [{ role: "user", content: messageContent as any }],
-      });
-      text = message.content.find((b) => b.type === "text")?.text ?? "";
-      console.log("[generate-capability][debug] raw response last 1000 chars:", typeof text === "string" ? text.slice(-1000) : "(empty)");
-    } else {
-      const message = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: docBlocks.length > 0 ? 4096 : 2048,
-        system:
-          "You are a veteran career counselor and hiring specialist who translates non-traditional, military, and blue-collar backgrounds into civilian corporate language that hiring managers can immediately understand and act on. You are precise, specific, and never use filler language.\n\nWhen documents are provided, you must synthesize across ALL submitted documents equally regardless of upload order. Military service documents — DD-214s, NCOERs, OERs, awards, and performance evaluations — carry heavy weight and must be reflected prominently in every output section. Resumes, certificates, and academic transcripts carry equal weight to each other. No single document may dominate the output. The capability profile and all summaries must reflect the full combined picture of every document submitted. If any document reveals military service, that service must appear prominently in the short capability summary.",
-        temperature: 0.2,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        messages: [{ role: "user", content: messageContent as any }],
-      });
-      text = message.content.find((b) => b.type === "text")?.text ?? "";
-      console.log("[generate-capability][debug] raw response last 1000 chars:", typeof text === "string" ? text.slice(-1000) : "(empty)");
-    }
+    const step4Response = await anthropic.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 4096,
+      temperature: 0.2,
+      messages: [{ role: "user", content: step4Prompt }],
+    });
+    positionsText = step4Response.content.find(b => b.type === "text")?.text ?? "";
+    console.log("[generate-capability][debug] raw response last 1000 chars:", positionsText.slice(-1000));
   } catch (err) {
-    const t7Err = Date.now();
-    console.log("[generate-capability][timing] Sonnet FAILED t7=" + t7Err + " delta=" + (t7Err - t6) + "ms");
-    console.error("[generate-capability] Anthropic API error", err);
+    const tStep4Err = Date.now();
+    console.log("[generate-capability][timing] step4 FAILED t=" + tStep4Err + " delta=" + (tStep4Err - t7) + "ms");
+    console.error("[generate-capability] step4 Anthropic API error", err);
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: `AI generation failed: ${message}` }, { status: 500 });
   }
 
-  const t7 = Date.now();
-  console.log("[generate-capability][timing] Sonnet complete t7=" + t7 + " delta=" + (t7 - t6) + "ms responseLen=" + text.length);
+  const tStep4End = Date.now();
+  console.log("[generate-capability][timing] step4 complete t=" + tStep4End + " delta=" + (tStep4End - t7) + "ms responseLen=" + positionsText.length);
 
-  const capabilitySummary = extractSection(text, "CAPABILITY_PROFILE", "RECOMMENDED_POSITION");
-  const recommendedPosition = extractSection(text, "RECOMMENDED_POSITION", "ENTRY_POINT");
-  const entryPoint = extractSection(text, "ENTRY_POINT", "FUTURE_POSITIONS");
-  const futurePositions = extractSection(text, "FUTURE_POSITIONS");
+  const recommendedPosition = extractSection(positionsText, "RECOMMENDED_POSITION", "ENTRY_POINT");
+  const entryPoint = extractSection(positionsText, "ENTRY_POINT", "FUTURE_POSITIONS");
+  const futurePositions = extractSection(positionsText, "FUTURE_POSITIONS");
 
   console.log("[generate-capability][debug] section lengths - capability:", capabilitySummary.length, "recommended:", recommendedPosition.length, "entry:", entryPoint.length, "future:", futurePositions.length);
 
   const t8 = Date.now();
-  console.log("[generate-capability][timing] before employer summary call t8=" + t8 + " delta=" + (t8 - t7) + "ms");
+  console.log("[generate-capability][timing] before employer summary call t8=" + t8 + " delta=" + (t8 - tStep4End) + "ms");
 
-  let employerSummary = "";
-  try {
-    const employerSystemPrompt = "You are a talent strategist writing employer-facing candidate summaries for a civilian hiring platform. Your audience is a hiring manager or HR director with zero military background. Write in third person using they/them pronouns. Never use the candidate's name. Never use military job titles, unit designations, MOS codes, operation names, military acronyms, or any jargon that requires military context to understand. Translate everything into plain business language. Focus on what this person can do, the scale at which they have done it, and why a civilian employer should be interested. Be specific and factual. No filler language.";
-    const employerUserPrompt = `Based on the following candidate profile sections, write a compelling employer-facing summary of up to 1,500 characters for a civilian hiring manager who has no military background. Describe what this person can do, at what scale, and why they are worth interviewing — entirely in plain business language. Do not use military titles, unit names, operation names, acronyms, or any term that requires military context. If a fact requires military context to be meaningful, translate it to its civilian equivalent or omit it.
+  // --- Employer Summary ---
+  const isAlternateSummary = profile.summary_priority === "alternate";
+  const employerSystemPrompt = "You are a talent strategist writing employer-facing candidate summaries for a civilian hiring platform. Your audience is a hiring manager or HR director with zero military background. Write in third person using they/them pronouns. Never use the candidate's name. Never use military job titles, unit designations, MOS codes, operation names, military acronyms, or any jargon that requires military context to understand. Translate everything into plain business language. Focus on what this person can do, the scale at which they have done it, and why a civilian employer should be interested. Be specific and factual. No filler language.";
+
+  const employerUserPrompt = isAlternateSummary
+    ? `Based on the following candidate profile sections, write a compelling employer-facing paragraph of 200-300 words (up to 1,500 characters) for a civilian hiring manager who has no military background. Use they/them/their pronouns throughout. Do not include the candidate's name. Do not use generic experience tier labels such as "entry level," "junior," "mid-level," or "senior." Instead, use specific role titles that reflect actual capability.
+
+Lead with the transferable skills that make this candidate competitive in roles outside their direct background — name those roles explicitly. Reference their direct experience as supporting context in the second half.
+
+Structure the summary in three parts:
+1. What this person can do right now and what specific role they are best suited for today based on their transferable skills — use a real job title, not a tier label
+2. What small gaps exist and what it would take to close them (a certification, specific experience, etc.)
+3. Where this person can realistically grow within your organization or industry given their trajectory
+
+Write to close the knowledge gap between non-traditional backgrounds and corporate expectations. Translate experience into business impact language the employer already knows. Do not use jargon the applicant used. Never frame the summary in a way that diminishes what the candidate has built regardless of their experience level. Do not use military titles, unit names, operation names, acronyms, or any term that requires military context.
+
+CAPABILITY PROFILE:
+${capabilitySummary}
+
+RECOMMENDED POSITION:
+${recommendedPosition}
+
+ENTRY POINT:
+${entryPoint}`
+    : `Based on the following candidate profile sections, write a compelling employer-facing paragraph of 200-300 words (up to 1,500 characters) for a civilian hiring manager who has no military background. Use they/them/their pronouns throughout. Do not include the candidate's name. Do not use generic experience tier labels such as "entry level," "junior," "mid-level," or "senior." Instead, use specific role titles that reflect actual capability.
+
+Structure the summary in three parts:
+1. What this person can do right now and what specific role they are best suited for today — use a real job title, not a tier label
+2. What small gaps exist and what it would take to close them (a certification, specific experience, etc.)
+3. Where this person can realistically grow within your organization or industry given their trajectory
+
+Write to close the knowledge gap between non-traditional backgrounds and corporate expectations. Translate experience into business impact language the employer already knows. Do not use military titles, unit names, operation names, acronyms, or any term that requires military context. Never frame the summary in a way that diminishes what the candidate has built regardless of their experience level.
 
 CAPABILITY PROFILE:
 ${capabilitySummary}
@@ -398,28 +517,16 @@ ${recommendedPosition}
 ENTRY POINT:
 ${entryPoint}`;
 
-    if (hasPdfs) {
-      const employerMessage = await anthropic.beta.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 2048,
-        betas: ["pdfs-2024-09-25"],
-        system: employerSystemPrompt,
-        temperature: 0.2,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        messages: [{ role: "user", content: employerUserPrompt }],
-      });
-      employerSummary = employerMessage.content.find((b) => b.type === "text")?.text ?? "";
-    } else {
-      const employerMessage = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 2048,
-        system: employerSystemPrompt,
-        temperature: 0.2,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        messages: [{ role: "user", content: employerUserPrompt }],
-      });
-      employerSummary = employerMessage.content.find((b) => b.type === "text")?.text ?? "";
-    }
+  let employerSummary = "";
+  try {
+    const employerMessage = await anthropic.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 2048,
+      system: employerSystemPrompt,
+      temperature: 0.2,
+      messages: [{ role: "user", content: employerUserPrompt }],
+    });
+    employerSummary = employerMessage.content.find(b => b.type === "text")?.text ?? "";
   } catch (err) {
     console.error("[generate-capability] Employer summary API error", err);
     employerSummary = "";
