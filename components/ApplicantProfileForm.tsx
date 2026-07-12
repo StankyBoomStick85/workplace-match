@@ -253,6 +253,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
   }, [generatePhase]);
   const [generateError, setGenerateError] = useState("");
   const [canRetryFinalize, setCanRetryFinalize] = useState(false);
+  const [pendingReviewMessage, setPendingReviewMessage] = useState("");
   const [activePathTab, setActivePathTab] = useState<"primary" | "alternate">(
     (mappedInitial?.summaryPriority as "primary" | "alternate") || "primary"
   );
@@ -564,6 +565,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
       });
       setIsApproved(false);
       setCanRetryFinalize(false);
+      setPendingReviewMessage("");
       return true;
     } catch {
       setGenerateError("Finishing your capability profile failed. Please try again.");
@@ -576,6 +578,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
     setIsGenerating(true);
     setGenerateError("");
     setCanRetryFinalize(false);
+    setPendingReviewMessage("");
     setGeneratePhase("phase1");
 
     try {
@@ -584,6 +587,11 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
 
       if (!response.ok) {
         setGenerateError(result.error ?? "Generation failed. Please try again.");
+        return;
+      }
+
+      if (result.skipAutoFinalize) {
+        setPendingReviewMessage("Evidence groups saved, ready for review.");
         return;
       }
 
@@ -600,6 +608,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
     setIsGenerating(true);
     setGenerateError("");
     setCanRetryFinalize(false);
+    setPendingReviewMessage("");
     try {
       await runFinalize();
     } finally {
@@ -1026,6 +1035,24 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
             )}
           </button>
         </div>
+
+        {pendingReviewMessage ? <p className="mt-3 text-sm text-zinc-700">{pendingReviewMessage}</p> : null}
+
+        {/* TEMP: SKIP_AUTO_FINALIZE debug flow — remove once done inspecting pending_evidence_groups. */}
+        {(pendingReviewMessage !== "" ||
+          (initialProfile as Record<string, unknown> | null)?.capability_generation_status === "groups_ready") &&
+        !profile?.capabilityProfile ? (
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={handleRetryFinalize}
+              disabled={isGenerating}
+              className="inline-flex items-center gap-2 rounded-md bg-zinc-800 px-4 py-2 text-sm font-semibold text-white transition hover:bg-zinc-900 disabled:opacity-60"
+            >
+              Finish Profile (Manual)
+            </button>
+          </div>
+        ) : null}
 
         {generateError ? (
           <div className="mt-3">

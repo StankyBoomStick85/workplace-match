@@ -592,13 +592,19 @@ No markdown fences. No explanation. No text outside the JSON array.`;
     return NextResponse.json({ error: "Failed to save evidence groups." }, { status: 500 });
   }
 
+  // Temporary debug gate: when set, Phase 1 still saves pending_evidence_groups as
+  // normal but tells the frontend not to auto-chain into Phase 2, so the raw groups
+  // can be inspected via Supabase SQL before finalize overwrites/clears them.
+  const skipAutoFinalize = process.env.SKIP_AUTO_FINALIZE === "true";
+
   const tEnd = Date.now();
-  console.log("[generate-capability][timing] phase1 complete tEnd=" + tEnd + " totalDelta=" + (tEnd - t0) + "ms evidenceCount=" + allEvidenceItems.length + " groupCount=" + evidenceGroups.length);
+  console.log("[generate-capability][timing] phase1 complete tEnd=" + tEnd + " totalDelta=" + (tEnd - t0) + "ms evidenceCount=" + allEvidenceItems.length + " groupCount=" + evidenceGroups.length + " skipAutoFinalize=" + skipAutoFinalize);
 
   return NextResponse.json({
     success: true,
     status: "groups_ready",
     evidenceCount: allEvidenceItems.length,
-    groupCount: evidenceGroups.length
+    groupCount: evidenceGroups.length,
+    skipAutoFinalize
   });
 }
