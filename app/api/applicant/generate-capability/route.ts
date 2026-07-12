@@ -459,7 +459,7 @@ No markdown fences. No explanation. No text outside the JSON array.`;
       }
 
       const lostCount2 = candidateCount2 !== null && salvagedCount2 !== null ? candidateCount2 - salvagedCount2 : 0;
-      console.log("[generate-capability][step2] truncated=" + wasTruncated2 + " recovered=" + evidenceGroups.length + (wasTruncated2 ? " lost=" + lostCount2 + " (via fallback)" : ""));
+      console.log("[generate-capability][step2] truncated=" + wasTruncated2 + " recovered=" + evidenceGroups.length + (wasTruncated2 ? " lost=" + lostCount2 + " (via fallback)" : "") + " stop_reason=" + step2Response.stop_reason);
 
       if (wasTruncated2 && evidenceGroups.length === 0) {
         console.error("[generate-capability] step2 JSON parse failed raw=" + raw2.slice(0, 300));
