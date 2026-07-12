@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
+import { getCivilianDocLabel } from "@/lib/documentLabels";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -25,6 +26,32 @@ type EvidenceGroup = {
   primarySourceDocId: string;
   corroboratingDocIds: string[];
 };
+
+type StoredDoc = {
+  id: string;
+  label: string;
+  filename: string;
+  path: string;
+  contentType: string;
+  extractedText?: string;
+  extractionStatus?: "pending" | "complete" | "failed";
+};
+
+type CapabilityEntry = {
+  name: string;
+  description: string;
+  verificationStatus: "VERIFIED" | "USER_PROVIDED";
+  primaryDocLabel: string;
+  primaryDocId: string;
+  corroboratingDocLabels: string[];
+};
+
+function resolveDocLabel(docId: string, storedDocs: StoredDoc[]): string {
+  if (docId === "profile-self-reported") return "Self-Reported by Applicant";
+  const doc = storedDocs.find(d => d.id === docId);
+  if (!doc) return "Supporting Document";
+  return getCivilianDocLabel({ label: doc.label, contentType: doc.contentType });
+}
 
 export async function POST() {
   const t0 = Date.now();
@@ -60,7 +87,7 @@ export async function POST() {
 
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("job_types, experience_level, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, capability_generation_status")
+    .select("job_types, experience_level, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, capability_generation_status, document_metadata")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -85,6 +112,10 @@ export async function POST() {
     ? (profile.pending_evidence_groups as EvidenceGroup[])
     : [];
 
+  const storedDocs: StoredDoc[] = Array.isArray(profile.document_metadata)
+    ? (profile.document_metadata as StoredDoc[])
+    : [];
+
   const t2 = Date.now();
   console.log("[generate-capability-finalize][timing] after profile query t2=" + t2 + " delta=" + (t2 - t1) + "ms groupCount=" + evidenceGroups.length);
 
@@ -107,6 +138,7 @@ export async function POST() {
   console.log("[generate-capability-finalize][timing] step3 START t6=" + t6 + " delta=" + (t6 - t2) + "ms groupCount=" + evidenceGroups.length);
 
   let capabilitySummary = "";
+  let capabilityEntries: CapabilityEntry[] = [];
 
   if (evidenceGroups.length > 0) {
     const step3Prompt = `You are a civilian career specialist. Convert these evidence groups into plain-business-language capability entries for a hiring manager.
@@ -130,11 +162,13 @@ Naming rules:
 
 Output ONLY the capability entries in this exact format (no ## heading, no preamble, no trailing text):
 
-**[Capability Name]** [VERIFIED]: [Description]
+[groupId] **[Capability Name]** [VERIFIED]: [Description]
 
 or
 
-**[Capability Name]** [USER_PROVIDED]: [Description]
+[groupId] **[Capability Name]** [USER_PROVIDED]: [Description]
+
+Use each group's own "groupId" value from the EVIDENCE GROUPS above, exactly as given, in square brackets at the very start of the line.
 
 One entry per line. No numbered lists. No bullets. No category headers in the output.`;
 
@@ -146,9 +180,49 @@ One entry per line. No numbered lists. No bullets. No category headers in the ou
         messages: [{ role: "user", content: step3Prompt }],
       });
 
-      capabilitySummary = step3Response.content.find(b => b.type === "text")?.text ?? "";
+      const rawStep3Text = step3Response.content.find(b => b.type === "text")?.text ?? "";
+
+      // Sonnet prefixes each line with "[groupId] " so we can deterministically map the
+      // civilian name/description it writes back to the group's document provenance
+      // (primarySourceDocId/corroboratingDocIds) — that link can't be recovered reliably
+      // from the prose alone since Step 3 reorders entries by theme, not group order.
+      // We strip the prefix back off before saving, so capability_summary's format/content
+      // is unchanged from before this feature (byte-identical to what Sonnet would have
+      // produced without the prefix instruction).
+      const prosLines: string[] = [];
+      for (const line of rawStep3Text.split("\n")) {
+        // Restrict the groupId capture to word chars/hyphens (matches actual groupId shapes
+        // like "g1" or "b0-g1"). A permissive [^\]]+ here would, on a malformed line missing
+        // its closing bracket, greedily consume through to the NEXT "]" in the line (e.g. the
+        // one in "[VERIFIED]"), silently dropping the name/tag into the discarded prefix
+        // instead of failing safe.
+        const prefixMatch = line.match(/^\[([\w-]+)\]\s*(.*)$/);
+        if (!prefixMatch) {
+          prosLines.push(line);
+          continue;
+        }
+        const [, groupId, rest] = prefixMatch;
+        prosLines.push(rest);
+
+        const entryMatch = rest.match(/^\*\*(.+?)\*\*\s*\[(VERIFIED|USER_PROVIDED)\]:\s*(.*)$/);
+        if (!entryMatch) continue;
+        const [, name, status, description] = entryMatch;
+        const group = evidenceGroups.find(g => g.groupId === groupId);
+        if (!group) continue;
+
+        capabilityEntries.push({
+          name: name.trim(),
+          description: description.trim(),
+          verificationStatus: status as "VERIFIED" | "USER_PROVIDED",
+          primaryDocLabel: resolveDocLabel(group.primarySourceDocId, storedDocs),
+          primaryDocId: group.primarySourceDocId,
+          corroboratingDocLabels: group.corroboratingDocIds.map(id => resolveDocLabel(id, storedDocs))
+        });
+      }
+
+      capabilitySummary = prosLines.join("\n");
       const tStep3End = Date.now();
-      console.log("[generate-capability-finalize][timing] step3 END t=" + tStep3End + " delta=" + (tStep3End - t6) + "ms capabilityLen=" + capabilitySummary.length);
+      console.log("[generate-capability-finalize][timing] step3 END t=" + tStep3End + " delta=" + (tStep3End - t6) + "ms capabilityLen=" + capabilitySummary.length + " entryCount=" + capabilityEntries.length);
     } catch (err) {
       console.error("[generate-capability-finalize] step3 Sonnet error", err);
     }
@@ -304,6 +378,7 @@ ${entryPoint}`;
     .from("candidate_profiles")
     .update({
       capability_summary: capabilitySummary,
+      capability_entries: capabilityEntries,
       recommended_position: recommendedPosition,
       entry_point: entryPoint,
       future_positions: futurePositions,
@@ -319,7 +394,7 @@ ${entryPoint}`;
   }
 
   const tEnd = Date.now();
-  console.log("[generate-capability-finalize][timing] phase2 complete tEnd=" + tEnd + " totalDelta=" + (tEnd - t0) + "ms");
+  console.log("[generate-capability-finalize][timing] phase2 complete tEnd=" + tEnd + " totalDelta=" + (tEnd - t0) + "ms entryCount=" + capabilityEntries.length);
 
-  return NextResponse.json({ success: true, capabilitySummary, recommendedPosition, entryPoint, futurePositions, employerSummary });
+  return NextResponse.json({ success: true, capabilitySummary, capabilityEntries, recommendedPosition, entryPoint, futurePositions, employerSummary });
 }

@@ -40,6 +40,15 @@ type AlternatePath = {
   gap: string;
 };
 
+type CapabilityEntry = {
+  name: string;
+  description: string;
+  verificationStatus: "VERIFIED" | "USER_PROVIDED";
+  primaryDocLabel: string;
+  primaryDocId: string;
+  corroboratingDocLabels: string[];
+};
+
 type ApplicantProfile = {
   candidateEmail?: string;
   streetAddress?: string;
@@ -57,6 +66,7 @@ type ApplicantProfile = {
   educationLevel: string;
   updatedAt: string;
   capabilityProfile?: string;
+  capabilityEntries?: CapabilityEntry[];
   recommendedPosition?: string;
   entryPoint?: string;
   futurePositions?: string;
@@ -86,8 +96,21 @@ function parseAccordionItems(text: string): AccordionEntry[] {
     });
 }
 
-function AccordionItem({ title, content, tag }: { title: string; content: string; tag?: "VERIFIED" | "USER_PROVIDED" }) {
+function AccordionItem({
+  title,
+  content,
+  tag,
+  primaryDocLabel,
+  corroboratingDocLabels,
+}: {
+  title: string;
+  content: string;
+  tag?: "VERIFIED" | "USER_PROVIDED";
+  primaryDocLabel?: string;
+  corroboratingDocLabels?: string[];
+}) {
   const [isOpen, setIsOpen] = useState(false);
+  const hasSources = Boolean(primaryDocLabel) || Boolean(corroboratingDocLabels && corroboratingDocLabels.length > 0);
   return (
     <div className="rounded-md border border-gray-200">
       <button
@@ -118,8 +141,35 @@ function AccordionItem({ title, content, tag }: { title: string; content: string
       {isOpen && (
         <div className="border-t border-gray-200 px-4 py-3 text-sm leading-7 text-zinc-700 whitespace-pre-wrap">
           {content}
+          {hasSources ? (
+            <div className="mt-3 border-t border-gray-100 pt-3 text-xs leading-5 text-zinc-500 whitespace-normal">
+              {primaryDocLabel ? (
+                <p><span className="font-semibold text-zinc-600">Source:</span> {primaryDocLabel}</p>
+              ) : null}
+              {corroboratingDocLabels && corroboratingDocLabels.length > 0 ? (
+                <p className="mt-1"><span className="font-semibold text-zinc-600">Also supported by:</span> {corroboratingDocLabels.join(", ")}</p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       )}
+    </div>
+  );
+}
+
+function CapabilityEntryAccordion({ entries }: { entries: CapabilityEntry[] }) {
+  return (
+    <div className="mt-2 space-y-1">
+      {entries.map((entry, i) => (
+        <AccordionItem
+          key={i}
+          title={entry.name}
+          content={entry.description}
+          tag={entry.verificationStatus}
+          primaryDocLabel={entry.verificationStatus === "VERIFIED" ? entry.primaryDocLabel : undefined}
+          corroboratingDocLabels={entry.verificationStatus === "VERIFIED" ? entry.corroboratingDocLabels : undefined}
+        />
+      ))}
     </div>
   );
 }
@@ -218,6 +268,7 @@ function mapProfileRow(userEmail: string, row: NonNullable<ProfileRow>): Applica
     educationLevel: (row.education_level as string) ?? "",
     updatedAt: (row.created_at as string) ?? "",
     capabilityProfile: (row.capability_summary as string) ?? "",
+    capabilityEntries: Array.isArray(row.capability_entries) ? (row.capability_entries as CapabilityEntry[]) : [],
     recommendedPosition: (row.recommended_position as string) ?? "",
     entryPoint: (row.entry_point as string) ?? "",
     futurePositions: (row.future_positions as string) ?? "",
@@ -556,6 +607,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
         return {
           ...base,
           capabilityProfile: result.capabilitySummary ?? "",
+          capabilityEntries: Array.isArray(result.capabilityEntries) ? result.capabilityEntries : [],
           recommendedPosition: result.recommendedPosition ?? "",
           entryPoint: result.entryPoint ?? "",
           futurePositions: result.futurePositions ?? "",
@@ -1142,7 +1194,14 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
                   )}
                 </div>
               ) : null}
-              {profile?.capabilityProfile ? <AccordionSection title="Verified Skills" text={profile.capabilityProfile} /> : null}
+              {profile?.capabilityEntries && profile.capabilityEntries.length > 0 ? (
+                <div>
+                  <h3 className="text-sm font-semibold text-zinc-900">Verified Skills</h3>
+                  <CapabilityEntryAccordion entries={profile.capabilityEntries} />
+                </div>
+              ) : profile?.capabilityProfile ? (
+                <AccordionSection title="Verified Skills" text={profile.capabilityProfile} />
+              ) : null}
             </div>
             <div className="mt-6 flex flex-wrap items-center gap-3 border-t border-gray-200 pt-5">
               {isApproved ? (
