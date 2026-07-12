@@ -77,6 +77,112 @@ type EvidenceGroup = {
   corroboratingDocIds: string[];
 };
 
+// Step 2 processes evidence in batches so a single Sonnet call never has to hold
+// and group hundreds of items at once. Tune here if batches still truncate.
+const EVIDENCE_BATCH_SIZE = 150;
+
+function buildEvidenceGroupingPrompt(items: EvidenceItem[]): string {
+  return `You are analyzing evidence items extracted from a job applicant's documents. Group items that describe the same underlying capability.
+
+EVIDENCE ITEMS:
+${JSON.stringify(items, null, 2)}
+
+Grouping rules:
+- Group items ONLY when they share a common evidentiary basis for the same specific capability — not merely topical or thematic similarity.
+- Two distinct VERIFIED capabilities must NOT be merged solely because they relate to a similar theme or domain.
+- If sources conflict on a detail (e.g. resume vs NCOER on the same duty), keep the fact from the strongest official source, not whichever was first.
+- If ANY item in a group has isOfficialDocument=true, set verificationStatus="VERIFIED" and use that document's sourceDocId as primarySourceDocId.
+- Otherwise set verificationStatus="USER_PROVIDED".
+- Self-reported items (sourceDocId="profile-self-reported") may be grouped with document evidence ONLY when that document directly supports the exact same capability. Otherwise they form their own USER_PROVIDED group.
+- Military service signal (DD214, NCOERs, OERs, award orders) carries heavy weight — preserve these capabilities, do not collapse them into generic groups.
+- A block tagged VERIFIED must be entirely supported by verified evidence. Do not blend self-reported content into a VERIFIED block.
+
+Return ONLY a valid JSON array. Each object must have exactly these fields:
+{
+  "groupId": "g1",
+  "claims": ["claim string 1", "claim string 2"],
+  "verificationStatus": "VERIFIED" | "USER_PROVIDED",
+  "primarySourceDocId": "sourceDocId of the strongest/most official source",
+  "corroboratingDocIds": ["other sourceDocIds that also support this group"]
+}
+
+No markdown fences. No explanation. No text outside the JSON array.`;
+}
+
+function buildEvidenceGroupMergePrompt(groups: EvidenceGroup[]): string {
+  return `You are merging preliminary capability groups that were produced independently from separate batches of evidence for the same job applicant. Some groups from different batches describe the exact same underlying capability (e.g. the same duty appearing in evidence from two different documents) and must be merged into one. Groups that are already distinct capabilities must NOT be merged.
+
+PRELIMINARY GROUPS:
+${JSON.stringify(groups, null, 2)}
+
+Merging rules:
+- Merge two or more groups ONLY when they describe the exact same underlying capability — not merely a similar theme or domain.
+- When merging, combine their "claims" arrays (deduplicate identical claim strings; keep distinct phrasing that adds evidence).
+- When merging, combine their "corroboratingDocIds" (deduplicate), and add the losing group's primarySourceDocId to corroboratingDocIds if it differs from the winning group's.
+- Re-resolve verificationStatus and primarySourceDocId using the same priority rules as before: if ANY merged claim traces to an official document, the merged group is VERIFIED and primarySourceDocId must be that official document's sourceDocId. Otherwise USER_PROVIDED.
+- A merged VERIFIED group must remain entirely supported by verified evidence — do not blend a self-reported-only group into a VERIFIED group unless it was already grouped with official evidence in its source batch.
+- Groups that do not match anything else pass through unchanged, exactly as given.
+- Do not invent new claims. Do not drop claims. Every claim from every input group must appear in exactly one output group.
+
+Return ONLY a valid JSON array of the final merged groups. Each object must have exactly these fields:
+{
+  "groupId": "g1",
+  "claims": ["claim string 1", "claim string 2"],
+  "verificationStatus": "VERIFIED" | "USER_PROVIDED",
+  "primarySourceDocId": "sourceDocId of the strongest/most official source",
+  "corroboratingDocIds": ["other sourceDocIds that also support this group"]
+}
+
+No markdown fences. No explanation. No text outside the JSON array.`;
+}
+
+// Shared JSON.parse + salvage logic for any Sonnet call expected to return EvidenceGroup[]
+// (used by both the per-batch grouping calls and the cross-batch merge call).
+function parseEvidenceGroupsFromRaw(raw: string): {
+  groups: EvidenceGroup[];
+  wasTruncated: boolean;
+  candidateCount: number | null;
+  salvagedCount: number | null;
+} {
+  let groups: EvidenceGroup[] = [];
+  let wasTruncated = false;
+  let candidateCount: number | null = null;
+  let salvagedCount: number | null = null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    groups = Array.isArray(parsed) ? (parsed as EvidenceGroup[]) : [];
+  } catch {
+    wasTruncated = true;
+    let arrayParsed = false;
+    const match = raw.match(/\[[\s\S]*\]/);
+    if (match) {
+      try {
+        const matchParse = JSON.parse(match[0]);
+        groups = Array.isArray(matchParse) ? (matchParse as EvidenceGroup[]) : [];
+        arrayParsed = true;
+      } catch { /* fall through to object-level salvage */ }
+    }
+    if (!arrayParsed) {
+      // EvidenceGroup nests a "claims" array, so a flat /\{[^{}]*\}/g regex isn't
+      // reliable here — use the brace-depth/string-aware scanner instead.
+      const objectMatches = extractBalancedJsonObjects(raw);
+      candidateCount = objectMatches.length;
+      const salvaged: EvidenceGroup[] = [];
+      for (const objStr of objectMatches) {
+        try {
+          const obj = JSON.parse(objStr);
+          if (obj && typeof obj === "object") salvaged.push(obj as EvidenceGroup);
+        } catch { /* skip malformed object */ }
+      }
+      salvagedCount = salvaged.length;
+      groups = salvaged;
+    }
+  }
+
+  return { groups, wasTruncated, candidateCount, salvagedCount };
+}
+
 export async function POST() {
   const t0 = Date.now();
   console.log("[generate-capability][timing] START t0=" + t0);
@@ -377,99 +483,113 @@ No markdown fences. No explanation. No text outside the JSON array.`;
     console.log("[generate-capability][debug][step1]   nonOfficial[" + i + "] sourceDocLabel=" + JSON.stringify(e.sourceDocLabel) + " sourceDocType=" + JSON.stringify(e.sourceDocType));
   });
 
-  // --- Step 2: Cross-document grouping pass ---
+  // --- Step 2: Cross-document grouping pass (chunked + merge) ---
   const t5 = Date.now();
   console.log("[generate-capability][timing] step2 START t5=" + t5 + " delta=" + (t5 - t4) + "ms evidenceCount=" + allEvidenceItems.length);
 
   let evidenceGroups: EvidenceGroup[] = [];
 
   if (allEvidenceItems.length > 0) {
-    const step2Prompt = `You are analyzing evidence items extracted from a job applicant's documents. Group items that describe the same underlying capability.
+    // --- Step 2a: chunked grouping ---
+    const evidenceBatches: EvidenceItem[][] = [];
+    for (let i = 0; i < allEvidenceItems.length; i += EVIDENCE_BATCH_SIZE) {
+      evidenceBatches.push(allEvidenceItems.slice(i, i + EVIDENCE_BATCH_SIZE));
+    }
+    console.log("[generate-capability][timing] step2a START batchCount=" + evidenceBatches.length + " batchSize=" + EVIDENCE_BATCH_SIZE);
 
-EVIDENCE ITEMS:
-${JSON.stringify(allEvidenceItems, null, 2)}
-
-Grouping rules:
-- Group items ONLY when they share a common evidentiary basis for the same specific capability — not merely topical or thematic similarity.
-- Two distinct VERIFIED capabilities must NOT be merged solely because they relate to a similar theme or domain.
-- If sources conflict on a detail (e.g. resume vs NCOER on the same duty), keep the fact from the strongest official source, not whichever was first.
-- If ANY item in a group has isOfficialDocument=true, set verificationStatus="VERIFIED" and use that document's sourceDocId as primarySourceDocId.
-- Otherwise set verificationStatus="USER_PROVIDED".
-- Self-reported items (sourceDocId="profile-self-reported") may be grouped with document evidence ONLY when that document directly supports the exact same capability. Otherwise they form their own USER_PROVIDED group.
-- Military service signal (DD214, NCOERs, OERs, award orders) carries heavy weight — preserve these capabilities, do not collapse them into generic groups.
-- A block tagged VERIFIED must be entirely supported by verified evidence. Do not blend self-reported content into a VERIFIED block.
-
-Return ONLY a valid JSON array. Each object must have exactly these fields:
-{
-  "groupId": "g1",
-  "claims": ["claim string 1", "claim string 2"],
-  "verificationStatus": "VERIFIED" | "USER_PROVIDED",
-  "primarySourceDocId": "sourceDocId of the strongest/most official source",
-  "corroboratingDocIds": ["other sourceDocIds that also support this group"]
-}
-
-No markdown fences. No explanation. No text outside the JSON array.`;
-
-    try {
-      const step2Response = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 8192,
-        temperature: 0.2,
-        messages: [{ role: "user", content: step2Prompt }],
-      });
-
-      const raw2 = step2Response.content.find(b => b.type === "text")?.text ?? "[]";
-      const tStep2End = Date.now();
-      console.log("[generate-capability][timing] step2 END t=" + tStep2End + " delta=" + (tStep2End - t5) + "ms rawLen=" + raw2.length + " groupCount=" + (raw2.match(/"groupId"/g) ?? []).length);
-
-      let wasTruncated2 = false;
-      let candidateCount2: number | null = null;
-      let salvagedCount2: number | null = null;
-
+    const groupBatch = async (batch: EvidenceItem[], batchIdx: number): Promise<EvidenceGroup[]> => {
+      const tBatchStart = Date.now();
       try {
-        const parsed = JSON.parse(raw2);
-        evidenceGroups = Array.isArray(parsed) ? (parsed as EvidenceGroup[]) : [];
-      } catch {
-        wasTruncated2 = true;
-        let arrayParsed2 = false;
-        const match = raw2.match(/\[[\s\S]*\]/);
-        if (match) {
-          try {
-            const matchParse = JSON.parse(match[0]);
-            evidenceGroups = Array.isArray(matchParse) ? (matchParse as EvidenceGroup[]) : [];
-            arrayParsed2 = true;
-          } catch { /* fall through to object-level salvage */ }
+        const batchResponse = await anthropic.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 8192,
+          temperature: 0.2,
+          messages: [{ role: "user", content: buildEvidenceGroupingPrompt(batch) }],
+        });
+
+        const rawBatch = batchResponse.content.find(b => b.type === "text")?.text ?? "[]";
+        const { groups, wasTruncated, candidateCount, salvagedCount } = parseEvidenceGroupsFromRaw(rawBatch);
+        const lostCount = candidateCount !== null && salvagedCount !== null ? candidateCount - salvagedCount : 0;
+
+        if (wasTruncated && candidateCount !== null) {
+          console.log("[generate-capability][step2a][batch" + batchIdx + "] salvage attempt: found " + candidateCount + " candidate objects in raw output, parsed " + salvagedCount + " successfully");
         }
-        if (!arrayParsed2) {
-          // EvidenceGroup nests a "claims" array, so Step 1's flat /\{[^{}]*\}/g
-          // regex isn't reliable here — use the brace-depth/string-aware scanner instead.
-          const objectMatches = extractBalancedJsonObjects(raw2);
-          candidateCount2 = objectMatches.length;
-          const salvaged: EvidenceGroup[] = [];
-          for (const objStr of objectMatches) {
-            try {
-              const obj = JSON.parse(objStr);
-              if (obj && typeof obj === "object") salvaged.push(obj as EvidenceGroup);
-            } catch { /* skip malformed object */ }
-          }
-          salvagedCount2 = salvaged.length;
-          console.log("[generate-capability][step2] salvage attempt: found " + candidateCount2 + " candidate objects in raw output, parsed " + salvagedCount2 + " successfully");
-          evidenceGroups = salvaged;
+
+        const tBatchEnd = Date.now();
+        console.log("[generate-capability][timing] step2a[batch" + batchIdx + "] END delta=" + (tBatchEnd - tBatchStart) + "ms evidenceIn=" + batch.length + " groupsOut=" + groups.length + " stop_reason=" + batchResponse.stop_reason);
+        console.log("[generate-capability][step2a][batch" + batchIdx + "] truncated=" + wasTruncated + " recovered=" + groups.length + (wasTruncated ? " lost=" + lostCount + " (via fallback)" : "") + " stop_reason=" + batchResponse.stop_reason);
+
+        if (wasTruncated && groups.length === 0) {
+          console.error("[generate-capability][step2a][batch" + batchIdx + "] JSON parse failed raw=" + rawBatch.slice(0, 300));
         }
-      }
 
-      const lostCount2 = candidateCount2 !== null && salvagedCount2 !== null ? candidateCount2 - salvagedCount2 : 0;
-      console.log("[generate-capability][step2] truncated=" + wasTruncated2 + " recovered=" + evidenceGroups.length + (wasTruncated2 ? " lost=" + lostCount2 + " (via fallback)" : "") + " stop_reason=" + step2Response.stop_reason);
-
-      if (wasTruncated2 && evidenceGroups.length === 0) {
-        console.error("[generate-capability] step2 JSON parse failed raw=" + raw2.slice(0, 300));
+        // Prefix groupIds so they stay unique across batches going into the merge pass.
+        return groups.map(g => ({ ...g, groupId: "b" + batchIdx + "-" + (g.groupId ?? "g?") }));
+      } catch (err) {
+        console.error("[generate-capability][step2a][batch" + batchIdx + "] Sonnet error, skipping batch", err);
+        return [];
       }
+    };
 
-      if (evidenceGroups.length === 0) {
-        console.error("[generate-capability][step2] EVIDENCE GROUPING FAILURE: groupCount=0 after all fallbacks from evidenceCount=" + allEvidenceItems.length + " — Step 3 will be skipped and the capability profile will be empty");
+    const batchResults = await Promise.allSettled(
+      evidenceBatches.map((batch, idx) => groupBatch(batch, idx))
+    );
+
+    const preliminaryGroups: EvidenceGroup[] = [];
+    batchResults.forEach((result, idx) => {
+      if (result.status === "fulfilled") {
+        preliminaryGroups.push(...result.value);
+      } else {
+        console.error("[generate-capability][step2a][batch" + idx + "] batch promise rejected, skipping batch", result.reason);
       }
-    } catch (err) {
-      console.error("[generate-capability] step2 Sonnet error", err);
+    });
+
+    const t5a = Date.now();
+    console.log("[generate-capability][timing] step2a complete t5a=" + t5a + " delta=" + (t5a - t5) + "ms preliminaryGroupCount=" + preliminaryGroups.length);
+
+    // --- Step 2b: cross-batch merge pass ---
+    if (preliminaryGroups.length > 1) {
+      try {
+        const mergeResponse = await anthropic.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 8192,
+          temperature: 0.2,
+          messages: [{ role: "user", content: buildEvidenceGroupMergePrompt(preliminaryGroups) }],
+        });
+
+        const rawMerge = mergeResponse.content.find(b => b.type === "text")?.text ?? "[]";
+        const tMergeEnd = Date.now();
+        console.log("[generate-capability][timing] step2b END t=" + tMergeEnd + " delta=" + (tMergeEnd - t5a) + "ms rawLen=" + rawMerge.length + " groupCount=" + (rawMerge.match(/"groupId"/g) ?? []).length);
+
+        const { groups: mergedGroups, wasTruncated: wasTruncatedMerge, candidateCount: candidateCountMerge, salvagedCount: salvagedCountMerge } = parseEvidenceGroupsFromRaw(rawMerge);
+        const lostCountMerge = candidateCountMerge !== null && salvagedCountMerge !== null ? candidateCountMerge - salvagedCountMerge : 0;
+
+        if (wasTruncatedMerge && candidateCountMerge !== null) {
+          console.log("[generate-capability][step2b] salvage attempt: found " + candidateCountMerge + " candidate objects in raw output, parsed " + salvagedCountMerge + " successfully");
+        }
+
+        console.log("[generate-capability][step2b] truncated=" + wasTruncatedMerge + " recovered=" + mergedGroups.length + (wasTruncatedMerge ? " lost=" + lostCountMerge + " (via fallback)" : "") + " stop_reason=" + mergeResponse.stop_reason);
+
+        if (wasTruncatedMerge && mergedGroups.length === 0) {
+          console.error("[generate-capability][step2b] JSON parse failed raw=" + rawMerge.slice(0, 300));
+        }
+
+        if (mergedGroups.length === 0) {
+          console.error("[generate-capability][step2b] MERGE FAILURE: groupCount=0 after all fallbacks from preliminaryGroupCount=" + preliminaryGroups.length + " — falling back to unmerged preliminary groups");
+          evidenceGroups = preliminaryGroups;
+        } else {
+          console.log("[generate-capability][step2b] merge summary: preliminaryGroupCount=" + preliminaryGroups.length + " finalGroupCount=" + mergedGroups.length + " merged=" + (preliminaryGroups.length - mergedGroups.length));
+          evidenceGroups = mergedGroups;
+        }
+      } catch (err) {
+        console.error("[generate-capability][step2b] Sonnet error, falling back to unmerged preliminary groups", err);
+        evidenceGroups = preliminaryGroups;
+      }
+    } else if (preliminaryGroups.length === 1) {
+      console.log("[generate-capability][step2b] SKIPPED merge pass (only 1 preliminary group, nothing to merge)");
+      evidenceGroups = preliminaryGroups;
+    } else {
+      console.error("[generate-capability][step2] EVIDENCE GROUPING FAILURE: groupCount=0 after all batches from evidenceCount=" + allEvidenceItems.length + " — Step 3 will be skipped and the capability profile will be empty");
     }
   }
 
