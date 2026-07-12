@@ -18,6 +18,49 @@ function extractSection(text: string, heading: string, nextHeading?: string): st
   return text.slice(contentStart, end === -1 ? text.length : end).trim();
 }
 
+// Extracts complete top-level {...} objects from a (possibly truncated) JSON array string.
+// Tracks brace depth and quoted-string state so nested arrays/objects inside each
+// top-level object (e.g. EvidenceGroup's "claims" array) don't throw off matching.
+function extractBalancedJsonObjects(raw: string): string[] {
+  const objects: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escapeNext = false;
+
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escapeNext = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      if (depth > 0) {
+        depth--;
+        if (depth === 0 && start !== -1) {
+          objects.push(raw.slice(start, i + 1));
+          start = -1;
+        }
+      }
+    }
+  }
+
+  return objects;
+}
+
 type EvidenceItem = {
   claim: string;
   sourceDocId: string;
@@ -370,7 +413,7 @@ No markdown fences. No explanation. No text outside the JSON array.`;
     try {
       const step2Response = await anthropic.messages.create({
         model: "claude-sonnet-4-6",
-        max_tokens: 4096,
+        max_tokens: 8192,
         temperature: 0.2,
         messages: [{ role: "user", content: step2Prompt }],
       });
@@ -379,15 +422,51 @@ No markdown fences. No explanation. No text outside the JSON array.`;
       const tStep2End = Date.now();
       console.log("[generate-capability][timing] step2 END t=" + tStep2End + " delta=" + (tStep2End - t5) + "ms rawLen=" + raw2.length + " groupCount=" + (raw2.match(/"groupId"/g) ?? []).length);
 
+      let wasTruncated2 = false;
+      let candidateCount2: number | null = null;
+      let salvagedCount2: number | null = null;
+
       try {
         const parsed = JSON.parse(raw2);
         evidenceGroups = Array.isArray(parsed) ? (parsed as EvidenceGroup[]) : [];
       } catch {
+        wasTruncated2 = true;
+        let arrayParsed2 = false;
         const match = raw2.match(/\[[\s\S]*\]/);
         if (match) {
-          try { evidenceGroups = JSON.parse(match[0]) as EvidenceGroup[]; } catch { /* fall through */ }
+          try {
+            const matchParse = JSON.parse(match[0]);
+            evidenceGroups = Array.isArray(matchParse) ? (matchParse as EvidenceGroup[]) : [];
+            arrayParsed2 = true;
+          } catch { /* fall through to object-level salvage */ }
         }
+        if (!arrayParsed2) {
+          // EvidenceGroup nests a "claims" array, so Step 1's flat /\{[^{}]*\}/g
+          // regex isn't reliable here — use the brace-depth/string-aware scanner instead.
+          const objectMatches = extractBalancedJsonObjects(raw2);
+          candidateCount2 = objectMatches.length;
+          const salvaged: EvidenceGroup[] = [];
+          for (const objStr of objectMatches) {
+            try {
+              const obj = JSON.parse(objStr);
+              if (obj && typeof obj === "object") salvaged.push(obj as EvidenceGroup);
+            } catch { /* skip malformed object */ }
+          }
+          salvagedCount2 = salvaged.length;
+          console.log("[generate-capability][step2] salvage attempt: found " + candidateCount2 + " candidate objects in raw output, parsed " + salvagedCount2 + " successfully");
+          evidenceGroups = salvaged;
+        }
+      }
+
+      const lostCount2 = candidateCount2 !== null && salvagedCount2 !== null ? candidateCount2 - salvagedCount2 : 0;
+      console.log("[generate-capability][step2] truncated=" + wasTruncated2 + " recovered=" + evidenceGroups.length + (wasTruncated2 ? " lost=" + lostCount2 + " (via fallback)" : ""));
+
+      if (wasTruncated2 && evidenceGroups.length === 0) {
         console.error("[generate-capability] step2 JSON parse failed raw=" + raw2.slice(0, 300));
+      }
+
+      if (evidenceGroups.length === 0) {
+        console.error("[generate-capability][step2] EVIDENCE GROUPING FAILURE: groupCount=0 after all fallbacks from evidenceCount=" + allEvidenceItems.length + " — Step 3 will be skipped and the capability profile will be empty");
       }
     } catch (err) {
       console.error("[generate-capability] step2 Sonnet error", err);
