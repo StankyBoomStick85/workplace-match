@@ -117,6 +117,7 @@ export async function POST() {
   const anthropic = new Anthropic({ apiKey });
   const allEvidenceItems: EvidenceItem[] = [];
   const unreadableDocLabels: string[] = [];
+  const evidenceExtractionFailures: string[] = [];
 
   // --- Step 1: Per-document Haiku evidence extraction ---
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -203,7 +204,7 @@ No markdown fences. No explanation. No text outside the JSON array.`;
       if (usesPdfBeta) {
         response = await anthropic.beta.messages.create({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 2000,
+          max_tokens: 4096,
           temperature: 0.2,
           betas: ["pdfs-2024-09-25"],
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -212,7 +213,7 @@ No markdown fences. No explanation. No text outside the JSON array.`;
       } else {
         response = await anthropic.messages.create({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 2000,
+          max_tokens: 4096,
           temperature: 0.2,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           messages: [{ role: "user", content: messageContent as any }],
@@ -223,17 +224,55 @@ No markdown fences. No explanation. No text outside the JSON array.`;
       const tDocEnd = Date.now();
       console.log("[generate-capability][timing] step1[" + idx + "] END delta=" + (tDocEnd - tDocStart) + "ms rawLen=" + raw.length);
 
+      let parsed: EvidenceItem[] = [];
+      let wasTruncated = false;
+      let candidateCount: number | null = null;
+      let salvagedCount: number | null = null;
+
       try {
-        const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? (parsed as EvidenceItem[]) : [];
+        const directParse = JSON.parse(raw);
+        parsed = Array.isArray(directParse) ? (directParse as EvidenceItem[]) : [];
       } catch {
+        wasTruncated = true;
+        let arrayParsed = false;
         const match = raw.match(/\[[\s\S]*\]/);
         if (match) {
-          try { return JSON.parse(match[0]) as EvidenceItem[]; } catch { /* fall through */ }
+          try {
+            const matchParse = JSON.parse(match[0]);
+            parsed = Array.isArray(matchParse) ? (matchParse as EvidenceItem[]) : [];
+            arrayParsed = true;
+          } catch { /* fall through to object-level salvage */ }
         }
-        console.error("[generate-capability] step1[" + idx + "] JSON parse failed raw=" + raw.slice(0, 300));
-        return [];
+        if (!arrayParsed) {
+          // Salvage individual complete {...} objects from the truncated raw output.
+          const objectMatches = raw.match(/\{[^{}]*\}/g) ?? [];
+          candidateCount = objectMatches.length;
+          const salvaged: EvidenceItem[] = [];
+          for (const objStr of objectMatches) {
+            try {
+              const obj = JSON.parse(objStr);
+              if (obj && typeof obj === "object") salvaged.push(obj as EvidenceItem);
+            } catch { /* skip malformed object */ }
+          }
+          salvagedCount = salvaged.length;
+          console.log("[generate-capability][step1][" + idx + "] salvage attempt: found " + candidateCount + " candidate objects in raw output, parsed " + salvagedCount + " successfully");
+          parsed = salvaged;
+        }
       }
+
+      const lostCount = candidateCount !== null && salvagedCount !== null ? candidateCount - salvagedCount : 0;
+      console.log("[generate-capability][step1][" + idx + "] truncated=" + wasTruncated + " recovered=" + parsed.length + (wasTruncated ? " lost=" + lostCount + " (via fallback)" : ""));
+
+      if (wasTruncated && parsed.length === 0) {
+        console.error("[generate-capability] step1[" + idx + "] JSON parse failed raw=" + raw.slice(0, 300));
+      }
+
+      if (parsed.length === 0 && doc.extractionStatus === "complete" && !!doc.extractedText) {
+        evidenceExtractionFailures.push(`"${doc.label}" (${doc.filename})`);
+        console.error("[generate-capability][step1][" + idx + "] EVIDENCE EXTRACTION FAILURE: doc=" + JSON.stringify(doc.label) + " had complete extractedText but yielded zero evidence items after all fallbacks");
+      }
+
+      return parsed;
     } catch (err) {
       const tDocErr = Date.now();
       console.log("[generate-capability][timing] step1[" + idx + "] ERROR delta=" + (tDocErr - tDocStart) + "ms err=" + (err instanceof Error ? err.message : String(err)));
@@ -261,6 +300,7 @@ No markdown fences. No explanation. No text outside the JSON array.`;
     console.log("[generate-capability][debug][step1]   doc[" + idx + "] id=" + doc.id + " label=" + JSON.stringify(doc.label) + " contentType=" + doc.contentType + " extractionStatus=" + (doc.extractionStatus ?? "undefined") + " evidenceCount=" + (step1PerDocCounts[idx] ?? 0));
   });
   console.log("[generate-capability][debug][step1] unreadableDocLabels=" + JSON.stringify(unreadableDocLabels));
+  console.log("[generate-capability][debug][step1] evidenceExtractionFailures=" + JSON.stringify(evidenceExtractionFailures));
 
   // Add self-reported profile evidence as USER_PROVIDED items
   if (profile.summary) {
