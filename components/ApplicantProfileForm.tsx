@@ -7,6 +7,21 @@ const PROFILE_PICTURE_BUCKET = "profile-pictures";
 const DOCUMENTS_BUCKET = "candidate-documents";
 const MAX_DOC_BYTES = 5 * 1024 * 1024; // 5 MB
 
+const PHASE1_MESSAGES = [
+  "Analyzing your documents...",
+  "Extracting your experience...",
+  "Reading between the lines...",
+  "Cross-referencing your sources...",
+  "Almost done extracting...",
+];
+const PHASE2_MESSAGES = [
+  "Building your profile...",
+  "Writing your capability summary...",
+  "Mapping your next role...",
+  "Polishing the details...",
+  "Almost there...",
+];
+
 type DocumentMeta = {
   id: string;
   label: string;
@@ -220,38 +235,24 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
   const [profilePictureDataUrl, setProfilePictureDataUrl] = useState(mappedInitial?.profilePictureUrl ?? "");
   const [pendingPictureFile, setPendingPictureFile] = useState<File | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [funMessage, setFunMessage] = useState("Jitterbugging...");
+  const [generatePhase, setGeneratePhase] = useState<"idle" | "phase1" | "phase2">("idle");
+  const [funMessage, setFunMessage] = useState(PHASE1_MESSAGES[0]);
 
   useEffect(() => {
-    if (!isGenerating) {
-      setFunMessage("Jitterbugging...");
+    if (generatePhase === "idle") {
       return;
     }
-    const messages = [
-      "Jitterbugging...",
-      "Combobulating...",
-      "Wrangling...",
-      "Herding cats...",
-      "Noodling on it...",
-      "Percolating...",
-      "Marinating...",
-      "Untangling...",
-      "Ruminating...",
-      "Doing the thing...",
-      "Crunching...",
-      "Finagling...",
-      "Discombobulating...",
-      "Twiddling the knobs...",
-      "Nearly there...",
-    ];
+    const messages = generatePhase === "phase1" ? PHASE1_MESSAGES : PHASE2_MESSAGES;
     let idx = 0;
+    setFunMessage(messages[idx]);
     const interval = setInterval(() => {
       idx = (idx + 1) % messages.length;
       setFunMessage(messages[idx]);
     }, 4000);
     return () => clearInterval(interval);
-  }, [isGenerating]);
+  }, [generatePhase]);
   const [generateError, setGenerateError] = useState("");
+  const [canRetryFinalize, setCanRetryFinalize] = useState(false);
   const [activePathTab, setActivePathTab] = useState<"primary" | "alternate">(
     (mappedInitial?.summaryPriority as "primary" | "alternate") || "primary"
   );
@@ -519,17 +520,19 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
     }
   }
 
-  async function handleGenerate() {
-    setIsGenerating(true);
-    setGenerateError("");
-
+  // Phase 2: reads the evidence groups Phase 1 already saved and produces the final
+  // capability profile. Split out so it can be retried on its own if it fails after
+  // Phase 1 succeeded, without re-running Phase 1's expensive document extraction.
+  async function runFinalize(): Promise<boolean> {
+    setGeneratePhase("phase2");
     try {
-      const response = await fetch("/api/applicant/generate-capability", { method: "POST" });
+      const response = await fetch("/api/applicant/generate-capability-finalize", { method: "POST" });
       const result = await response.json();
 
       if (!response.ok) {
-        setGenerateError(result.error ?? "Generation failed. Please try again.");
-        return;
+        setGenerateError(result.error ?? "Finishing your capability profile failed. Please try again.");
+        setCanRetryFinalize(true);
+        return false;
       }
 
       setProfile((prev) => {
@@ -560,10 +563,48 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
         };
       });
       setIsApproved(false);
+      setCanRetryFinalize(false);
+      return true;
+    } catch {
+      setGenerateError("Finishing your capability profile failed. Please try again.");
+      setCanRetryFinalize(true);
+      return false;
+    }
+  }
+
+  async function handleGenerate() {
+    setIsGenerating(true);
+    setGenerateError("");
+    setCanRetryFinalize(false);
+    setGeneratePhase("phase1");
+
+    try {
+      const response = await fetch("/api/applicant/generate-capability", { method: "POST" });
+      const result = await response.json();
+
+      if (!response.ok) {
+        setGenerateError(result.error ?? "Generation failed. Please try again.");
+        return;
+      }
+
+      await runFinalize();
     } catch {
       setGenerateError("An unexpected error occurred. Please try again.");
     } finally {
       setIsGenerating(false);
+      setGeneratePhase("idle");
+    }
+  }
+
+  async function handleRetryFinalize() {
+    setIsGenerating(true);
+    setGenerateError("");
+    setCanRetryFinalize(false);
+    try {
+      await runFinalize();
+    } finally {
+      setIsGenerating(false);
+      setGeneratePhase("idle");
     }
   }
 
@@ -986,7 +1027,21 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
           </button>
         </div>
 
-        {generateError ? <p className="mt-3 text-sm text-red-700">{generateError}</p> : null}
+        {generateError ? (
+          <div className="mt-3">
+            <p className="text-sm text-red-700">{generateError}</p>
+            {canRetryFinalize ? (
+              <button
+                type="button"
+                onClick={handleRetryFinalize}
+                disabled={isGenerating}
+                className="mt-2 text-sm font-semibold text-red-900 underline hover:text-red-950 disabled:opacity-60"
+              >
+                Retry finishing your profile
+              </button>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="mt-6">
           {hasGeneratedContent ? (
