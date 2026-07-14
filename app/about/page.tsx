@@ -67,10 +67,10 @@ export default function AboutPage() {
 
       <section className="mx-auto max-w-3xl px-4 pb-16 text-center">
         <Link
-          href="/join"
+          href="/request-access"
           className="inline-flex items-center justify-center rounded-md bg-red-900 px-8 py-3 text-base font-semibold text-white transition hover:bg-red-950"
         >
-          Log In / Sign Up
+          Request Access
         </Link>
       </section>
     </>

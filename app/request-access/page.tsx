@@ -20,9 +20,9 @@ export default function RequestAccessPage() {
         <RequestAccessForm />
 
         <p className="mt-6 border-t border-gray-200 pt-4 text-sm text-zinc-600">
-          Already have an access code?{" "}
-          <Link href="/join" className="font-semibold text-red-800">
-            Enter it here
+          Already been approved?{" "}
+          <Link href="/get-started" className="font-semibold text-red-800">
+            Enter your email here
           </Link>
         </p>
       </div>
