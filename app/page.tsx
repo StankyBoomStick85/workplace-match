@@ -1,6 +1,6 @@
 import Image from "next/image";
-import Link from "next/link";
 import { MapPin } from "lucide-react";
+import { LandingPageActions } from "@/components/LandingPageActions";
 
 const matchPins: { label: string; position: string; visibility: string; opacity: string }[] = [
   { label: "94% Match", position: "left-[6%] top-[16%]", visibility: "hidden sm:flex", opacity: "opacity-60" },
@@ -52,20 +52,7 @@ export default function LandingPage() {
           Finding the right person and the right job just got easier.
         </p>
 
-        <div className="mt-10 flex flex-col gap-3 sm:flex-row">
-          <Link
-            href="/request-access"
-            className="inline-flex items-center justify-center rounded-md bg-red-900 px-8 py-3 text-base font-semibold text-white shadow-soft transition hover:bg-red-950"
-          >
-            Request Access
-          </Link>
-          <Link
-            href="/about"
-            className="inline-flex items-center justify-center rounded-md border border-zinc-800 bg-white px-8 py-3 text-base font-semibold text-zinc-950 transition hover:bg-zinc-50"
-          >
-            Learn More
-          </Link>
-        </div>
+        <LandingPageActions />
       </div>
     </section>
   );
