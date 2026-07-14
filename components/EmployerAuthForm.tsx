@@ -17,6 +17,15 @@ export function EmployerAuthForm({ mode }: EmployerAuthFormProps) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
+  // Signup only: the password step (and Google OAuth) stay hidden behind an
+  // approved_emails check. Login always starts "approved" — no gate applies to
+  // returning users.
+  const [gateStatus, setGateStatus] = useState<"pending" | "checking" | "approved" | "blocked">(
+    isSignup ? "pending" : "approved"
+  );
+  const [gatedEmail, setGatedEmail] = useState("");
+  const [emailInput, setEmailInput] = useState("");
+
   function updatePassword(value: string) {
     setPassword(value);
     if (isSignup && error === "Passwords do not match." && value === confirmPassword) {
@@ -31,12 +40,42 @@ export function EmployerAuthForm({ mode }: EmployerAuthFormProps) {
     }
   }
 
+  async function handleEmailContinue(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    const normalizedEmail = emailInput.trim().toLowerCase();
+    if (!normalizedEmail) {
+      setError("Enter an email.");
+      return;
+    }
+
+    setGateStatus("checking");
+    try {
+      const res = await fetch("/api/signup/check-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: normalizedEmail })
+      });
+      const result = await res.json();
+      if (result?.approved) {
+        setGatedEmail(normalizedEmail);
+        setGateStatus("approved");
+      } else {
+        setGateStatus("blocked");
+      }
+    } catch {
+      setError("Something went wrong. Please try again.");
+      setGateStatus("pending");
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
 
-    const formData = new FormData(event.currentTarget);
-    const email = String(formData.get("email") ?? "").trim().toLowerCase();
+    const email = isSignup
+      ? gatedEmail
+      : String(new FormData(event.currentTarget).get("email") ?? "").trim().toLowerCase();
 
     if (!email || !password || (isSignup && !confirmPassword)) {
       setError("Enter an email and password.");
@@ -60,11 +99,6 @@ export function EmployerAuthForm({ mode }: EmployerAuthFormProps) {
         return;
       }
 
-      await supabase.from("users").upsert({
-        id: data.user.id,
-        email,
-        role: "employer"
-      });
       if (!data.session) {
         const { error: sessionError } = await supabase.auth.signInWithPassword({ email, password });
         if (sessionError) {
@@ -72,6 +106,25 @@ export function EmployerAuthForm({ mode }: EmployerAuthFormProps) {
           return;
         }
       }
+
+      // Authoritative server-side check — re-verifies the allowlist against the
+      // actual authenticated session's email, not the client-side pre-check above.
+      const setRoleResponse = await fetch("/api/user/set-role", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "employer" })
+      });
+
+      if (!setRoleResponse.ok) {
+        const result = await setRoleResponse.json().catch(() => null);
+        if (result?.code === "NOT_APPROVED") {
+          setGateStatus("blocked");
+          return;
+        }
+        setError("Unable to finish creating your account. Please try again.");
+        return;
+      }
+
       logAdminEvent({
         type: "signup_created",
         userRole: "employer",
@@ -120,64 +173,120 @@ export function EmployerAuthForm({ mode }: EmployerAuthFormProps) {
             : "Log in to continue to your employer dashboard."}
         </p>
 
-        <div className="mt-6 space-y-4">
-          <GoogleOAuthButton role="employer" />
-          <AuthDivider />
-        </div>
-
-        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-          <div className="space-y-2">
-            <label htmlFor="email" className="label">
-              Work email
-            </label>
-            <input id="email" name="email" type="email" required className="field" />
+        {isSignup && gateStatus === "blocked" ? (
+          <div className="mt-6 rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            <p className="font-semibold">This email hasn&apos;t been approved for access yet.</p>
+            <p className="mt-2">
+              <Link href="/request-access" className="font-semibold text-red-800">
+                Request access
+              </Link>{" "}
+              and we&apos;ll be in touch if approved.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setGateStatus("pending");
+                setError("");
+              }}
+              className="mt-3 text-sm font-semibold text-amber-900 underline"
+            >
+              Try a different email
+            </button>
           </div>
-          {isSignup ? (
-            <>
+        ) : null}
+
+        {!isSignup || gateStatus === "approved" ? (
+          <div className="mt-6 space-y-4">
+            <GoogleOAuthButton role="employer" />
+            <AuthDivider />
+          </div>
+        ) : null}
+
+        {isSignup && (gateStatus === "pending" || gateStatus === "checking") ? (
+          <form onSubmit={handleEmailContinue} className="mt-6 space-y-4">
+            <div className="space-y-2">
+              <label htmlFor="gate-email" className="label">
+                Work email
+              </label>
+              <input
+                id="gate-email"
+                type="email"
+                required
+                value={emailInput}
+                onChange={(e) => setEmailInput(e.target.value)}
+                className="field"
+              />
+            </div>
+            {error ? <p className="text-sm font-medium text-red-700">{error}</p> : null}
+            <button
+              type="submit"
+              disabled={gateStatus === "checking"}
+              className="inline-flex w-full items-center justify-center rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950 disabled:opacity-60"
+            >
+              {gateStatus === "checking" ? "Checking..." : "Continue"}
+            </button>
+          </form>
+        ) : null}
+
+        {!isSignup || gateStatus === "approved" ? (
+          <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+            <div className="space-y-2">
+              <label htmlFor="email" className="label">
+                Work email
+              </label>
+              {isSignup ? (
+                <input id="email" name="email" type="email" value={gatedEmail} readOnly className="field bg-gray-50 text-zinc-500" />
+              ) : (
+                <input id="email" name="email" type="email" required className="field" />
+              )}
+            </div>
+            {isSignup ? (
+              <>
+                <PasswordField
+                  id="password"
+                  name="password"
+                  label="Password"
+                  value={password}
+                  isVisible={showPassword}
+                  onChange={updatePassword}
+                  onToggle={() => setShowPassword((current) => !current)}
+                />
+                <PasswordField
+                  id="confirmPassword"
+                  name="confirmPassword"
+                  label="Confirm Password"
+                  value={confirmPassword}
+                  isVisible={showPassword}
+                  onChange={updateConfirmPassword}
+                />
+              </>
+            ) : (
               <PasswordField
                 id="password"
                 name="password"
                 label="Password"
                 value={password}
                 isVisible={showPassword}
-                onChange={updatePassword}
+                onChange={setPassword}
                 onToggle={() => setShowPassword((current) => !current)}
               />
-              <PasswordField
-                id="confirmPassword"
-                name="confirmPassword"
-                label="Confirm Password"
-                value={confirmPassword}
-                isVisible={showPassword}
-                onChange={updateConfirmPassword}
-              />
-            </>
-          ) : (
-            <PasswordField
-              id="password"
-              name="password"
-              label="Password"
-              value={password}
-              isVisible={showPassword}
-              onChange={setPassword}
-              onToggle={() => setShowPassword((current) => !current)}
-            />
-          )}
-          {error ? <p className="text-sm font-medium text-red-700">{error}</p> : null}
-          {!isSignup ? (
-            <div className="text-right">
-              <Link href="/account/forgot-password" className="text-sm font-semibold text-red-800">
-                Forgot password?
-              </Link>
-            </div>
-          ) : null}
-          <button
-            type="submit"
-            className="inline-flex w-full items-center justify-center rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
-          >
-            {isSignup ? "Create account" : "Log in"}
-          </button>
-        </form>
+            )}
+            {error ? <p className="text-sm font-medium text-red-700">{error}</p> : null}
+            {!isSignup ? (
+              <div className="text-right">
+                <Link href="/account/forgot-password" className="text-sm font-semibold text-red-800">
+                  Forgot password?
+                </Link>
+              </div>
+            ) : null}
+            <button
+              type="submit"
+              className="inline-flex w-full items-center justify-center rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
+            >
+              {isSignup ? "Create account" : "Log in"}
+            </button>
+          </form>
+        ) : null}
 
         <p className="mt-5 text-sm text-zinc-600">
           {isSignup ? "Already have an account?" : "Need an account?"}{" "}

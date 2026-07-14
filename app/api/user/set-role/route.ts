@@ -41,7 +41,7 @@ export async function POST(request: Request) {
     error: userError
   } = await authClient.auth.getUser();
 
-  if (userError || !user) {
+  if (userError || !user || !user.email) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
 
@@ -52,9 +52,34 @@ export async function POST(request: Request) {
     }
   });
 
+  // Authoritative allowlist gate for brand-new accounts: this route is only ever
+  // called for a user who has no public.users row yet (both the OAuth /onboarding
+  // flow and the email/password signup flow land here to create that row). Existing
+  // users always already have a role and never reach this route, so this check can't
+  // affect returning users. The email is taken from the verified session, not from
+  // client input, so it can't be spoofed by submitting a different email than the one
+  // that was actually authenticated.
+  const normalizedEmail = user.email.trim().toLowerCase();
+  const { data: approvedRecord, error: approvedLookupError } = await adminClient
+    .from("approved_emails")
+    .select("email")
+    .eq("email", normalizedEmail)
+    .maybeSingle();
+
+  if (approvedLookupError) {
+    console.error("[user/set-role] Failed to query approved_emails", approvedLookupError);
+  }
+
+  if (!approvedRecord) {
+    return NextResponse.json(
+      { error: "This email hasn't been approved for access yet.", code: "NOT_APPROVED" },
+      { status: 403 }
+    );
+  }
+
   const { error: saveError } = await adminClient.from("users").upsert({
     id: user.id,
-    email: user.email ?? "",
+    email: user.email,
     role: role as AccountRole
   });
 

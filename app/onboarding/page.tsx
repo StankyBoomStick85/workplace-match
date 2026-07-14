@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -8,10 +9,12 @@ type OnboardingRole = "candidate" | "employer";
 export default function OnboardingPage() {
   const router = useRouter();
   const [error, setError] = useState("");
+  const [notApproved, setNotApproved] = useState(false);
   const [isSaving, setIsSaving] = useState<OnboardingRole | null>(null);
 
   async function chooseRole(role: OnboardingRole) {
     setError("");
+    setNotApproved(false);
     setIsSaving(role);
 
     const saveResponse = await fetch("/api/user/set-role", {
@@ -21,7 +24,12 @@ export default function OnboardingPage() {
     });
 
     if (!saveResponse.ok) {
-      setError("Unable to save your account type. Please try again.");
+      const result = await saveResponse.json().catch(() => null);
+      if (result?.code === "NOT_APPROVED") {
+        setNotApproved(true);
+      } else {
+        setError("Unable to save your account type. Please try again.");
+      }
       setIsSaving(null);
       return;
     }
@@ -56,6 +64,17 @@ export default function OnboardingPage() {
             {isSaving === "employer" ? "Saving..." : "I'm hiring"}
           </button>
         </div>
+        {notApproved ? (
+          <div className="mt-5 rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            <p className="font-semibold">This email hasn&apos;t been approved for access yet.</p>
+            <p className="mt-2">
+              <Link href="/request-access" className="font-semibold text-red-800">
+                Request access
+              </Link>{" "}
+              and we&apos;ll be in touch if approved.
+            </p>
+          </div>
+        ) : null}
         {error ? <p className="mt-5 text-sm font-medium text-red-700">{error}</p> : null}
       </div>
     </section>

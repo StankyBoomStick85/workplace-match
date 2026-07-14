@@ -69,6 +69,31 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "Server configuration missing." }, { status: 500 });
   }
 
+  if (status === "approved") {
+    const { data: existingRequest, error: fetchError } = await adminClient
+      .from("access_requests")
+      .select("email, name")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (fetchError || !existingRequest) {
+      return NextResponse.json({ error: "Request not found." }, { status: 404 });
+    }
+
+    const normalizedEmail = String(existingRequest.email ?? "").trim().toLowerCase();
+    const { error: upsertError } = await adminClient
+      .from("approved_emails")
+      .upsert(
+        { email: normalizedEmail, note: existingRequest.name, source_request_id: id },
+        { onConflict: "email" }
+      );
+
+    if (upsertError) {
+      console.error("[admin/access-requests] Failed to upsert approved_emails", upsertError);
+      return NextResponse.json({ error: "Failed to approve email." }, { status: 500 });
+    }
+  }
+
   const { error } = await adminClient
     .from("access_requests")
     .update({ status })
