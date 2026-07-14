@@ -2,7 +2,7 @@
 
 import { supabase } from "../lib/supabase";
 
-const googleRedirectUrl = "https://workplace-match-gust.vercel.app/auth/callback";
+const googleRedirectUrl = "https://workplace-match.com/auth/callback";
 
 export function GoogleOAuthButton({ role }: { role?: "candidate" | "employer" }) {
   async function signInWithGoogle() {
