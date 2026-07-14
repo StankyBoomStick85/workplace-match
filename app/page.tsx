@@ -54,10 +54,10 @@ export default function LandingPage() {
 
         <div className="mt-10 flex flex-col gap-3 sm:flex-row">
           <Link
-            href="/join"
+            href="/request-access"
             className="inline-flex items-center justify-center rounded-md bg-red-900 px-8 py-3 text-base font-semibold text-white shadow-soft transition hover:bg-red-950"
           >
-            Log In / Sign Up
+            Request Access
           </Link>
           <Link
             href="/about"

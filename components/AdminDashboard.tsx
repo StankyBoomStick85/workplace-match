@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import L from "leaflet";
 import { MapContainer, Marker, Popup, TileLayer } from "react-leaflet";
+import { AccessRequestsPanel } from "./AccessRequestsPanel";
 import { clearAdminSession, hasAdminSession } from "../lib/adminAuth";
 import { refreshAdminEvents, type AdminEvent } from "../lib/adminEvents";
 import { zipCityStateLookup } from "../lib/addressHelpers";
@@ -361,6 +362,10 @@ export function AdminDashboard() {
           </p>
         )}
       </Panel>
+
+      <div className="mt-6">
+        <AccessRequestsPanel />
+      </div>
     </section>
   );
 }
