@@ -33,8 +33,10 @@ export async function GET(request: Request) {
     data: { user }
   } = await supabase.auth.getUser();
 
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://workplace-match.com';
+
   if (!user) {
-    return NextResponse.redirect(new URL("/login", requestUrl.origin));
+    return NextResponse.redirect(new URL("/login", siteUrl));
   }
 
   const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -63,5 +65,5 @@ export async function GET(request: Request) {
         : "/onboarding";
 
   cookieStore.delete("workplace_match_oauth_role");
-  return NextResponse.redirect(new URL(destination, requestUrl.origin));
+  return NextResponse.redirect(new URL(destination, siteUrl));
 }

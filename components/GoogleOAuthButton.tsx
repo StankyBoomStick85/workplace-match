@@ -2,7 +2,8 @@
 
 import { supabase } from "../lib/supabase";
 
-const googleRedirectUrl = "https://workplace-match.com/auth/callback";
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://workplace-match.com';
+const googleRedirectUrl = `${siteUrl}/auth/callback`;
 
 export function GoogleOAuthButton({ role }: { role?: "candidate" | "employer" }) {
   async function signInWithGoogle() {
