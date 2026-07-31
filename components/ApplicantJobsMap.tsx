@@ -165,7 +165,9 @@ type PlottedJobEntry = {
   employer: string;
   matchPercent: number | null;
   distanceLabel: string;
+  distanceMiles: number | null;
   position: Coordinates;
+  interestState?: InterestState;
 };
 
 type ExternalJob = {
@@ -271,7 +273,9 @@ export function ApplicantJobsMap() {
   const [hasAcknowledgedPrivacyNotice, setHasAcknowledgedPrivacyNotice] = useState(true);
   const [minimumMatchPercent, setMinimumMatchPercent] = useState(0);
   const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
-  const [isResultsPanelOpen, setIsResultsPanelOpen] = useState(false);
+  const [isJobsPanelOpen, setIsJobsPanelOpen] = useState(true);
+  const [isAllJobsSectionOpen, setIsAllJobsSectionOpen] = useState(true);
+  const [isInterestedSectionOpen, setIsInterestedSectionOpen] = useState(false);
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
   const [commuteMaxMinutes, setCommuteMaxMinutes] = useState<number | null>(null);
   const [jobTypeFilter, setJobTypeFilter] = useState("");
@@ -288,7 +292,6 @@ export function ApplicantJobsMap() {
   const [matchScores, setMatchScores] = useState<Record<string, number>>({});
   const [scoringInProgress, setScoringInProgress] = useState(false);
   const [savedExternalJobIds, setSavedExternalJobIds] = useState<Set<string>>(new Set());
-  const [isJobListPanelOpen, setIsJobListPanelOpen] = useState(true);
   const [listHighlightKey, setListHighlightKey] = useState("");
   const pollAttemptsRef = useRef(0);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -580,8 +583,10 @@ export function ApplicantJobsMap() {
   const plottedJobEntries = useMemo<PlottedJobEntry[]>(() => {
     const wpmEntries: PlottedJobEntry[] = visibleJobGroups.flatMap((group) =>
       group.jobs.map((job) => {
-        const { matchPercent, companyName } = getJobPopupData(job);
-        const commute = getJobCommuteEstimate(job, applicantAreaPosition);
+        const { matchPercent, companyName, interestState } = getJobPopupData(job);
+        const distanceMiles = applicantAreaPosition
+          ? getDistanceMiles(applicantAreaPosition, getJobMapPosition(job))
+          : null;
         return {
           key: `wpm:${job.id}`,
           source: "wpm",
@@ -589,8 +594,10 @@ export function ApplicantJobsMap() {
           title: job.title,
           employer: companyName,
           matchPercent,
-          distanceLabel: commute?.distanceLabel ?? "—",
-          position: getJobMapPosition(job)
+          distanceLabel: distanceMiles !== null ? formatDistanceMiles(distanceMiles) : "—",
+          distanceMiles,
+          position: getJobMapPosition(job),
+          interestState
         };
       })
     );
@@ -608,14 +615,83 @@ export function ApplicantJobsMap() {
         employer: job.company,
         matchPercent: score === undefined ? null : score,
         distanceLabel: distanceMiles !== null ? formatDistanceMiles(distanceMiles) : "—",
+        distanceMiles,
         position: [job.lat, job.lng]
       };
     });
 
-    return [...wpmEntries, ...adzunaEntries].sort(
-      (a, b) => (b.matchPercent ?? -1) - (a.matchPercent ?? -1)
-    );
-  }, [visibleJobGroups, scoredExternalJobs, applicantAreaPosition, matchScores, companyProfile]);
+    return [...wpmEntries, ...adzunaEntries];
+  }, [
+    visibleJobGroups,
+    scoredExternalJobs,
+    applicantAreaPosition,
+    matchScores,
+    companyProfile,
+    mutualMatches,
+    applicantInterests
+  ]);
+
+  const sortedPlottedJobEntries = useMemo(
+    () => sortPlottedJobEntries(plottedJobEntries, sortMode),
+    [plottedJobEntries, sortMode]
+  );
+
+  // Hearted WPM jobs and saved external jobs, pooled together regardless of the
+  // current category tab or filters — this list is meant to stay stable.
+  const interestedAndSavedEntries = useMemo<PlottedJobEntry[]>(() => {
+    const heartedWpmEntries: PlottedJobEntry[] = jobs
+      .filter((job) => getJobInterestState(job) !== "none")
+      .map((job) => {
+        const { matchPercent, companyName, interestState } = getJobPopupData(job);
+        const distanceMiles = applicantAreaPosition
+          ? getDistanceMiles(applicantAreaPosition, getJobMapPosition(job))
+          : null;
+        return {
+          key: `wpm:${job.id}`,
+          source: "wpm",
+          id: job.id,
+          title: job.title,
+          employer: companyName,
+          matchPercent,
+          distanceLabel: distanceMiles !== null ? formatDistanceMiles(distanceMiles) : "—",
+          distanceMiles,
+          position: getJobMapPosition(job),
+          interestState
+        };
+      });
+
+    const savedExternalEntries: PlottedJobEntry[] = externalJobs
+      .filter((job) => savedExternalJobIds.has(job.id))
+      .map((job) => {
+        const score = matchScores[job.id];
+        const distanceMiles = applicantAreaPosition
+          ? getDistanceMiles(applicantAreaPosition, [job.lat, job.lng])
+          : null;
+        return {
+          key: `adzuna:${job.id}`,
+          source: job.source,
+          id: job.id,
+          title: job.title,
+          employer: job.company,
+          matchPercent: score === undefined ? null : score,
+          distanceLabel: distanceMiles !== null ? formatDistanceMiles(distanceMiles) : "—",
+          distanceMiles,
+          position: [job.lat, job.lng]
+        };
+      });
+
+    return sortPlottedJobEntries([...heartedWpmEntries, ...savedExternalEntries], sortMode);
+  }, [
+    jobs,
+    externalJobs,
+    savedExternalJobIds,
+    applicantInterests,
+    mutualMatches,
+    matchScores,
+    applicantAreaPosition,
+    sortMode,
+    companyProfile
+  ]);
 
   const listHighlightPosition = useMemo(() => {
     const entry = plottedJobEntries.find((item) => item.key === listHighlightKey);
@@ -1251,12 +1327,104 @@ export function ApplicantJobsMap() {
 
   function highlightFromPin(key: string) {
     setListHighlightKey(key);
-    setIsJobListPanelOpen(true);
+    setIsJobsPanelOpen(true);
+    setIsAllJobsSectionOpen(true);
     scrollListRowIntoView(key);
   }
 
-  function openJobFromListPanel(entry: PlottedJobEntry) {
+  function openPlottedEntry(entry: PlottedJobEntry) {
     setListHighlightKey(entry.key);
+
+    if (entry.source !== "wpm") {
+      return;
+    }
+
+    const job = jobs.find((candidateJob) => candidateJob.id === entry.id);
+    if (job) {
+      openJobFromResults(job);
+    }
+  }
+
+  function renderPlottedEntryRow(entry: PlottedJobEntry, options?: { showEmployerVisibilityLabel?: boolean }) {
+    const isHighlighted =
+      listHighlightKey === entry.key ||
+      (entry.source === "wpm" && (hoveredResultJobId === entry.id || selectedResultJobId === entry.id));
+    const scorePillLabel =
+      entry.matchPercent !== null
+        ? `${entry.matchPercent}%`
+        : scoringInProgress && scoringMode !== "all"
+        ? "Scoring..."
+        : "—";
+
+    return (
+      <button
+        key={entry.key}
+        ref={(el) => {
+          listRowRefs.current[entry.key] = el;
+        }}
+        type="button"
+        onClick={() => openPlottedEntry(entry)}
+        onMouseEnter={() => {
+          if (entry.source === "wpm") setHoveredResultJobId(entry.id);
+        }}
+        onMouseLeave={() => setHoveredResultJobId("")}
+        onFocus={() => {
+          if (entry.source === "wpm") setHoveredResultJobId(entry.id);
+        }}
+        onBlur={() => setHoveredResultJobId("")}
+        className={`w-full rounded-md border bg-white p-3 text-left transition ${
+          isHighlighted ? "border-red-300 shadow-md" : "border-gray-200 hover:border-red-200 hover:bg-red-50"
+        }`}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-bold text-zinc-950">{entry.title}</span>
+            <span className="mt-1 block truncate text-xs font-semibold text-zinc-500">{entry.employer}</span>
+          </span>
+          <span
+            className={`shrink-0 rounded-full px-3 py-1.5 text-sm font-extrabold text-white ${
+              entry.source === "wpm" ? "bg-red-900" : "bg-slate-700"
+            }`}
+          >
+            {scorePillLabel}
+          </span>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-zinc-700">
+            {entry.distanceLabel}
+          </span>
+          <span className="flex items-center gap-1.5 rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-zinc-700">
+            <span
+              style={{
+                display: "inline-block",
+                width: 8,
+                height: 8,
+                borderRadius: "9999px",
+                background: entry.source === "wpm" ? "#dc2626" : "#334155"
+              }}
+            />
+            {getJobSourceLabel(entry.source)}
+          </span>
+          {entry.interestState === "candidate_interested" || entry.interestState === "mutual_match" ? (
+            <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-bold text-red-800">&hearts;</span>
+          ) : null}
+          {entry.interestState === "mutual_match" ? (
+            <span className="rounded-full bg-red-800 px-2.5 py-1 text-xs font-bold text-white">MATCH</span>
+          ) : null}
+          {options?.showEmployerVisibilityLabel ? (
+            entry.source === "wpm" ? (
+              <span className="rounded-full bg-gray-200 px-2 py-1 text-xs font-semibold text-zinc-700">
+                Employer notified
+              </span>
+            ) : (
+              <span className="rounded-full bg-gray-200 px-2 py-1 text-xs font-semibold text-zinc-700">
+                Not visible to employer
+              </span>
+            )
+          ) : null}
+        </div>
+      </button>
+    );
   }
 
   if (!account) {
@@ -1617,31 +1785,12 @@ export function ApplicantJobsMap() {
               </button>
             </div>
           ) : null}
-          <label className="mt-4 block space-y-2 border-t border-gray-200 pt-3">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-              Sort by
-            </span>
-            <select
-              value={sortMode}
-              onChange={(event) => {
-                setSortMode(event.target.value as JobSortMode);
-                setIsResultsPanelOpen(true);
-              }}
-              className="field"
-            >
-              {sortOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
           <button
             type="button"
-            onClick={() => setIsResultsPanelOpen(true)}
-            className="mt-2 w-full rounded-md bg-red-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
+            onClick={() => setIsJobsPanelOpen(true)}
+            className="mt-4 w-full rounded-md bg-red-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
           >
-            View results
+            View jobs
           </button>
           <div className="mt-4 border-t border-gray-200 pt-3">
             <button
@@ -1905,160 +2054,95 @@ export function ApplicantJobsMap() {
       </div>
 
       <div
-        className={`absolute bottom-4 right-[22rem] top-4 z-[900] flex w-80 flex-col gap-3 transition-transform ${
-          isJobListPanelOpen ? "translate-x-0" : "translate-x-[calc(100%+22rem)]"
-        }`}
-      >
-        <button
-          type="button"
-          onClick={() => setIsJobListPanelOpen((current) => !current)}
-          aria-label={isJobListPanelOpen ? "Collapse job list" : "Expand job list"}
-          className="absolute left-0 top-1/3 z-10 -translate-x-full -translate-y-1/2 cursor-pointer rounded-l-xl bg-white/95 px-2 py-4 text-sm font-bold text-zinc-700 shadow-[-4px_4px_12px_rgba(0,0,0,0.08)] transition hover:bg-zinc-50 hover:shadow-[-5px_5px_14px_rgba(0,0,0,0.1)]"
-        >
-          {isJobListPanelOpen ? ">>" : "<<"}
-        </button>
-        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden rounded-lg border border-gray-200 bg-white/95 p-4 shadow-soft">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-800">Job list</p>
-          <h2 className="mt-2 text-lg font-bold text-zinc-950">{plottedJobEntries.length} jobs on map</h2>
-          <p className="mt-1 text-xs leading-5 text-zinc-600">Sorted by match percentage.</p>
-          <div className="mt-3 space-y-2">
-            {plottedJobEntries.length === 0 ? (
-              <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
-                <p className="text-sm font-semibold text-zinc-950">No jobs currently on the map.</p>
-              </div>
-            ) : (
-              plottedJobEntries.map((entry) => {
-                const isHighlighted = listHighlightKey === entry.key;
-                const scorePillLabel =
-                  entry.matchPercent !== null
-                    ? `${entry.matchPercent}%`
-                    : scoringInProgress && scoringMode !== "all"
-                    ? "Scoring..."
-                    : "—";
-
-                return (
-                  <button
-                    key={entry.key}
-                    ref={(el) => {
-                      listRowRefs.current[entry.key] = el;
-                    }}
-                    type="button"
-                    onClick={() => openJobFromListPanel(entry)}
-                    className={`w-full rounded-md border bg-white p-3 text-left transition ${
-                      isHighlighted ? "border-red-300 shadow-md" : "border-gray-200 hover:border-red-200 hover:bg-red-50"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="min-w-0">
-                        <span className="block truncate text-sm font-bold text-zinc-950">{entry.title}</span>
-                        <span className="mt-1 block truncate text-xs font-semibold text-zinc-500">{entry.employer}</span>
-                      </span>
-                      <span
-                        className={`shrink-0 rounded-full px-3 py-1.5 text-sm font-extrabold text-white ${
-                          entry.source === "wpm" ? "bg-red-900" : "bg-slate-700"
-                        }`}
-                      >
-                        {scorePillLabel}
-                      </span>
-                    </div>
-                    <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                      <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-zinc-700">
-                        {entry.distanceLabel}
-                      </span>
-                      <span className="flex items-center gap-1.5 rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-zinc-700">
-                        <span
-                          style={{
-                            display: "inline-block",
-                            width: 8,
-                            height: 8,
-                            borderRadius: "9999px",
-                            background: entry.source === "wpm" ? "#dc2626" : "#334155"
-                          }}
-                        />
-                        {getJobSourceLabel(entry.source)}
-                      </span>
-                    </div>
-                  </button>
-                );
-              })
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div
         className={`absolute bottom-4 right-4 top-4 z-[900] flex w-80 flex-col gap-3 transition-transform ${
-          isResultsPanelOpen ? "translate-x-0" : "translate-x-[calc(100%+1rem)]"
+          isJobsPanelOpen ? "translate-x-0" : "translate-x-[calc(100%+1rem)]"
         }`}
       >
         <button
           type="button"
-          onClick={() => setIsResultsPanelOpen((current) => !current)}
-          aria-label={isResultsPanelOpen ? "Collapse results panel" : "Expand results panel"}
+          onClick={() => setIsJobsPanelOpen((current) => !current)}
+          aria-label={isJobsPanelOpen ? "Collapse jobs panel" : "Expand jobs panel"}
           className="absolute left-0 top-1/2 z-10 -translate-x-full -translate-y-1/2 cursor-pointer rounded-l-xl bg-white/95 px-2 py-4 text-sm font-bold text-zinc-700 shadow-[-4px_4px_12px_rgba(0,0,0,0.08)] transition hover:bg-zinc-50 hover:shadow-[-5px_5px_14px_rgba(0,0,0,0.1)]"
         >
-          {isResultsPanelOpen ? ">>" : "<<"}
+          {isJobsPanelOpen ? ">>" : "<<"}
         </button>
         <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden rounded-lg border border-gray-200 bg-white/95 p-4 shadow-soft">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-800">Ranked results</p>
-          <h2 className="mt-2 text-lg font-bold text-zinc-950">{visibleJobs.length} visible jobs</h2>
-          <p className="mt-1 text-xs leading-5 text-zinc-600">Ordered by {getSortLabel(sortMode).toLowerCase()}.</p>
-          <div className="mt-3 space-y-2">
-            {visibleJobs.length === 0 ? (
-              <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
-                <p className="text-sm font-semibold text-zinc-950">No jobs match these filters.</p>
-              </div>
-            ) : (
-              visibleJobs.map((job) => {
-                const { matchPercent, interestState, companyName, commuteEstimate } = getJobPopupData(job);
-                const isHighlighted = hoveredResultJobId === job.id || selectedResultJobId === job.id;
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-800">Jobs</p>
+            <label className="flex items-center gap-1.5">
+              <span className="sr-only">Sort by</span>
+              <select
+                value={sortMode}
+                onChange={(event) => setSortMode(event.target.value as JobSortMode)}
+                className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs font-semibold text-zinc-900"
+              >
+                {sortOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
 
-                return (
-                  <button
-                    key={job.id}
-                    type="button"
-                    onClick={() => openJobFromResults(job)}
-                    onMouseEnter={() => setHoveredResultJobId(job.id)}
-                    onMouseLeave={() => setHoveredResultJobId("")}
-                    onFocus={() => setHoveredResultJobId(job.id)}
-                    onBlur={() => setHoveredResultJobId("")}
-                    className={`w-full rounded-md border bg-white p-3 text-left transition ${
-                      isHighlighted ? "border-red-300 shadow-md" : "border-gray-200 hover:border-red-200 hover:bg-red-50"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="min-w-0">
-                        <span className="block truncate text-sm font-bold text-zinc-950">{job.title}</span>
-                        <span className="mt-1 block truncate text-xs font-semibold text-zinc-500">{companyName}</span>
-                      </span>
-                      <span className="shrink-0 rounded-full bg-red-900 px-2.5 py-1 text-xs font-bold text-white">
-                        {matchPercent}%
-                      </span>
-                    </div>
-                    <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                      <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-zinc-700">
-                        {commuteEstimate?.timeLabel ?? "Commute unavailable"}
-                      </span>
-                      {job.payRange ? (
-                        <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-zinc-700">
-                          {job.payRange}
-                        </span>
-                      ) : null}
-                      {interestState === "candidate_interested" || interestState === "mutual_match" ? (
-                        <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-bold text-red-800">
-                          &hearts;
-                        </span>
-                      ) : null}
-                      {interestState === "mutual_match" ? (
-                        <span className="rounded-full bg-red-800 px-2.5 py-1 text-xs font-bold text-white">
-                          MATCH
-                        </span>
-                      ) : null}
-                    </div>
-                  </button>
-                );
-              })
-            )}
+          <div className="mt-3 border-t border-gray-200 pt-3">
+            <button
+              type="button"
+              onClick={() => setIsAllJobsSectionOpen((current) => !current)}
+              className="flex w-full items-center justify-between text-left"
+            >
+              <span className="min-w-0">
+                <span className="block text-sm font-bold text-zinc-950">All Jobs</span>
+                <span className="mt-0.5 block text-xs leading-5 text-zinc-600">
+                  {sortedPlottedJobEntries.length} jobs · Ordered by {getSortLabel(sortMode).toLowerCase()}
+                </span>
+              </span>
+              <span className="shrink-0 text-sm font-bold text-zinc-500">{isAllJobsSectionOpen ? "▾" : "▸"}</span>
+            </button>
+            {isAllJobsSectionOpen ? (
+              <div className="mt-3 space-y-2">
+                {sortedPlottedJobEntries.length === 0 ? (
+                  <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
+                    <p className="text-sm font-semibold text-zinc-950">No jobs match these filters.</p>
+                  </div>
+                ) : (
+                  sortedPlottedJobEntries.map((entry) => renderPlottedEntryRow(entry))
+                )}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="mt-4 border-t border-gray-200 pt-3">
+            <button
+              type="button"
+              onClick={() => setIsInterestedSectionOpen((current) => !current)}
+              className="flex w-full items-center justify-between text-left"
+            >
+              <span className="flex items-center gap-2">
+                <span className="text-sm font-bold text-zinc-950">Interested &amp; Saved</span>
+                {interestedAndSavedEntries.length > 0 ? (
+                  <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-red-700 px-1.5 text-xs font-bold text-white">
+                    {interestedAndSavedEntries.length}
+                  </span>
+                ) : null}
+              </span>
+              <span className="shrink-0 text-sm font-bold text-zinc-500">
+                {isInterestedSectionOpen ? "▾" : "▸"}
+              </span>
+            </button>
+            {isInterestedSectionOpen ? (
+              <div className="mt-3 space-y-2">
+                {interestedAndSavedEntries.length === 0 ? (
+                  <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
+                    <p className="text-sm font-semibold text-zinc-950">Nothing hearted or saved yet.</p>
+                  </div>
+                ) : (
+                  interestedAndSavedEntries.map((entry) =>
+                    renderPlottedEntryRow(entry, { showEmployerVisibilityLabel: true })
+                  )
+                )}
+              </div>
+            ) : null}
           </div>
         </div>
         {selectedResultJob ? (
@@ -2069,7 +2153,7 @@ export function ApplicantJobsMap() {
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-800">Selected job</p>
-                <p className="mt-1 text-xs leading-5 text-zinc-600">Opened from ranked results</p>
+                <p className="mt-1 text-xs leading-5 text-zinc-600">Opened from jobs panel</p>
               </div>
               <button
                 type="button"
@@ -2809,6 +2893,36 @@ function getJobSortMetrics(job: JobListing, profile: ApplicantProfile | null, ap
 
 function getSortLabel(sortMode: JobSortMode) {
   return sortOptions.find((option) => option.value === sortMode)?.label ?? "Balanced";
+}
+
+function sortPlottedJobEntries(entries: PlottedJobEntry[], sortMode: JobSortMode) {
+  return [...entries].sort((first, second) => {
+    const firstMetrics = getPlottedEntrySortMetrics(first);
+    const secondMetrics = getPlottedEntrySortMetrics(second);
+
+    if (sortMode === "best_match") {
+      return secondMetrics.matchPercent - firstMetrics.matchPercent;
+    }
+
+    if (sortMode === "closest") {
+      return firstMetrics.commuteMinutes - secondMetrics.commuteMinutes;
+    }
+
+    return secondMetrics.balancedScore - firstMetrics.balancedScore;
+  });
+}
+
+function getPlottedEntrySortMetrics(entry: PlottedJobEntry) {
+  const matchPercent = entry.matchPercent ?? 0;
+  const commuteMinutes =
+    entry.distanceMiles !== null ? getEstimatedCommuteMinutes(entry.distanceMiles) : Number.POSITIVE_INFINITY;
+  const commuteScore = Number.isFinite(commuteMinutes) ? Math.max(0, 100 - Math.min(commuteMinutes, 100)) : 0;
+
+  return {
+    matchPercent,
+    commuteMinutes,
+    balancedScore: matchPercent * 0.7 + commuteScore * 0.3
+  };
 }
 
 function groupJobsByLocation(jobs: JobListing[], zoom: number) {
