@@ -4,6 +4,7 @@ import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
 import { logError } from "../../../../lib/logError";
+import { isGigJob } from "../../../../lib/jobCategories";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -90,12 +91,13 @@ export async function POST(request: Request) {
     console.error("[score-jobs] adzuna_cache fetch error:", cacheError);
   }
 
-  // When force-rescoring, delete all existing scores so the poll doesn't return stale data
+  // When force-rescoring, delete existing scores for this mode so the poll doesn't return stale data
   if (forceRescore) {
     const { error: deleteError, count } = await adminClient
       .from("match_scores")
       .delete({ count: "exact" })
-      .eq("candidate_id", candidateId);
+      .eq("candidate_id", candidateId)
+      .eq("scoring_mode", scoringMode);
     if (deleteError) {
       console.error("[score-jobs] forceRescore: failed to delete existing scores:", deleteError);
     } else {
@@ -111,12 +113,13 @@ export async function POST(request: Request) {
       .from("match_scores")
       .select("job_id, score")
       .eq("candidate_id", candidateId)
+      .eq("scoring_mode", scoringMode)
       .gt("expires_at", new Date().toISOString());
     const rows = existingScores ?? [];
     // Detect corrupt scoring run: if every score is <= 3, delete and rescore fresh
     if (rows.length > 0 && rows.every((r: { score: number }) => r.score <= 3)) {
       console.log("[score-jobs] all", rows.length, "existing scores are <= 3 (corrupt) — deleting and rescoring");
-      await adminClient.from("match_scores").delete().eq("candidate_id", candidateId);
+      await adminClient.from("match_scores").delete().eq("candidate_id", candidateId).eq("scoring_mode", scoringMode);
     } else {
       rows.forEach((r: { job_id: string; score: number }) => {
         scoredJobIds.add(r.job_id);
@@ -179,13 +182,11 @@ export async function POST(request: Request) {
   }
 
   // Career Move: pre-filter gig/delivery jobs — assign score 0 without calling Claude
-  const GIG_TITLE_KEYWORDS = ["uber", "lyft", "doordash", "delivery", "driver", "dasher", "courier", "rideshare"];
   if (scoringMode === "career") {
     const gigJobIds: string[] = [];
     const nonGigJobs: typeof jobsToScore = [];
     for (const job of jobsToScore) {
-      const titleLower = job.title.toLowerCase();
-      if (GIG_TITLE_KEYWORDS.some((kw) => titleLower.includes(kw))) {
+      if (isGigJob(job)) {
         gigJobIds.push(job.job_id);
       } else {
         nonGigJobs.push(job);
@@ -201,12 +202,13 @@ export async function POST(request: Request) {
           candidate_id: candidateId,
           job_id: id,
           job_source: src,
+          scoring_mode: scoringMode,
           score: 0,
           scored_at: new Date().toISOString(),
           expires_at: src === "wpm" ? wpmExpiry : adzunaExpiry
         };
       });
-      await adminClient.from("match_scores").upsert(gigRows, { onConflict: "candidate_id,job_id" });
+      await adminClient.from("match_scores").upsert(gigRows, { onConflict: "candidate_id,job_id,scoring_mode" });
       gigJobIds.forEach((id) => { cachedScoreMap[id] = 0; });
       jobsToScore.splice(0, jobsToScore.length, ...nonGigJobs);
     }
@@ -359,6 +361,7 @@ Return ONLY: [{"job_id": string, "score": number}]`;
           candidate_id: candidateId,
           job_id: r.job_id,
           job_source: source,
+          scoring_mode: scoringMode,
           score: Math.max(0, Math.min(100, Math.round(r.score))),
           scored_at: new Date().toISOString(),
           expires_at: source === "wpm" ? wpmExpiry : adzunaExpiry
@@ -368,7 +371,7 @@ Return ONLY: [{"job_id": string, "score": number}]`;
     if (scoreRows.length > 0) {
       const { error: upsertError } = await adminClient
         .from("match_scores")
-        .upsert(scoreRows, { onConflict: "candidate_id,job_id" });
+        .upsert(scoreRows, { onConflict: "candidate_id,job_id,scoring_mode" });
 
       if (upsertError) {
         console.error("[score-jobs] upsert error:", upsertError);

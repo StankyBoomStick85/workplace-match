@@ -9,6 +9,14 @@ export const dynamic = "force-dynamic";
 const LAT_DELTA = 1.5;
 const LNG_DELTA = 1.5;
 
+// All three feeds share the adzuna_cache table, distinguished only by id prefix
+// (adzuna-, muse-, usajobs-) set when each refresh route upserts its rows.
+function deriveJobSource(id: string): "adzuna" | "muse" | "usajobs" {
+  if (id.startsWith("muse-")) return "muse";
+  if (id.startsWith("usajobs-")) return "usajobs";
+  return "adzuna";
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const lat = parseFloat(searchParams.get("lat") ?? "");
@@ -70,7 +78,7 @@ export async function GET(request: Request) {
         job_type: (row.job_type as string) ?? null,
         url: row.url as string,
         description: (row.description as string) ?? undefined,
-        source: "adzuna" as const
+        source: deriveJobSource(row.id as string)
       }));
 
     return NextResponse.json({ jobs });

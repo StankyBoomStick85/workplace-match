@@ -18,6 +18,7 @@ import {
 } from "../lib/matchMessages";
 import { logAdminEvent } from "../lib/adminEvents";
 import { logError } from "../lib/logError";
+import { isGigJob } from "../lib/jobCategories";
 import {
   addInterest as addSupabaseInterest,
   addMutualMatch as addSupabaseMutualMatch,
@@ -156,6 +157,16 @@ type JobGroup = {
   position: Coordinates;
   jobs: JobListing[];
 };
+type PlottedJobEntry = {
+  key: string;
+  source: "wpm" | "adzuna" | "muse" | "usajobs";
+  id: string;
+  title: string;
+  employer: string;
+  matchPercent: number | null;
+  distanceLabel: string;
+  position: Coordinates;
+};
 
 type ExternalJob = {
   id: string;
@@ -169,7 +180,7 @@ type ExternalJob = {
   job_type: string | null;
   url: string;
   description?: string;
-  source: "adzuna";
+  source: "adzuna" | "muse" | "usajobs";
 };
 
 const applicantAccountKey = "workplace_match_candidate";
@@ -277,11 +288,14 @@ export function ApplicantJobsMap() {
   const [matchScores, setMatchScores] = useState<Record<string, number>>({});
   const [scoringInProgress, setScoringInProgress] = useState(false);
   const [savedExternalJobIds, setSavedExternalJobIds] = useState<Set<string>>(new Set());
+  const [isJobListPanelOpen, setIsJobListPanelOpen] = useState(true);
+  const [listHighlightKey, setListHighlightKey] = useState("");
   const pollAttemptsRef = useRef(0);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const visibleExternalJobsRef = useRef<ExternalJob[]>([]);
   const clusterMarkerRefs = useRef<Record<string, L.Marker | null>>({});
   const singleJobMarkerRefs = useRef<Record<string, L.Marker | null>>({});
+  const listRowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const detailPanelRef = useRef<HTMLDivElement | null>(null);
   const suppressClusterReopenRef = useRef(false);
   const wasDrawingRef = useRef(false);
@@ -547,6 +561,66 @@ export function ApplicantJobsMap() {
   useEffect(() => {
     visibleExternalJobsRef.current = visibleExternalJobs;
   }, [visibleExternalJobs]);
+
+  // Same category-tab filter applied to the external job pins — shared so the
+  // job list panel never drifts out of sync with what's actually plotted.
+  const scoredExternalJobs = useMemo(
+    () =>
+      visibleExternalJobs.filter((job) => {
+        if (scoringMode === "all") return true;
+        if (scoringMode === "gig") return isGigJob(job);
+        const score = matchScores[job.id];
+        return score === undefined || score >= 50;
+      }),
+    [visibleExternalJobs, scoringMode, matchScores]
+  );
+
+  // Every job currently plotted on the map (both WPM listings and external feed jobs),
+  // built from the same filtered data already used to render pins — no separate fetch.
+  const plottedJobEntries = useMemo<PlottedJobEntry[]>(() => {
+    const wpmEntries: PlottedJobEntry[] = visibleJobGroups.flatMap((group) =>
+      group.jobs.map((job) => {
+        const { matchPercent, companyName } = getJobPopupData(job);
+        const commute = getJobCommuteEstimate(job, applicantAreaPosition);
+        return {
+          key: `wpm:${job.id}`,
+          source: "wpm",
+          id: job.id,
+          title: job.title,
+          employer: companyName,
+          matchPercent,
+          distanceLabel: commute?.distanceLabel ?? "—",
+          position: getJobMapPosition(job)
+        };
+      })
+    );
+
+    const adzunaEntries: PlottedJobEntry[] = scoredExternalJobs.map((job) => {
+      const score = matchScores[job.id];
+      const distanceMiles = applicantAreaPosition
+        ? getDistanceMiles(applicantAreaPosition, [job.lat, job.lng])
+        : null;
+      return {
+        key: `adzuna:${job.id}`,
+        source: job.source,
+        id: job.id,
+        title: job.title,
+        employer: job.company,
+        matchPercent: score === undefined ? null : score,
+        distanceLabel: distanceMiles !== null ? formatDistanceMiles(distanceMiles) : "—",
+        position: [job.lat, job.lng]
+      };
+    });
+
+    return [...wpmEntries, ...adzunaEntries].sort(
+      (a, b) => (b.matchPercent ?? -1) - (a.matchPercent ?? -1)
+    );
+  }, [visibleJobGroups, scoredExternalJobs, applicantAreaPosition, matchScores, companyProfile]);
+
+  const listHighlightPosition = useMemo(() => {
+    const entry = plottedJobEntries.find((item) => item.key === listHighlightKey);
+    return entry ? entry.position : null;
+  }, [plottedJobEntries, listHighlightKey]);
 
   const selectedResultJob = useMemo(
     () => jobs.find((job) => job.id === selectedResultJobId) ?? null,
@@ -1169,6 +1243,22 @@ export function ApplicantJobsMap() {
     }, 0);
   }
 
+  function scrollListRowIntoView(key: string) {
+    window.setTimeout(() => {
+      listRowRefs.current[key]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 0);
+  }
+
+  function highlightFromPin(key: string) {
+    setListHighlightKey(key);
+    setIsJobListPanelOpen(true);
+    scrollListRowIntoView(key);
+  }
+
+  function openJobFromListPanel(entry: PlottedJobEntry) {
+    setListHighlightKey(entry.key);
+  }
+
   if (!account) {
     return (
       <div className={`fixed inset-x-0 bottom-0 z-40 flex w-screen items-center justify-center bg-[#eef3ef] ${headerOffsetClass}`}>
@@ -1182,6 +1272,7 @@ export function ApplicantJobsMap() {
       <MapContainer center={mapCenter} zoom={10} minZoom={4} zoomControl={false} className="absolute inset-0 z-0 h-full w-full">
         <RecenterMap center={mapCenter} />
         <PanToSelectedJob position={selectedResultJobPosition} />
+        <PanToSelectedJob position={listHighlightPosition} />
         <ZoomLevelTracker onZoomChange={setMapZoom} />
         <ZoomControl position="bottomright" />
         <TileLayer
@@ -1222,7 +1313,10 @@ export function ApplicantJobsMap() {
           if (group.jobs.length === 1) {
             const job = group.jobs[0];
             const { matchPercent, interestState } = getJobPopupData(job);
-            const isJobHighlighted = hoveredResultJobId === job.id || selectedResultJobId === job.id;
+            const isJobHighlighted =
+              hoveredResultJobId === job.id ||
+              selectedResultJobId === job.id ||
+              listHighlightKey === `wpm:${job.id}`;
 
             return (
               <Marker
@@ -1244,6 +1338,7 @@ export function ApplicantJobsMap() {
                     setClusterToReopenKey("");
                     setSelectedJobSource("single");
                     setSelectedResultJobId("");
+                    highlightFromPin(`wpm:${job.id}`);
                   },
                   popupclose: () => {
                     if (suppressClusterReopenRef.current) {
@@ -1263,7 +1358,10 @@ export function ApplicantJobsMap() {
 
           const selectedJob = group.jobs.find((job) => job.id === selectedGroupedJobId);
           const isGroupHighlighted = group.jobs.some(
-            (job) => job.id === hoveredResultJobId || job.id === selectedResultJobId
+            (job) =>
+              job.id === hoveredResultJobId ||
+              job.id === selectedResultJobId ||
+              listHighlightKey === `wpm:${job.id}`
           );
 
           return (
@@ -1284,6 +1382,7 @@ export function ApplicantJobsMap() {
                   if (!selectedGroupedJobId) {
                     setSelectedJobSource(null);
                   }
+                  highlightFromPin(`wpm:${group.jobs[0].id}`);
                 },
                 popupclose: () => {
                   if (suppressClusterReopenRef.current) {
@@ -1341,6 +1440,7 @@ export function ApplicantJobsMap() {
                               setSelectedGroupedJobId(job.id);
                               setSelectedJobSource("cluster");
                               setSelectedResultJobId("");
+                              highlightFromPin(`wpm:${job.id}`);
                             }}
                             aria-label={`Open details for ${job.title}`}
                             className="box-border flex w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-gray-200 bg-white px-3 py-3 text-left transition hover:border-red-200 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-900/20"
@@ -1377,12 +1477,7 @@ export function ApplicantJobsMap() {
           );
         })}
 
-        {visibleExternalJobs.filter((job) => {
-          if (scoringMode === "all") return true;
-          if (scoringMode === "gig") return isGigJob(job);
-          const score = matchScores[job.id];
-          return score === undefined || score >= 50;
-        }).map((job) => {
+        {scoredExternalJobs.map((job) => {
           const extScore = matchScores[job.id];
           const isSaved = savedExternalJobIds.has(job.id);
           const pinVariant: "default" | "neutral" | "gig" =
@@ -1391,7 +1486,15 @@ export function ApplicantJobsMap() {
             <Marker
               key={job.id}
               position={[job.lat, job.lng]}
-              icon={createExternalJobIcon(false, extScore, scoringMode !== "all" && scoringInProgress, pinVariant)}
+              icon={createExternalJobIcon(
+                listHighlightKey === `adzuna:${job.id}`,
+                extScore,
+                scoringMode !== "all" && scoringInProgress,
+                pinVariant
+              )}
+              eventHandlers={{
+                click: () => highlightFromPin(`adzuna:${job.id}`)
+              }}
             >
               <Popup maxWidth={340}>
                 <div className="box-border w-[min(20rem,calc(100vw-6rem))] max-w-full space-y-2 px-1 py-1">
@@ -1679,11 +1782,11 @@ export function ApplicantJobsMap() {
                   onClick={() => {
                     if (mode === scoringMode) return;
                     setScoringMode(mode);
-                    if (mode === "all") {
-                      // keep existing scores, no rescore needed
-                    } else {
-                      setMatchScores({});
-                      if (account?.id) startScorePolling(account.id, mode, true);
+                    // Always clear — scores are per-mode now, so a score cached under
+                    // one mode must never be shown while a different mode is active.
+                    setMatchScores({});
+                    if (mode !== "all" && account?.id) {
+                      startScorePolling(account.id, mode, true);
                     }
                   }}
                   className={`rounded-md px-3 py-2 text-sm font-semibold transition ${
@@ -1799,6 +1902,88 @@ export function ApplicantJobsMap() {
           </div>
         </div>
       </div>
+      </div>
+
+      <div
+        className={`absolute bottom-4 right-[22rem] top-4 z-[900] flex w-80 flex-col gap-3 transition-transform ${
+          isJobListPanelOpen ? "translate-x-0" : "translate-x-[calc(100%+22rem)]"
+        }`}
+      >
+        <button
+          type="button"
+          onClick={() => setIsJobListPanelOpen((current) => !current)}
+          aria-label={isJobListPanelOpen ? "Collapse job list" : "Expand job list"}
+          className="absolute left-0 top-1/3 z-10 -translate-x-full -translate-y-1/2 cursor-pointer rounded-l-xl bg-white/95 px-2 py-4 text-sm font-bold text-zinc-700 shadow-[-4px_4px_12px_rgba(0,0,0,0.08)] transition hover:bg-zinc-50 hover:shadow-[-5px_5px_14px_rgba(0,0,0,0.1)]"
+        >
+          {isJobListPanelOpen ? ">>" : "<<"}
+        </button>
+        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden rounded-lg border border-gray-200 bg-white/95 p-4 shadow-soft">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-800">Job list</p>
+          <h2 className="mt-2 text-lg font-bold text-zinc-950">{plottedJobEntries.length} jobs on map</h2>
+          <p className="mt-1 text-xs leading-5 text-zinc-600">Sorted by match percentage.</p>
+          <div className="mt-3 space-y-2">
+            {plottedJobEntries.length === 0 ? (
+              <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
+                <p className="text-sm font-semibold text-zinc-950">No jobs currently on the map.</p>
+              </div>
+            ) : (
+              plottedJobEntries.map((entry) => {
+                const isHighlighted = listHighlightKey === entry.key;
+                const scorePillLabel =
+                  entry.matchPercent !== null
+                    ? `${entry.matchPercent}%`
+                    : scoringInProgress && scoringMode !== "all"
+                    ? "Scoring..."
+                    : "—";
+
+                return (
+                  <button
+                    key={entry.key}
+                    ref={(el) => {
+                      listRowRefs.current[entry.key] = el;
+                    }}
+                    type="button"
+                    onClick={() => openJobFromListPanel(entry)}
+                    className={`w-full rounded-md border bg-white p-3 text-left transition ${
+                      isHighlighted ? "border-red-300 shadow-md" : "border-gray-200 hover:border-red-200 hover:bg-red-50"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-bold text-zinc-950">{entry.title}</span>
+                        <span className="mt-1 block truncate text-xs font-semibold text-zinc-500">{entry.employer}</span>
+                      </span>
+                      <span
+                        className={`shrink-0 rounded-full px-3 py-1.5 text-sm font-extrabold text-white ${
+                          entry.source === "wpm" ? "bg-red-900" : "bg-slate-700"
+                        }`}
+                      >
+                        {scorePillLabel}
+                      </span>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                      <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-zinc-700">
+                        {entry.distanceLabel}
+                      </span>
+                      <span className="flex items-center gap-1.5 rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-zinc-700">
+                        <span
+                          style={{
+                            display: "inline-block",
+                            width: 8,
+                            height: 8,
+                            borderRadius: "9999px",
+                            background: entry.source === "wpm" ? "#dc2626" : "#334155"
+                          }}
+                        />
+                        {getJobSourceLabel(entry.source)}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
       </div>
 
       <div
@@ -3118,11 +3303,17 @@ function createGroupedJobIcon(count: number, interestState: InterestState, isHig
   });
 }
 
-const GIG_KEYWORDS = ["uber", "lyft", "doordash", "delivery", "driver", "dasher", "courier", "rideshare", "temporary", "temp ", "flex", "gig"];
-
-function isGigJob(job: ExternalJob): boolean {
-  const text = `${job.title} ${job.job_type ?? ""}`.toLowerCase();
-  return GIG_KEYWORDS.some((kw) => text.includes(kw));
+function getJobSourceLabel(source: PlottedJobEntry["source"]): string {
+  switch (source) {
+    case "wpm":
+      return "WPM Match";
+    case "muse":
+      return "The Muse";
+    case "usajobs":
+      return "USAJobs";
+    default:
+      return "Adzuna";
+  }
 }
 
 function createExternalJobIcon(isHighlighted = false, score?: number, scoringInProgress = false, variant: "default" | "neutral" | "gig" = "default") {
