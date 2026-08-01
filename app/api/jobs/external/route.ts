@@ -41,7 +41,7 @@ export async function GET(request: Request) {
   try {
     const { data, error } = await adminClient
       .from("adzuna_cache")
-      .select("id, title, company, location, lat, lng, salary_min, salary_max, job_type, url, description")
+      .select("id, title, company, location, lat, lng, salary_min, salary_max, salary_is_predicted, job_type, url, description")
       .gt("expires_at", new Date().toISOString())
       .gte("lat", lat - LAT_DELTA)
       .lte("lat", lat + LAT_DELTA)
@@ -75,6 +75,7 @@ export async function GET(request: Request) {
         lng: Number(row.lng),
         salary_min: row.salary_min != null ? Number(row.salary_min) : null,
         salary_max: row.salary_max != null ? Number(row.salary_max) : null,
+        salary_is_predicted: Boolean(row.salary_is_predicted),
         job_type: (row.job_type as string) ?? null,
         url: row.url as string,
         description: (row.description as string) ?? undefined,

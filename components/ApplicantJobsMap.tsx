@@ -176,6 +176,7 @@ type PlottedJobEntry = {
   salaryMin?: number | null;
   salaryMax?: number | null;
   payIsHourly?: boolean;
+  payIsEstimate?: boolean;
   payPillLabel: string;
   jobType?: string | null;
   description?: string;
@@ -192,6 +193,7 @@ type ExternalJob = {
   lng: number;
   salary_min: number | null;
   salary_max: number | null;
+  salary_is_predicted: boolean;
   job_type: string | null;
   url: string;
   description?: string;
@@ -672,6 +674,14 @@ export function ApplicantJobsMap() {
       const distanceMiles = applicantAreaPosition
         ? getDistanceMiles(applicantAreaPosition, [job.lat, job.lng])
         : null;
+      const resolvedPay = resolveExternalJobPay({
+        source: job.source,
+        description: job.description,
+        salaryMin: job.salary_min,
+        salaryMax: job.salary_max,
+        salaryIsPredicted: job.salary_is_predicted
+      });
+      const isEstimate = resolvedPay.kind === "estimate";
       return {
         key: `adzuna:${job.id}`,
         source: job.source,
@@ -684,9 +694,14 @@ export function ApplicantJobsMap() {
         position: [job.lat, job.lng],
         hasMapPin: true,
         location: job.location,
-        salaryMin: job.salary_min,
-        salaryMax: job.salary_max,
-        payPillLabel: formatPayPill(job.salary_min, job.salary_max),
+        salaryMin: resolvedPay.kind === "none" ? null : resolvedPay.min,
+        salaryMax: resolvedPay.kind === "none" ? null : resolvedPay.max,
+        payIsHourly: resolvedPay.kind === "none" ? undefined : resolvedPay.isHourly,
+        payIsEstimate: isEstimate,
+        payPillLabel:
+          resolvedPay.kind === "none"
+            ? "—"
+            : formatPayPill(resolvedPay.min, resolvedPay.max, resolvedPay.isHourly, isEstimate),
         jobType: job.job_type,
         description: job.description,
         url: job.url,
@@ -763,6 +778,14 @@ export function ApplicantJobsMap() {
           ? getDistanceMiles(applicantAreaPosition, [job.lat, job.lng])
           : null;
         const key = `adzuna:${job.id}`;
+        const resolvedPay = resolveExternalJobPay({
+          source: job.source,
+          description: job.description,
+          salaryMin: job.salary_min,
+          salaryMax: job.salary_max,
+          salaryIsPredicted: job.salary_is_predicted
+        });
+        const isEstimate = resolvedPay.kind === "estimate";
         return {
           key,
           source: job.source,
@@ -775,9 +798,14 @@ export function ApplicantJobsMap() {
           position: [job.lat, job.lng],
           hasMapPin: plottedKeySet.has(key),
           location: job.location,
-          salaryMin: job.salary_min,
-          salaryMax: job.salary_max,
-          payPillLabel: formatPayPill(job.salary_min, job.salary_max),
+          salaryMin: resolvedPay.kind === "none" ? null : resolvedPay.min,
+          salaryMax: resolvedPay.kind === "none" ? null : resolvedPay.max,
+          payIsHourly: resolvedPay.kind === "none" ? undefined : resolvedPay.isHourly,
+          payIsEstimate: isEstimate,
+          payPillLabel:
+            resolvedPay.kind === "none"
+              ? "—"
+              : formatPayPill(resolvedPay.min, resolvedPay.max, resolvedPay.isHourly, isEstimate),
           jobType: job.job_type,
           description: job.description,
           url: job.url,
@@ -1385,7 +1413,7 @@ export function ApplicantJobsMap() {
   }
 
   function renderExternalJobDetail(entry: PlottedJobEntry, onClosePanel?: () => void) {
-    const salaryLabel = formatExternalSalary(entry.salaryMin ?? null, entry.salaryMax ?? null);
+    const salaryLabel = formatPayRange(entry.salaryMin, entry.salaryMax, entry.payIsHourly, entry.payIsEstimate);
     const detailContent = (
       <>
         <div>
@@ -1412,6 +1440,12 @@ export function ApplicantJobsMap() {
           <PopupDetail label="Type" value={entry.jobType ?? ""} />
           <PopupDetail label="Source" value={getJobSourceLabel(entry.source)} />
         </div>
+
+        {entry.payIsEstimate ? (
+          <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-900">
+            This pay is an estimate from the job board, not the employer's posted pay.
+          </p>
+        ) : null}
 
         {entry.description ? (
           <div>
@@ -1459,6 +1493,14 @@ export function ApplicantJobsMap() {
   function renderExternalJobPopupContent(job: ExternalJob, options?: { showApproximateNotice?: boolean }) {
     const extScore = matchScores[job.id];
     const isSaved = savedExternalJobIds.has(job.id);
+    const resolvedPay = resolveExternalJobPay({
+      source: job.source,
+      description: job.description,
+      salaryMin: job.salary_min,
+      salaryMax: job.salary_max,
+      salaryIsPredicted: job.salary_is_predicted
+    });
+    const isPayEstimate = resolvedPay.kind === "estimate";
 
     return (
       <div className="box-border w-[min(20rem,calc(100vw-6rem))] max-w-full space-y-2 px-1 py-1">
@@ -1469,7 +1511,9 @@ export function ApplicantJobsMap() {
           </div>
           {scoringMode === "quick" ? (
             <span className="shrink-0 rounded-full bg-slate-700 px-2.5 py-1 text-xs font-bold text-white">
-              {formatPayPill(job.salary_min, job.salary_max)}
+              {resolvedPay.kind === "none"
+                ? "—"
+                : formatPayPill(resolvedPay.min, resolvedPay.max, resolvedPay.isHourly, isPayEstimate)}
             </span>
           ) : extScore !== undefined ? (
             <span className="shrink-0 rounded-full bg-slate-700 px-2.5 py-1 text-xs font-bold text-white">
@@ -1488,8 +1532,15 @@ export function ApplicantJobsMap() {
         ) : job.location ? (
           <p className="text-xs text-zinc-500">{job.location}</p>
         ) : null}
-        {job.salary_min || job.salary_max ? (
-          <p className="text-xs font-semibold text-zinc-700">{formatExternalSalary(job.salary_min, job.salary_max)}</p>
+        {resolvedPay.kind !== "none" ? (
+          <p className="text-xs font-semibold text-zinc-700">
+            {formatPayRange(resolvedPay.min, resolvedPay.max, resolvedPay.isHourly, isPayEstimate)}
+          </p>
+        ) : null}
+        {isPayEstimate ? (
+          <p className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-900">
+            This pay is an estimate from the job board, not the employer's posted pay.
+          </p>
         ) : null}
         {job.job_type ? <p className="text-xs text-zinc-500">{job.job_type}</p> : null}
         {job.description ? (
@@ -2035,6 +2086,13 @@ export function ApplicantJobsMap() {
           if (group.jobs.length === 1) {
             const job = group.jobs[0];
             const extScore = matchScores[job.id];
+            const resolvedPinPay = resolveExternalJobPay({
+              source: job.source,
+              description: job.description,
+              salaryMin: job.salary_min,
+              salaryMax: job.salary_max,
+              salaryIsPredicted: job.salary_is_predicted
+            });
             return (
               <Marker
                 key={job.id}
@@ -2047,7 +2105,9 @@ export function ApplicantJobsMap() {
                   extScore,
                   scoringMode !== "all" && scoringInProgress,
                   scoringMode,
-                  formatPayPill(job.salary_min, job.salary_max)
+                  resolvedPinPay.kind === "none"
+                    ? "—"
+                    : formatPayPill(resolvedPinPay.min, resolvedPinPay.max, resolvedPinPay.isHourly, resolvedPinPay.kind === "estimate")
                 )}
                 eventHandlers={{
                   click: () => highlightFromPin(`adzuna:${job.id}`)
@@ -3908,26 +3968,140 @@ function createExternalGroupIcon(count: number, isHighlighted = false) {
   });
 }
 
-function formatExternalSalary(min: number | null, max: number | null): string {
-  const fmt = (n: number) => n >= 1000 ? `$${Math.round(n / 1000)}k` : `$${Math.round(n)}`;
-  if (min && max) return `${fmt(min)} – ${fmt(max)}/yr`;
-  if (min) return `${fmt(min)}+/yr`;
-  if (max) return `Up to ${fmt(max)}/yr`;
-  return "";
+type ResolvedExternalPay =
+  | { kind: "none" }
+  | { kind: "posted"; min: number; max: number; isHourly: boolean }
+  | { kind: "estimate"; min: number; max: number; isHourly: boolean };
+
+const PAY_RANGE_SEPARATOR_SOURCE = "\\s*(?:-|–|to)\\s*";
+const HOURLY_UNIT_PATTERN = /(?:\/\s*(?:hr|hour)\b|per\s+hour\b|an\s+hour\b|hourly\b)/i;
+const ANNUAL_UNIT_PATTERN = /(?:\/\s*(?:yr|year)\b|per\s+year\b|per\s+annum\b|a\s+year\b|annually\b|yearly\b)/i;
+
+// Parses a posted hourly or annual rate out of free-text job description
+// copy. Handles "$15.00 - $18.75 / hour", "$15/hr", "$15.00 to $18.75 per
+// hour", "$45,000 - $55,000 per year", "$45k-$55k annually", and single
+// (non-range) figures in the same formats. Tries hourly first, then annual;
+// returns null when nothing parseable is found.
+function parseDescriptionPayRate(
+  description: string | null | undefined
+): { min: number; max: number; isHourly: boolean } | null {
+  if (!description) return null;
+
+  const hourly = matchPayPhrase(description, HOURLY_UNIT_PATTERN);
+  if (hourly) return { ...hourly, isHourly: true };
+
+  const annual = matchPayPhrase(description, ANNUAL_UNIT_PATTERN);
+  if (annual) return { ...annual, isHourly: false };
+
+  return null;
+}
+
+function matchPayPhrase(text: string, unitPattern: RegExp): { min: number; max: number } | null {
+  const pattern = new RegExp(
+    `\\$\\s*([\\d,]+(?:\\.\\d+)?)(k)?(?:${PAY_RANGE_SEPARATOR_SOURCE}\\$?\\s*([\\d,]+(?:\\.\\d+)?)(k)?)?\\s*(?:${unitPattern.source})`,
+    "i"
+  );
+  const match = text.match(pattern);
+  if (!match) return null;
+
+  const first = toDollarAmount(match[1], Boolean(match[2]));
+  const second = match[3] ? toDollarAmount(match[3], Boolean(match[4])) : first;
+  if (first === null || second === null) return null;
+
+  return { min: Math.min(first, second), max: Math.max(first, second) };
+}
+
+function toDollarAmount(raw: string, isThousands: boolean): number | null {
+  const value = Number(raw.replace(/,/g, ""));
+  if (!Number.isFinite(value)) return null;
+  return isThousands ? value * 1000 : value;
+}
+
+// Pay resolution order:
+//   a. a rate parsed from the description — posted pay, highest precedence
+//   b. salary_min/salary_max when salary_is_predicted is false — also posted pay
+//   c. salary_min/salary_max when salary_is_predicted is true — an estimate
+//   d. nothing available
+function resolveExternalJobPay(job: {
+  source: "adzuna" | "muse" | "usajobs";
+  description?: string | null;
+  salaryMin: number | null;
+  salaryMax: number | null;
+  salaryIsPredicted: boolean;
+}): ResolvedExternalPay {
+  const parsed = parseDescriptionPayRate(job.description);
+  if (parsed) {
+    return { kind: "posted", ...parsed };
+  }
+
+  const amount = job.salaryMin ?? job.salaryMax;
+  if (amount === null || amount === undefined || !Number.isFinite(amount) || amount <= 0) {
+    return { kind: "none" };
+  }
+
+  const min = job.salaryMin ?? job.salaryMax!;
+  const max = job.salaryMax ?? job.salaryMin!;
+  const rangeMin = Math.min(min, max);
+  const rangeMax = Math.max(min, max);
+
+  // Adzuna's salary_min/salary_max are always annualized by its own prediction
+  // model — confirmed by a real case: a $53,079/yr "estimate" for a role whose
+  // description posts $15.00-$18.75/hour (~$31k-$39k annualized). Adzuna never
+  // reports these fields as an hourly figure. USAJobs has no equivalent
+  // predicted flag and genuinely can be hourly, so the <$1000 heuristic still
+  // applies there.
+  const isHourly = job.source === "adzuna" ? false : rangeMin < 1000;
+
+  // salary_is_predicted is an Adzuna-specific concept — Muse has no salary
+  // data to predict, and USAJobs' figures are the government's own posted
+  // range, never a third-party guess, so only gate on the flag for Adzuna.
+  const isEstimate = job.source === "adzuna" && job.salaryIsPredicted;
+
+  return { kind: isEstimate ? "estimate" : "posted", min: rangeMin, max: rangeMax, isHourly };
+}
+
+function formatSinglePayAmount(amount: number, isHourly: boolean): string {
+  return isHourly ? `$${Math.round(amount)}/hr` : `$${Math.round(amount / 1000)}k/yr`;
 }
 
 // Normalized pay pill: uses the minimum of the range (keeps pill width
 // consistent instead of a "$X - $Y" range), hourly as $15/hr or annual as
-// $85k/yr. External jobs carry no explicit pay-frequency field, so a value
-// under $1000 is treated as hourly — hourly wages and annual salaries never
-// overlap in that range in practice (see report for what was checked).
-function formatPayPill(payMin: number | null | undefined, payMax: number | null | undefined, isHourly?: boolean): string {
+// $85k/yr. isEstimate prefixes the label with "~" (e.g. "~$53k/yr").
+function formatPayPill(
+  payMin: number | null | undefined,
+  payMax: number | null | undefined,
+  isHourly?: boolean,
+  isEstimate?: boolean
+): string {
   const amount = payMin ?? payMax;
   if (amount === null || amount === undefined || !Number.isFinite(amount) || amount <= 0) {
     return "—";
   }
   const hourly = isHourly ?? amount < 1000;
-  return hourly ? `$${Math.round(amount)}/hr` : `$${Math.round(amount / 1000)}k/yr`;
+  const label = formatSinglePayAmount(amount, hourly);
+  return isEstimate ? `~${label}` : label;
+}
+
+// Detail-view range: shows both ends, collapsed to a single figure when min
+// and max are identical (was rendering "$53k - $53k/yr"). isEstimate
+// prefixes every figure shown with "~".
+function formatPayRange(
+  payMin: number | null | undefined,
+  payMax: number | null | undefined,
+  isHourly?: boolean,
+  isEstimate?: boolean
+): string {
+  const min = payMin ?? payMax;
+  const max = payMax ?? payMin;
+  if (min === null || min === undefined || !Number.isFinite(min) || min <= 0) {
+    return "";
+  }
+  const hourly = isHourly ?? min < 1000;
+  const prefix = isEstimate ? "~" : "";
+  if (min === max) {
+    return `${prefix}${formatSinglePayAmount(min, hourly)}`;
+  }
+  return `${prefix}${formatSinglePayAmount(min, hourly)} – ${prefix}${formatSinglePayAmount(max as number, hourly)}`;
 }
 
 // Annualizes an hourly rate (standard 2080 full-time hours/year) so Pay sort

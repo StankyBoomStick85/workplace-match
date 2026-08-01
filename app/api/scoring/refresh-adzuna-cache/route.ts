@@ -36,10 +36,23 @@ type AdzunaResult = {
   longitude?: number;
   salary_min?: number;
   salary_max?: number;
+  // Adzuna returns this as a string ("1"/"0") in some API versions and a
+  // number (1/0) in others — handled defensively in parseIsPredicted below.
+  salary_is_predicted?: string | number | boolean;
   contract_type?: string;
   redirect_url: string;
   description?: string;
 };
+
+function parseIsPredicted(value: string | number | boolean | undefined): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value === 1;
+  if (typeof value === "string") return value === "1" || value.toLowerCase() === "true";
+  // Missing entirely — treat as predicted. Same reasoning as the migration's
+  // column default: assuming "estimate" is the safer failure mode than
+  // assuming "posted pay" for a value Adzuna didn't actually confirm.
+  return true;
+}
 
 export async function POST(request: Request) {
   try {
@@ -185,6 +198,7 @@ export async function POST(request: Request) {
       lng: job.longitude as number,
       salary_min: job.salary_min ?? null,
       salary_max: job.salary_max ?? null,
+      salary_is_predicted: parseIsPredicted(job.salary_is_predicted),
       job_type: job.contract_type ?? null,
       url: job.redirect_url,
       description: job.description ? stripHtml(job.description) : null,
@@ -258,5 +272,9 @@ function stripHtml(html: string): string {
     .replace(/&#039;/g, "'")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 300);
+    // Was 300 — real pay text ("Pay Rates Starting between: $15.00 - $18.75 /
+    // hour") often sits well into the posting, after the intro paragraph.
+    // Truncating at 300 chars routinely cut it off before the client-side
+    // description parser ever saw it.
+    .slice(0, 1500);
 }
