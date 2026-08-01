@@ -168,6 +168,13 @@ type PlottedJobEntry = {
   distanceMiles: number | null;
   position: Coordinates;
   interestState?: InterestState;
+  hasMapPin: boolean;
+  location?: string;
+  salaryMin?: number | null;
+  salaryMax?: number | null;
+  jobType?: string | null;
+  description?: string;
+  url?: string;
 };
 
 type ExternalJob = {
@@ -293,9 +300,11 @@ export function ApplicantJobsMap() {
   const [scoringInProgress, setScoringInProgress] = useState(false);
   const [savedExternalJobIds, setSavedExternalJobIds] = useState<Set<string>>(new Set());
   const [listHighlightKey, setListHighlightKey] = useState("");
+  const [selectedExternalEntryKey, setSelectedExternalEntryKey] = useState("");
   const pollAttemptsRef = useRef(0);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const visibleExternalJobsRef = useRef<ExternalJob[]>([]);
+  const mapInstanceRef = useRef<L.Map | null>(null);
   const clusterMarkerRefs = useRef<Record<string, L.Marker | null>>({});
   const singleJobMarkerRefs = useRef<Record<string, L.Marker | null>>({});
   const listRowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
@@ -597,7 +606,8 @@ export function ApplicantJobsMap() {
           distanceLabel: distanceMiles !== null ? formatDistanceMiles(distanceMiles) : "—",
           distanceMiles,
           position: getJobMapPosition(job),
-          interestState
+          interestState,
+          hasMapPin: true
         };
       })
     );
@@ -616,7 +626,14 @@ export function ApplicantJobsMap() {
         matchPercent: score === undefined ? null : score,
         distanceLabel: distanceMiles !== null ? formatDistanceMiles(distanceMiles) : "—",
         distanceMiles,
-        position: [job.lat, job.lng]
+        position: [job.lat, job.lng],
+        hasMapPin: true,
+        location: job.location,
+        salaryMin: job.salary_min,
+        salaryMax: job.salary_max,
+        jobType: job.job_type,
+        description: job.description,
+        url: job.url
       };
     });
 
@@ -639,6 +656,8 @@ export function ApplicantJobsMap() {
   // Hearted WPM jobs and saved external jobs, pooled together regardless of the
   // current category tab or filters — this list is meant to stay stable.
   const interestedAndSavedEntries = useMemo<PlottedJobEntry[]>(() => {
+    const plottedKeySet = new Set(plottedJobEntries.map((entry) => entry.key));
+
     const heartedWpmEntries: PlottedJobEntry[] = jobs
       .filter((job) => getJobInterestState(job) !== "none")
       .map((job) => {
@@ -656,7 +675,8 @@ export function ApplicantJobsMap() {
           distanceLabel: distanceMiles !== null ? formatDistanceMiles(distanceMiles) : "—",
           distanceMiles,
           position: getJobMapPosition(job),
-          interestState
+          interestState,
+          hasMapPin: true
         };
       });
 
@@ -667,8 +687,9 @@ export function ApplicantJobsMap() {
         const distanceMiles = applicantAreaPosition
           ? getDistanceMiles(applicantAreaPosition, [job.lat, job.lng])
           : null;
+        const key = `adzuna:${job.id}`;
         return {
-          key: `adzuna:${job.id}`,
+          key,
           source: job.source,
           id: job.id,
           title: job.title,
@@ -676,12 +697,20 @@ export function ApplicantJobsMap() {
           matchPercent: score === undefined ? null : score,
           distanceLabel: distanceMiles !== null ? formatDistanceMiles(distanceMiles) : "—",
           distanceMiles,
-          position: [job.lat, job.lng]
+          position: [job.lat, job.lng],
+          hasMapPin: plottedKeySet.has(key),
+          location: job.location,
+          salaryMin: job.salary_min,
+          salaryMax: job.salary_max,
+          jobType: job.job_type,
+          description: job.description,
+          url: job.url
         };
       });
 
     return sortPlottedJobEntries([...heartedWpmEntries, ...savedExternalEntries], sortMode);
   }, [
+    plottedJobEntries,
     jobs,
     externalJobs,
     savedExternalJobIds,
@@ -708,10 +737,21 @@ export function ApplicantJobsMap() {
     () => (selectedResultJob ? getJobMapPosition(selectedResultJob) : null),
     [selectedResultJob]
   );
+  const selectedExternalEntry = useMemo(() => {
+    if (!selectedExternalEntryKey) {
+      return null;
+    }
+
+    return (
+      plottedJobEntries.find((item) => item.key === selectedExternalEntryKey) ??
+      interestedAndSavedEntries.find((item) => item.key === selectedExternalEntryKey) ??
+      null
+    );
+  }, [plottedJobEntries, interestedAndSavedEntries, selectedExternalEntryKey]);
 
   useEffect(() => {
     detailPanelRef.current?.scrollTo({ top: 0, behavior: "auto" });
-  }, [selectedResultJob?.id]);
+  }, [selectedResultJob?.id, selectedExternalEntry?.key]);
 
   useEffect(() => {
     focusMatchFromLocation();
@@ -1255,6 +1295,72 @@ export function ApplicantJobsMap() {
     );
   }
 
+  function renderExternalJobDetail(entry: PlottedJobEntry, onClosePanel?: () => void) {
+    const salaryLabel = formatExternalSalary(entry.salaryMin ?? null, entry.salaryMax ?? null);
+    const detailContent = (
+      <>
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
+            External listing · {getJobSourceLabel(entry.source)}
+          </p>
+          <h2 className="mt-1 text-base font-bold text-zinc-950">{entry.title}</h2>
+          <p className="mt-1 text-sm text-zinc-600">{entry.employer}</p>
+          {entry.hasMapPin ? (
+            entry.location ? <p className="mt-1 text-sm text-zinc-600">{entry.location}</p> : null
+          ) : (
+            <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-900">
+              No map location available — see the job listing for location details.
+            </p>
+          )}
+        </div>
+
+        <div className="grid gap-2 text-sm">
+          <PopupDetail label="Pay" value={salaryLabel} />
+          <PopupDetail label="Type" value={entry.jobType ?? ""} />
+          <PopupDetail label="Source" value={getJobSourceLabel(entry.source)} />
+        </div>
+
+        {entry.description ? (
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Description</p>
+            <p className="mt-2 max-h-28 max-w-xs overflow-y-auto rounded-md border border-gray-200 bg-gray-50 p-3 text-sm leading-5 text-zinc-700">
+              {entry.description}
+            </p>
+          </div>
+        ) : null}
+      </>
+    );
+
+    const actionBlock = (
+      <a
+        href={entry.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block w-full rounded-md bg-slate-700 px-3 py-2 text-center text-sm font-semibold text-white transition hover:bg-slate-800"
+      >
+        View original listing ↗
+      </a>
+    );
+
+    if (!onClosePanel) {
+      return (
+        <div className="flex max-h-[min(34rem,calc(100vh-8rem))] w-[min(20rem,calc(100vw-6rem))] flex-col overflow-hidden">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">{detailContent}</div>
+          <div className="shrink-0 border-t border-gray-100 bg-white pt-3">{actionBlock}</div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-3">
+        {detailContent}
+        <div className="sticky bottom-0 bg-white/95 pt-2">
+          {actionBlock}
+        </div>
+      </div>
+    );
+  }
+
   function getGroupInterestState(groupJobs: JobListing[]) {
     const states = groupJobs.map(getJobInterestState);
 
@@ -1335,12 +1441,17 @@ export function ApplicantJobsMap() {
   }
 
   function openPlottedEntry(entry: PlottedJobEntry) {
+    mapInstanceRef.current?.closePopup();
     setListHighlightKey(entry.key);
 
     if (entry.source !== "wpm") {
+      setSelectedResultJobId("");
+      setSelectedJobSource(null);
+      setSelectedExternalEntryKey(entry.key);
       return;
     }
 
+    setSelectedExternalEntryKey("");
     const job = jobs.find((candidateJob) => candidateJob.id === entry.id);
     if (job) {
       openJobFromResults(job);
@@ -1407,6 +1518,11 @@ export function ApplicantJobsMap() {
             />
             {getJobSourceLabel(entry.source)}
           </span>
+          {entry.source !== "wpm" && !entry.hasMapPin ? (
+            <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">
+              No map pin
+            </span>
+          ) : null}
           {entry.interestState === "candidate_interested" || entry.interestState === "mutual_match" ? (
             <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-bold text-red-800">&hearts;</span>
           ) : null}
@@ -1439,7 +1555,14 @@ export function ApplicantJobsMap() {
 
   return (
     <section className={`fixed inset-x-0 bottom-0 z-40 w-screen overflow-hidden bg-[#eef3ef] ${headerOffsetClass}`}>
-      <MapContainer center={mapCenter} zoom={10} minZoom={4} zoomControl={false} className="absolute inset-0 z-0 h-full w-full">
+      <MapContainer
+        ref={mapInstanceRef}
+        center={mapCenter}
+        zoom={10}
+        minZoom={4}
+        zoomControl={false}
+        className="absolute inset-0 z-0 h-full w-full"
+      >
         <RecenterMap center={mapCenter} />
         <PanToSelectedJob position={selectedResultJobPosition} />
         <PanToSelectedJob position={listHighlightPosition} />
@@ -1650,8 +1773,6 @@ export function ApplicantJobsMap() {
         {scoredExternalJobs.map((job) => {
           const extScore = matchScores[job.id];
           const isSaved = savedExternalJobIds.has(job.id);
-          const pinVariant: "default" | "neutral" | "gig" =
-            scoringMode === "all" ? "neutral" : scoringMode === "gig" ? "gig" : "default";
           return (
             <Marker
               key={job.id}
@@ -1659,8 +1780,7 @@ export function ApplicantJobsMap() {
               icon={createExternalJobIcon(
                 listHighlightKey === `adzuna:${job.id}`,
                 extScore,
-                scoringMode !== "all" && scoringInProgress,
-                pinVariant
+                scoringMode !== "all" && scoringInProgress
               )}
               eventHandlers={{
                 click: () => highlightFromPin(`adzuna:${job.id}`)
@@ -2193,6 +2313,27 @@ export function ApplicantJobsMap() {
               setSelectedResultJobId("");
               setSelectedJobSource(null);
             })}
+          </div>
+        ) : selectedExternalEntry ? (
+          <div
+            ref={detailPanelRef}
+            className="max-h-[42vh] shrink-0 overflow-y-auto overflow-x-hidden rounded-lg border border-gray-200 bg-white/95 p-4 shadow-soft"
+          >
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-800">Selected job</p>
+                <p className="mt-1 text-xs leading-5 text-zinc-600">Opened from jobs panel</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedExternalEntryKey("")}
+                aria-label="Close selected job detail"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-zinc-300 bg-white text-sm font-bold text-zinc-700 transition hover:bg-zinc-50"
+              >
+                X
+              </button>
+            </div>
+            {renderExternalJobDetail(selectedExternalEntry, () => setSelectedExternalEntryKey(""))}
           </div>
         ) : null}
       </div>
@@ -3465,21 +3606,14 @@ function getJobSourceLabel(source: PlottedJobEntry["source"]): string {
   }
 }
 
-function createExternalJobIcon(isHighlighted = false, score?: number, scoringInProgress = false, variant: "default" | "neutral" | "gig" = "default") {
-  const bgColor = variant === "neutral" ? "#6b7280" : variant === "gig" ? "#b45309" : "#334155";
-  const glowRgb = variant === "neutral" ? "107,114,128" : variant === "gig" ? "180,83,9" : "51,65,85";
+function createExternalJobIcon(isHighlighted = false, score?: number, scoringInProgress = false) {
+  const bgColor = "#334155";
+  const glowRgb = "51,65,85";
   const glow = isHighlighted
     ? `0 0 0 4px rgba(${glowRgb},0.28), 0 8px 20px rgba(0,0,0,0.25)`
     : "0 4px 12px rgba(0,0,0,0.22)";
   const scale = isHighlighted ? "scale(1.12)" : "scale(1)";
-  const label =
-    score !== undefined
-      ? `${score}%`
-      : variant === "neutral"
-      ? "—"
-      : scoringInProgress
-      ? "···"
-      : "EXT";
+  const label = score !== undefined ? `${score}%` : scoringInProgress ? "···" : "EXT";
   const fontSize = score !== undefined ? "11px" : "10px";
   return L.divIcon({
     className: "",
