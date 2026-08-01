@@ -806,6 +806,7 @@ export function ApplicantJobsMap() {
       setInterestStatusFilter("all");
       setSelectedGroupedJobId("");
       setClusterToReopenKey("");
+      setLocationFilterKey("");
       openJobFromResults(matchedJob);
       setIsJobsPanelOpen(true);
       setIsAllJobsSectionOpen(true);
@@ -1463,6 +1464,7 @@ export function ApplicantJobsMap() {
   }
 
   function highlightFromPin(key: string) {
+    setLocationFilterKey("");
     setListHighlightKey(key);
     setIsJobsPanelOpen(true);
     setIsAllJobsSectionOpen(true);
@@ -1482,7 +1484,10 @@ export function ApplicantJobsMap() {
     setLocationFilterKey(group.key);
   }
 
-  function renderPlottedEntryRow(entry: PlottedJobEntry, options?: { showEmployerVisibilityLabel?: boolean }) {
+  function renderPlottedEntryRow(
+    entry: PlottedJobEntry,
+    options?: { showEmployerVisibilityLabel?: boolean; clearsLocationFilter?: boolean }
+  ) {
     const isExpanded = expandedEntryKey === entry.key;
     const isHighlighted =
       isExpanded ||
@@ -1503,7 +1508,10 @@ export function ApplicantJobsMap() {
             listRowRefs.current[entry.key] = el;
           }}
           type="button"
-          onClick={() => openPlottedEntry(entry)}
+          onClick={() => {
+            if (options?.clearsLocationFilter) setLocationFilterKey("");
+            openPlottedEntry(entry);
+          }}
           onMouseEnter={() => {
             if (entry.source === "wpm") setHoveredResultJobId(entry.id);
           }}
@@ -2113,6 +2121,7 @@ export function ApplicantJobsMap() {
                   type="button"
                   onClick={() => {
                     if (mode === scoringMode) return;
+                    setLocationFilterKey("");
                     setScoringMode(mode);
                     // Always clear — scores are per-mode now, so a score cached under
                     // one mode must never be shown while a different mode is active.
@@ -2155,6 +2164,7 @@ export function ApplicantJobsMap() {
                   key={option.label}
                   type="button"
                   onClick={() => {
+                    setLocationFilterKey("");
                     setSearchMiles(option.miles);
                     setCustomMiles("");
                   }}
@@ -2177,6 +2187,7 @@ export function ApplicantJobsMap() {
                 onChange={(event) => {
                   const value = event.target.value;
                   const miles = Number(value);
+                  setLocationFilterKey("");
                   setCustomMiles(value);
                   setSearchMiles(Number.isFinite(miles) && miles > 0 ? miles : null);
                 }}
@@ -2188,6 +2199,7 @@ export function ApplicantJobsMap() {
               <button
                 type="button"
                 onClick={() => {
+                  setLocationFilterKey("");
                   setSearchMiles(null);
                   setCustomMiles("");
                 }}
@@ -2200,6 +2212,7 @@ export function ApplicantJobsMap() {
               <button
                 type="button"
                 onClick={() => {
+                  setLocationFilterKey("");
                   setCustomAreaPoints([]);
                   setIsDrawingCustomArea(true);
                 }}
@@ -2222,6 +2235,7 @@ export function ApplicantJobsMap() {
                 <button
                   type="button"
                   onClick={() => {
+                    setLocationFilterKey("");
                     setCustomAreaPoints([]);
                     setIsDrawingCustomArea(false);
                   }}
@@ -2256,7 +2270,10 @@ export function ApplicantJobsMap() {
               <span className="sr-only">Sort by</span>
               <select
                 value={sortMode}
-                onChange={(event) => setSortMode(event.target.value as JobSortMode)}
+                onChange={(event) => {
+                  setLocationFilterKey("");
+                  setSortMode(event.target.value as JobSortMode);
+                }}
                 className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs font-semibold text-zinc-900"
               >
                 {sortOptions.map((option) => (
@@ -2355,7 +2372,7 @@ export function ApplicantJobsMap() {
                   </div>
                 ) : (
                   interestedAndSavedEntries.map((entry) =>
-                    renderPlottedEntryRow(entry, { showEmployerVisibilityLabel: true })
+                    renderPlottedEntryRow(entry, { showEmployerVisibilityLabel: true, clearsLocationFilter: true })
                   )
                 )}
               </div>
