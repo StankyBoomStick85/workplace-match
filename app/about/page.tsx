@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { PartnershipContactForm } from "@/components/PartnershipContactForm";
+import { LearnMoreAccordions } from "@/components/LearnMoreAccordions";
 
 export const metadata: Metadata = {
   title: "About | Workplace Match",
@@ -16,26 +17,13 @@ export default function AboutPage() {
             Work should match people better.
           </h1>
           <p className="mt-6 text-lg leading-8 text-zinc-600">
-            Workplace Match helps people and companies find each other through real capability, pay alignment, location fit, and mutual interest — not resume keyword games.
+            Workplace Match helps people and companies find each other through real capability, pay alignment, location fit, and mutual interest, not resume keyword games.
           </p>
         </div>
       </section>
 
       <section className="mx-auto max-w-5xl px-4 py-14">
-        <div className="grid gap-6 sm:grid-cols-2">
-          <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
-            <p className="text-sm font-semibold uppercase tracking-[0.16em] text-red-800">For People</p>
-            <p className="mt-3 text-sm leading-7 text-zinc-700">
-              You are more than a resume. Create a profile around what you can actually do, what you&apos;re looking for, where you want to work, and what pay makes sense for your life. Then see opportunities that fit you — not just jobs that happen to be posted.
-            </p>
-          </div>
-          <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
-            <p className="text-sm font-semibold uppercase tracking-[0.16em] text-red-800">For Employers</p>
-            <p className="mt-3 text-sm leading-7 text-zinc-700">
-              Stop waiting for the right person to apply. Workplace Match helps employers see people with relevant capability, realistic location fit, and aligned expectations before wasting time sorting through disconnected applications.
-            </p>
-          </div>
-        </div>
+        <LearnMoreAccordions />
       </section>
 
       <section className="mx-auto max-w-5xl px-4 pb-14">
@@ -50,9 +38,21 @@ export default function AboutPage() {
       <section className="mx-auto max-w-5xl px-4 pb-14">
         <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
           <p className="text-sm font-semibold uppercase tracking-[0.16em] text-red-800">Connect</p>
-          <h2 className="mt-2 text-2xl font-bold text-zinc-950">About the Founder</h2>
+          <h2 className="mt-2 text-2xl font-bold text-zinc-950">Who built this</h2>
           <p className="mt-3 text-sm leading-7 text-zinc-700">
-            Built by Joel DeToy — 20-year Army veteran, 15 years Special Forces, now building the hiring platform he wished existed.
+            I spent 20 years in the Army, 15 of them as a Green Beret. Real autonomy, real responsibility, decisions that mattered under pressure and could not be walked back.
+          </p>
+          <p className="mt-4 text-sm leading-7 text-zinc-700">
+            Then I got out, and I felt what millions of people feel every time they look for work. You go from being trusted with consequential decisions to being an applicant, asking systems that cannot actually see you for permission to be considered. Nothing about my capability changed the day I took off the uniform. What changed was that nobody could see it anymore, because the only way to show it was a resume, and a resume is a sales document filtered by keyword before a human ever reads it.
+          </p>
+          <p className="mt-4 text-sm leading-7 text-zinc-700">
+            I live in a small town. Families here are working jobs that start around $30,000 a year and struggling on it. Employers in the same town say they cannot find workers. Both of those things are true at once, and the gap between them is not talent. It is visibility. Workers with real skills have no way to prove them. Employers have no way to see past a keyword filter to the person who could actually do the job.
+          </p>
+          <p className="mt-4 text-sm leading-7 text-zinc-700">
+            I built this because I wanted it to exist. I am not a traditional developer. I direct AI to build what I can see clearly, and what I can see clearly is a system where what you have actually done is visible without having to sell it, and where employers can see capability instead of guessing at it from job titles.
+          </p>
+          <p className="mt-4 text-sm leading-7 text-zinc-700">
+            That is what this is. It is early, and it is being built in the open.
           </p>
 
           <div className="mt-6 border-t border-gray-200 pt-6">
