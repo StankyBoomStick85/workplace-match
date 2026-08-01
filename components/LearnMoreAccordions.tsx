@@ -15,17 +15,14 @@ export function LearnMoreAccordions() {
   }
 
   return (
-    <div className="grid gap-6 sm:grid-cols-2">
+    <div className="space-y-6">
       <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
         <button
           type="button"
           onClick={() => toggleSection("people")}
           className="flex w-full items-center justify-between text-left"
         >
-          <span className="min-w-0">
-            <p className="text-sm font-semibold uppercase tracking-[0.16em] text-red-800">For People</p>
-            <span className="mt-1 block text-base font-bold text-zinc-950">For people looking for work</span>
-          </span>
+          <span className="min-w-0 text-lg font-bold text-zinc-950">For people looking for work</span>
           <span className="shrink-0 text-sm font-bold text-zinc-500">{openSections.people ? "▾" : "▸"}</span>
         </button>
         {openSections.people ? (
@@ -62,10 +59,7 @@ export function LearnMoreAccordions() {
           onClick={() => toggleSection("employers")}
           className="flex w-full items-center justify-between text-left"
         >
-          <span className="min-w-0">
-            <p className="text-sm font-semibold uppercase tracking-[0.16em] text-red-800">For Employers</p>
-            <span className="mt-1 block text-base font-bold text-zinc-950">For employers</span>
-          </span>
+          <span className="min-w-0 text-lg font-bold text-zinc-950">For employers</span>
           <span className="shrink-0 text-sm font-bold text-zinc-500">{openSections.employers ? "▾" : "▸"}</span>
         </button>
         {openSections.employers ? (
