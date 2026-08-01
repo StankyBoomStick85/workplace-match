@@ -175,6 +175,7 @@ type PlottedJobEntry = {
   jobType?: string | null;
   description?: string;
   url?: string;
+  sharesLocationCount?: number;
 };
 
 type ExternalJob = {
@@ -190,6 +191,12 @@ type ExternalJob = {
   url: string;
   description?: string;
   source: "adzuna" | "muse" | "usajobs";
+};
+
+type ExternalJobGroup = {
+  key: string;
+  position: Coordinates;
+  jobs: ExternalJob[];
 };
 
 const applicantAccountKey = "workplace_match_candidate";
@@ -301,6 +308,7 @@ export function ApplicantJobsMap() {
   const [savedExternalJobIds, setSavedExternalJobIds] = useState<Set<string>>(new Set());
   const [listHighlightKey, setListHighlightKey] = useState("");
   const [expandedEntryKey, setExpandedEntryKey] = useState("");
+  const [locationFilterKey, setLocationFilterKey] = useState("");
   const pollAttemptsRef = useRef(0);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const visibleExternalJobsRef = useRef<ExternalJob[]>([]);
@@ -586,6 +594,23 @@ export function ApplicantJobsMap() {
     [visibleExternalJobs, scoringMode, matchScores]
   );
 
+  // Groups external jobs sharing an exact coordinate — same set that drives
+  // the external pins, so a pin's grouping always matches what the panel says.
+  const externalJobGroups = useMemo(
+    () => groupExternalJobsByExactLocation(scoredExternalJobs),
+    [scoredExternalJobs]
+  );
+
+  const externalLocationGroupSizes = useMemo(() => {
+    const sizes = new Map<string, number>();
+    externalJobGroups.forEach((group) => {
+      if (group.jobs.length > 1) {
+        group.jobs.forEach((job) => sizes.set(job.id, group.jobs.length));
+      }
+    });
+    return sizes;
+  }, [externalJobGroups]);
+
   // Every job currently plotted on the map (both WPM listings and external feed jobs),
   // built from the same filtered data already used to render pins — no separate fetch.
   const plottedJobEntries = useMemo<PlottedJobEntry[]>(() => {
@@ -632,7 +657,8 @@ export function ApplicantJobsMap() {
         salaryMax: job.salary_max,
         jobType: job.job_type,
         description: job.description,
-        url: job.url
+        url: job.url,
+        sharesLocationCount: externalLocationGroupSizes.get(job.id)
       };
     });
 
@@ -640,6 +666,7 @@ export function ApplicantJobsMap() {
   }, [
     visibleJobGroups,
     scoredExternalJobs,
+    externalLocationGroupSizes,
     applicantAreaPosition,
     matchScores,
     companyProfile,
@@ -651,6 +678,18 @@ export function ApplicantJobsMap() {
     () => sortPlottedJobEntries(plottedJobEntries, sortMode),
     [plottedJobEntries, sortMode]
   );
+
+  // When a grouped external pin is clicked, restrict "All Jobs" to just the
+  // jobs sitting at that exact coordinate.
+  const displayedAllJobsEntries = useMemo(() => {
+    if (!locationFilterKey) {
+      return sortedPlottedJobEntries;
+    }
+
+    return sortedPlottedJobEntries.filter(
+      (entry) => `${entry.position[0]},${entry.position[1]}` === locationFilterKey
+    );
+  }, [sortedPlottedJobEntries, locationFilterKey]);
 
   // Hearted WPM jobs and saved external jobs, pooled together regardless of the
   // current category tab or filters — this list is meant to stay stable.
@@ -703,13 +742,15 @@ export function ApplicantJobsMap() {
           salaryMax: job.salary_max,
           jobType: job.job_type,
           description: job.description,
-          url: job.url
+          url: job.url,
+          sharesLocationCount: externalLocationGroupSizes.get(job.id)
         };
       });
 
     return sortPlottedJobEntries([...heartedWpmEntries, ...savedExternalEntries], sortMode);
   }, [
     plottedJobEntries,
+    externalLocationGroupSizes,
     jobs,
     externalJobs,
     savedExternalJobIds,
@@ -1434,6 +1475,13 @@ export function ApplicantJobsMap() {
     setExpandedEntryKey((current) => (current === entry.key ? "" : entry.key));
   }
 
+  function openExternalLocationGroup(group: ExternalJobGroup) {
+    mapInstanceRef.current?.closePopup();
+    setIsJobsPanelOpen(true);
+    setIsAllJobsSectionOpen(true);
+    setLocationFilterKey(group.key);
+  }
+
   function renderPlottedEntryRow(entry: PlottedJobEntry, options?: { showEmployerVisibilityLabel?: boolean }) {
     const isExpanded = expandedEntryKey === entry.key;
     const isHighlighted =
@@ -1500,6 +1548,11 @@ export function ApplicantJobsMap() {
             {entry.source !== "wpm" && !entry.hasMapPin ? (
               <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">
                 No map pin
+              </span>
+            ) : null}
+            {entry.source !== "wpm" && entry.sharesLocationCount ? (
+              <span className="rounded-full bg-slate-200 px-2 py-1 text-xs font-semibold text-slate-700">
+                Shares location ({entry.sharesLocationCount})
               </span>
             ) : null}
             {entry.interestState === "candidate_interested" || entry.interestState === "mutual_match" ? (
@@ -1764,74 +1817,88 @@ export function ApplicantJobsMap() {
           );
         })}
 
-        {scoredExternalJobs.map((job) => {
-          const extScore = matchScores[job.id];
-          const isSaved = savedExternalJobIds.has(job.id);
+        {externalJobGroups.map((group) => {
+          if (group.jobs.length === 1) {
+            const job = group.jobs[0];
+            const extScore = matchScores[job.id];
+            const isSaved = savedExternalJobIds.has(job.id);
+            return (
+              <Marker
+                key={job.id}
+                position={[job.lat, job.lng]}
+                icon={createExternalJobIcon(
+                  listHighlightKey === `adzuna:${job.id}`,
+                  extScore,
+                  scoringMode !== "all" && scoringInProgress
+                )}
+                eventHandlers={{
+                  click: () => highlightFromPin(`adzuna:${job.id}`)
+                }}
+              >
+                <Popup maxWidth={340}>
+                  <div className="box-border w-[min(20rem,calc(100vw-6rem))] max-w-full space-y-2 px-1 py-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{job.company}</p>
+                        <h2 className="text-base font-bold text-zinc-950">{job.title}</h2>
+                      </div>
+                      {extScore !== undefined ? (
+                        <span className="shrink-0 rounded-full bg-slate-700 px-2.5 py-1 text-xs font-bold text-white">
+                          {extScore}%
+                        </span>
+                      ) : scoringInProgress ? (
+                        <span className="shrink-0 rounded-full bg-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-500">
+                          Scoring...
+                        </span>
+                      ) : null}
+                    </div>
+                    {job.location ? <p className="text-xs text-zinc-500">{job.location}</p> : null}
+                    {job.salary_min || job.salary_max ? (
+                      <p className="text-xs font-semibold text-zinc-700">{formatExternalSalary(job.salary_min, job.salary_max)}</p>
+                    ) : null}
+                    {job.job_type ? <p className="text-xs text-zinc-500">{job.job_type}</p> : null}
+                    {job.description ? (
+                      <p className="max-h-20 overflow-y-auto rounded border border-gray-200 bg-gray-50 px-2 py-1.5 text-xs leading-5 text-zinc-600">
+                        {job.description}
+                      </p>
+                    ) : null}
+                    <div className="flex items-center gap-2 pt-1">
+                      <a
+                        href={job.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex flex-1 items-center justify-center rounded-md bg-slate-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
+                      >
+                        View Job ↗
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => handleSaveExternalJob(job)}
+                        className={`inline-flex items-center justify-center rounded-md border px-3 py-2 text-xs font-semibold transition ${
+                          isSaved
+                            ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200"
+                            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                        }`}
+                        aria-label={isSaved ? "Unsave job" : "Save job"}
+                      >
+                        {isSaved ? "♥ Saved" : "♡ Save"}
+                      </button>
+                    </div>
+                  </div>
+                </Popup>
+              </Marker>
+            );
+          }
+
           return (
             <Marker
-              key={job.id}
-              position={[job.lat, job.lng]}
-              icon={createExternalJobIcon(
-                listHighlightKey === `adzuna:${job.id}`,
-                extScore,
-                scoringMode !== "all" && scoringInProgress
-              )}
+              key={group.key}
+              position={group.position}
+              icon={createExternalGroupIcon(group.jobs.length, locationFilterKey === group.key)}
               eventHandlers={{
-                click: () => highlightFromPin(`adzuna:${job.id}`)
+                click: () => openExternalLocationGroup(group)
               }}
-            >
-              <Popup maxWidth={340}>
-                <div className="box-border w-[min(20rem,calc(100vw-6rem))] max-w-full space-y-2 px-1 py-1">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{job.company}</p>
-                      <h2 className="text-base font-bold text-zinc-950">{job.title}</h2>
-                    </div>
-                    {extScore !== undefined ? (
-                      <span className="shrink-0 rounded-full bg-slate-700 px-2.5 py-1 text-xs font-bold text-white">
-                        {extScore}%
-                      </span>
-                    ) : scoringInProgress ? (
-                      <span className="shrink-0 rounded-full bg-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-500">
-                        Scoring...
-                      </span>
-                    ) : null}
-                  </div>
-                  {job.location ? <p className="text-xs text-zinc-500">{job.location}</p> : null}
-                  {job.salary_min || job.salary_max ? (
-                    <p className="text-xs font-semibold text-zinc-700">{formatExternalSalary(job.salary_min, job.salary_max)}</p>
-                  ) : null}
-                  {job.job_type ? <p className="text-xs text-zinc-500">{job.job_type}</p> : null}
-                  {job.description ? (
-                    <p className="max-h-20 overflow-y-auto rounded border border-gray-200 bg-gray-50 px-2 py-1.5 text-xs leading-5 text-zinc-600">
-                      {job.description}
-                    </p>
-                  ) : null}
-                  <div className="flex items-center gap-2 pt-1">
-                    <a
-                      href={job.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex flex-1 items-center justify-center rounded-md bg-slate-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
-                    >
-                      View Job ↗
-                    </a>
-                    <button
-                      type="button"
-                      onClick={() => handleSaveExternalJob(job)}
-                      className={`inline-flex items-center justify-center rounded-md border px-3 py-2 text-xs font-semibold transition ${
-                        isSaved
-                          ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200"
-                          : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                      }`}
-                      aria-label={isSaved ? "Unsave job" : "Save job"}
-                    >
-                      {isSaved ? "♥ Saved" : "♡ Save"}
-                    </button>
-                  </div>
-                </div>
-              </Popup>
-            </Marker>
+            />
           );
         })}
       </MapContainer>
@@ -2210,15 +2277,27 @@ export function ApplicantJobsMap() {
               <span className="min-w-0">
                 <span className="block text-sm font-bold text-zinc-950">{getScoringModeLabel(scoringMode)}</span>
                 <span className="mt-0.5 block text-xs leading-5 text-zinc-600">
-                  {sortedPlottedJobEntries.length} jobs · Ordered by {getSortLabel(sortMode).toLowerCase()}
+                  {displayedAllJobsEntries.length} jobs · Ordered by {getSortLabel(sortMode).toLowerCase()}
                 </span>
               </span>
               <span className="shrink-0 text-sm font-bold text-zinc-500">{isAllJobsSectionOpen ? "▾" : "▸"}</span>
             </button>
             {isAllJobsSectionOpen ? (
               <div className="mt-3 space-y-2">
-                {sortedPlottedJobEntries.length === 0 ? (
-                  scoringInProgress && scoringMode !== "all" ? (
+                {locationFilterKey ? (
+                  <div className="flex items-center justify-between gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2">
+                    <p className="text-xs font-semibold text-red-900">Showing jobs at this map location only</p>
+                    <button
+                      type="button"
+                      onClick={() => setLocationFilterKey("")}
+                      className="shrink-0 rounded-md border border-red-300 bg-white px-2 py-1 text-xs font-bold text-red-800 transition hover:bg-red-50"
+                    >
+                      Show all jobs
+                    </button>
+                  </div>
+                ) : null}
+                {displayedAllJobsEntries.length === 0 ? (
+                  scoringInProgress && scoringMode !== "all" && !locationFilterKey ? (
                     <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
                       <p className="flex items-center gap-2 text-sm font-semibold text-zinc-950">
                         <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-700" />
@@ -2230,12 +2309,14 @@ export function ApplicantJobsMap() {
                     </div>
                   ) : (
                     <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
-                      <p className="text-sm font-semibold text-zinc-950">No jobs match these filters.</p>
+                      <p className="text-sm font-semibold text-zinc-950">
+                        {locationFilterKey ? "No jobs found at this location." : "No jobs match these filters."}
+                      </p>
                     </div>
                   )
                 ) : (
                   <>
-                    {sortedPlottedJobEntries.map((entry) => renderPlottedEntryRow(entry))}
+                    {displayedAllJobsEntries.map((entry) => renderPlottedEntryRow(entry))}
                     {scoringInProgress && scoringMode !== "all" ? (
                       <p className="flex items-center gap-2 px-1 text-xs font-semibold text-zinc-500">
                         <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-red-700" />
@@ -3082,6 +3163,28 @@ function groupJobsByLocation(jobs: JobListing[], zoom: number) {
   return groups;
 }
 
+// External feeds sometimes geocode to a city/region centroid instead of a
+// street address, so many distinct listings can land on the exact same
+// [lat, lng]. Group by exact coordinate only — proximity grouping would
+// incorrectly merge genuinely distinct nearby addresses.
+function groupExternalJobsByExactLocation(externalJobsList: ExternalJob[]): ExternalJobGroup[] {
+  const groups = new Map<string, ExternalJobGroup>();
+
+  externalJobsList.forEach((job) => {
+    const key = `${job.lat},${job.lng}`;
+    const existing = groups.get(key);
+
+    if (existing) {
+      existing.jobs.push(job);
+      return;
+    }
+
+    groups.set(key, { key, position: [job.lat, job.lng], jobs: [job] });
+  });
+
+  return [...groups.values()];
+}
+
 function getExactJobLocationGroupKey(job: JobListing) {
   if (hasEnteredStreetAddress(job)) {
     const exactAddressKey = getJobAddressKey(job);
@@ -3566,6 +3669,23 @@ function createExternalJobIcon(isHighlighted = false, score?: number, scoringInP
     iconSize: [36, 36],
     iconAnchor: [18, 18],
     popupAnchor: [0, -18]
+  });
+}
+
+// Mirrors createGroupedJobIcon's count-pill shape for WPM clusters, but
+// stays dark blue — external pins encode source, not scoring mode or count.
+function createExternalGroupIcon(count: number, isHighlighted = false) {
+  const glow = isHighlighted
+    ? "0 0 0 6px rgba(51,65,85,0.22), 0 14px 30px rgba(0,0,0,0.32)"
+    : "0 10px 24px rgba(0,0,0,0.25)";
+  const scale = isHighlighted ? "scale(1.08)" : "scale(1)";
+
+  return L.divIcon({
+    className: "",
+    html: `<div style="position:relative;display:inline-flex;align-items:center;justify-content:center;min-width:52px;height:44px;padding:0 12px;border-radius:9999px;border:3px solid white;background:#334155;color:white;font-size:16px;font-weight:900;box-shadow:${glow};transform:${scale};transition:transform 150ms ease, box-shadow 150ms ease;">${count}</div>`,
+    iconSize: [72, 56],
+    iconAnchor: [36, 28],
+    popupAnchor: [0, -20]
   });
 }
 
