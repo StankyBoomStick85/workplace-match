@@ -132,6 +132,9 @@ type SelectedJobSource = "cluster" | "single" | "results" | null;
 type InterestStatusFilter = "all" | "not_marked" | "interested" | "matched";
 type JobSortMode = "balanced" | "best_match" | "closest" | "pay";
 type ScoringMode = "career" | "quick" | "all" | "gig";
+// What pins/pills show, independent of which AI scoring pipeline is active.
+// Quick Work forces "pay" regardless of this — see effectivePinDisplayMode.
+type PinDisplayMode = "match" | "pay";
 type JobFilters = {
   minimumMatchPercent: number;
   commuteMaxMinutes: number | null;
@@ -317,6 +320,7 @@ export function ApplicantJobsMap() {
   const [geocodedZipCenter, setGeocodedZipCenter] = useState<Coordinates | null>(null);
   const [externalJobs, setExternalJobs] = useState<ExternalJob[]>([]);
   const [scoringMode, setScoringMode] = useState<ScoringMode>("career");
+  const [pinDisplayMode, setPinDisplayMode] = useState<PinDisplayMode>("match");
   // Namespaced by scoring mode — a stale response from a superseded mode's
   // polling loop must never be readable by whichever mode is active now.
   const [matchScoresByMode, setMatchScoresByMode] = useState<Record<string, Record<string, number>>>({});
@@ -343,6 +347,11 @@ export function ApplicantJobsMap() {
     () => matchScoresByMode[scoringMode] ?? {},
     [matchScoresByMode, scoringMode]
   );
+
+  // Quick Work's 100/0 output is a walk-in classification, not a match
+  // percentage — it must never be displayed, so this mode always wins over
+  // whatever the user last picked on the toggle.
+  const effectivePinDisplayMode: PinDisplayMode = scoringMode === "quick" ? "pay" : pinDisplayMode;
 
   useEffect(() => {
     loadMapData();
@@ -1731,7 +1740,7 @@ export function ApplicantJobsMap() {
       listHighlightKey === entry.key ||
       (entry.source === "wpm" && (hoveredResultJobId === entry.id || selectedResultJobId === entry.id));
     const scorePillLabel =
-      scoringMode === "quick"
+      effectivePinDisplayMode === "pay"
         ? entry.payPillLabel
         : entry.matchPercent !== null
         ? `${entry.matchPercent}%`
@@ -1924,7 +1933,7 @@ export function ApplicantJobsMap() {
                   interestState,
                   getJobCommuteEstimate(job, applicantAreaPosition)?.timeLabel ?? null,
                   isJobHighlighted,
-                  scoringMode,
+                  effectivePinDisplayMode,
                   formatPayPill(job.payMin, job.payMax, job.payType !== "annual")
                 )}
                 zIndexOffset={isJobHighlighted ? 500 : 0}
@@ -2104,7 +2113,7 @@ export function ApplicantJobsMap() {
                   listHighlightKey === `adzuna:${job.id}`,
                   extScore,
                   scoringMode !== "all" && scoringInProgress,
-                  scoringMode,
+                  effectivePinDisplayMode,
                   resolvedPinPay.kind === "none"
                     ? "—"
                     : formatPayPill(resolvedPinPay.min, resolvedPinPay.max, resolvedPinPay.isHourly, resolvedPinPay.kind === "estimate")
@@ -2382,6 +2391,38 @@ export function ApplicantJobsMap() {
                 : scoringMode === "career"
                 ? "Scores how well each job fits your career level and goals."
                 : "Walk-in jobs you can start within about a week — no resume or credentials needed."}
+            </p>
+          </div>
+          <div className="mt-4 space-y-2 border-t border-gray-200 pt-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
+              Pin &amp; pill display
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {([
+                { mode: "match" as PinDisplayMode, label: "Match" },
+                { mode: "pay" as PinDisplayMode, label: "Pay" },
+              ]).map(({ mode, label }) => (
+                <button
+                  key={mode}
+                  type="button"
+                  disabled={scoringMode === "quick"}
+                  onClick={() => setPinDisplayMode(mode)}
+                  className={`rounded-md px-3 py-2 text-sm font-semibold transition ${
+                    scoringMode === "quick"
+                      ? "cursor-not-allowed border border-zinc-200 bg-zinc-100 text-zinc-400"
+                      : effectivePinDisplayMode === mode
+                      ? "bg-red-900 text-white hover:bg-red-950"
+                      : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs leading-4 text-zinc-400">
+              {scoringMode === "quick"
+                ? "Quick Work always shows pay — its walk-in score isn't a match percentage."
+                : "Choose what map pins and job rows show."}
             </p>
           </div>
           <div className="mt-4 space-y-3 border-t border-gray-200 pt-3">
@@ -3856,10 +3897,10 @@ function createUnifiedJobMatchIcon(
   interestState: InterestState,
   distanceLabel: string | null,
   isHighlighted = false,
-  scoringMode: ScoringMode = "career",
+  displayMode: PinDisplayMode = "match",
   payLabel = "—"
 ) {
-  const primaryLabel = scoringMode === "quick" ? payLabel : `${percentage}%`;
+  const primaryLabel = displayMode === "pay" ? payLabel : `${percentage}%`;
   const interestBadge =
     interestState === "candidate_interested"
       ? '<span style="position:absolute;top:-9px;right:-9px;display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:9999px;border:2px solid white;background:#991b1b;color:white;font-size:14px;font-weight:900;box-shadow:0 6px 14px rgba(0,0,0,0.2);">&hearts;</span>'
@@ -3928,14 +3969,14 @@ function createExternalJobIcon(
   isHighlighted = false,
   score?: number,
   scoringInProgress = false,
-  scoringMode: ScoringMode = "career",
+  displayMode: PinDisplayMode = "match",
   payLabel = "—"
 ) {
   const bgColor = "#334155";
   const glow = isHighlighted ? SELECTED_PIN_GLOW : "0 4px 12px rgba(0,0,0,0.22)";
   const scale = isHighlighted ? SELECTED_PIN_SCALE : "scale(1)";
   const label =
-    scoringMode === "quick"
+    displayMode === "pay"
       ? payLabel
       : score !== undefined
       ? `${score}%`
