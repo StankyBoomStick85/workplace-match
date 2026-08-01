@@ -573,7 +573,7 @@ export function ApplicantJobsMap() {
         if (scoringMode === "all") return true;
         if (scoringMode === "gig") return isGigJob(job);
         const score = matchScores[job.id];
-        return score === undefined || score >= 50;
+        return score !== undefined && score >= 50;
       }),
     [visibleExternalJobs, scoringMode, matchScores]
   );
@@ -694,9 +694,11 @@ export function ApplicantJobsMap() {
   ]);
 
   const listHighlightPosition = useMemo(() => {
-    const entry = plottedJobEntries.find((item) => item.key === listHighlightKey);
+    const entry =
+      plottedJobEntries.find((item) => item.key === listHighlightKey) ??
+      interestedAndSavedEntries.find((item) => item.key === listHighlightKey);
     return entry ? entry.position : null;
-  }, [plottedJobEntries, listHighlightKey]);
+  }, [plottedJobEntries, interestedAndSavedEntries, listHighlightKey]);
 
   const selectedResultJob = useMemo(
     () => jobs.find((job) => job.id === selectedResultJobId) ?? null,
@@ -2092,7 +2094,7 @@ export function ApplicantJobsMap() {
               className="flex w-full items-center justify-between text-left"
             >
               <span className="min-w-0">
-                <span className="block text-sm font-bold text-zinc-950">All Jobs</span>
+                <span className="block text-sm font-bold text-zinc-950">{getScoringModeLabel(scoringMode)}</span>
                 <span className="mt-0.5 block text-xs leading-5 text-zinc-600">
                   {sortedPlottedJobEntries.length} jobs · Ordered by {getSortLabel(sortMode).toLowerCase()}
                 </span>
@@ -2102,11 +2104,31 @@ export function ApplicantJobsMap() {
             {isAllJobsSectionOpen ? (
               <div className="mt-3 space-y-2">
                 {sortedPlottedJobEntries.length === 0 ? (
-                  <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
-                    <p className="text-sm font-semibold text-zinc-950">No jobs match these filters.</p>
-                  </div>
+                  scoringInProgress && scoringMode !== "all" ? (
+                    <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
+                      <p className="flex items-center gap-2 text-sm font-semibold text-zinc-950">
+                        <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-700" />
+                        Evaluating jobs for {getScoringModeLabel(scoringMode)}...
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-zinc-600">
+                        Matches will appear here as scoring finishes.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
+                      <p className="text-sm font-semibold text-zinc-950">No jobs match these filters.</p>
+                    </div>
+                  )
                 ) : (
-                  sortedPlottedJobEntries.map((entry) => renderPlottedEntryRow(entry))
+                  <>
+                    {sortedPlottedJobEntries.map((entry) => renderPlottedEntryRow(entry))}
+                    {scoringInProgress && scoringMode !== "all" ? (
+                      <p className="flex items-center gap-2 px-1 text-xs font-semibold text-zinc-500">
+                        <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-red-700" />
+                        More jobs are still being scored...
+                      </p>
+                    ) : null}
+                  </>
                 )}
               </div>
             ) : null}
@@ -2893,6 +2915,19 @@ function getJobSortMetrics(job: JobListing, profile: ApplicantProfile | null, ap
 
 function getSortLabel(sortMode: JobSortMode) {
   return sortOptions.find((option) => option.value === sortMode)?.label ?? "Balanced";
+}
+
+function getScoringModeLabel(mode: ScoringMode) {
+  switch (mode) {
+    case "gig":
+      return "Gig Work";
+    case "quick":
+      return "Quick Work";
+    case "career":
+      return "Career Move";
+    default:
+      return "All Jobs";
+  }
 }
 
 function sortPlottedJobEntries(entries: PlottedJobEntry[], sortMode: JobSortMode) {

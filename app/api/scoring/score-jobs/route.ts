@@ -116,17 +116,11 @@ export async function POST(request: Request) {
       .eq("scoring_mode", scoringMode)
       .gt("expires_at", new Date().toISOString());
     const rows = existingScores ?? [];
-    // Detect corrupt scoring run: if every score is <= 3, delete and rescore fresh
-    if (rows.length > 0 && rows.every((r: { score: number }) => r.score <= 3)) {
-      console.log("[score-jobs] all", rows.length, "existing scores are <= 3 (corrupt) — deleting and rescoring");
-      await adminClient.from("match_scores").delete().eq("candidate_id", candidateId).eq("scoring_mode", scoringMode);
-    } else {
-      rows.forEach((r: { job_id: string; score: number }) => {
-        scoredJobIds.add(r.job_id);
-        cachedScoreMap[r.job_id] = r.score;
-      });
-      console.log("[score-jobs] cache: found", scoredJobIds.size, "existing scores, will skip");
-    }
+    rows.forEach((r: { job_id: string; score: number }) => {
+      scoredJobIds.add(r.job_id);
+      cachedScoreMap[r.job_id] = r.score;
+    });
+    console.log("[score-jobs] cache: found", scoredJobIds.size, "existing scores, will skip");
   }
 
   // Build the list of jobs that need scoring (skip already-scored)
