@@ -1839,7 +1839,9 @@ export function ApplicantJobsMap() {
                   matchPercent,
                   interestState,
                   getJobCommuteEstimate(job, applicantAreaPosition)?.timeLabel ?? null,
-                  isJobHighlighted
+                  isJobHighlighted,
+                  scoringMode,
+                  formatPayPill(job.payMin, job.payMax, job.payType !== "annual")
                 )}
                 zIndexOffset={isJobHighlighted ? 500 : 0}
                 eventHandlers={{
@@ -2010,7 +2012,9 @@ export function ApplicantJobsMap() {
                 icon={createExternalJobIcon(
                   listHighlightKey === `adzuna:${job.id}`,
                   extScore,
-                  scoringMode !== "all" && scoringInProgress
+                  scoringMode !== "all" && scoringInProgress,
+                  scoringMode,
+                  formatPayPill(job.salary_min, job.salary_max)
                 )}
                 eventHandlers={{
                   click: () => highlightFromPin(`adzuna:${job.id}`)
@@ -2280,10 +2284,10 @@ export function ApplicantJobsMap() {
               {scoringMode === "all"
                 ? "Shows every job in range — unfiltered, no scoring required."
                 : scoringMode === "gig"
-                ? "Delivery, rideshare, flex, and temp work scored by proximity."
+                ? "Delivery, rideshare, flex, and temp work, scored on how readily you can start."
                 : scoringMode === "career"
                 ? "Scores how well each job fits your career level and goals."
-                : "Scores whether you can do the job — seniority ignored."}
+                : "Walk-in jobs you can start within about a week — no resume or credentials needed."}
             </p>
           </div>
           <div className="mt-4 space-y-3 border-t border-gray-200 pt-3">
@@ -3757,8 +3761,11 @@ function createUnifiedJobMatchIcon(
   percentage: number,
   interestState: InterestState,
   distanceLabel: string | null,
-  isHighlighted = false
+  isHighlighted = false,
+  scoringMode: ScoringMode = "career",
+  payLabel = "—"
 ) {
+  const primaryLabel = scoringMode === "quick" ? payLabel : `${percentage}%`;
   const interestBadge =
     interestState === "candidate_interested"
       ? '<span style="position:absolute;top:-9px;right:-9px;display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:9999px;border:2px solid white;background:#991b1b;color:white;font-size:14px;font-weight:900;box-shadow:0 6px 14px rgba(0,0,0,0.2);">&hearts;</span>'
@@ -3777,9 +3784,9 @@ function createUnifiedJobMatchIcon(
 
   return L.divIcon({
     className: "",
-    html: `<div style="position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:60px;height:52px;padding:4px 12px;border-radius:9999px;border:3px solid white;background:#dc2626;color:white;box-shadow:${glow};transform:${scale};transition:transform 150ms ease, box-shadow 150ms ease;"><span style="font-size:14px;font-weight:900;line-height:16px;">${percentage}%</span><span style="margin-top:2px;font-size:10px;font-weight:800;line-height:12px;">${distanceLabel ?? ""}</span>${interestBadge}${matchBadge}</div>`,
-    iconSize: [78, 64],
-    iconAnchor: [39, 32],
+    html: `<div style="position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:92px;height:52px;padding:4px 14px;border-radius:9999px;border:3px solid white;background:#dc2626;color:white;box-shadow:${glow};transform:${scale};transition:transform 150ms ease, box-shadow 150ms ease;white-space:nowrap;"><span style="font-size:14px;font-weight:900;line-height:16px;">${primaryLabel}</span><span style="margin-top:2px;font-size:10px;font-weight:800;line-height:12px;">${distanceLabel ?? ""}</span>${interestBadge}${matchBadge}</div>`,
+    iconSize: [92, 64],
+    iconAnchor: [46, 32],
     popupAnchor: [0, -24]
   });
 }
@@ -3823,17 +3830,31 @@ function getJobSourceLabel(source: PlottedJobEntry["source"]): string {
   }
 }
 
-function createExternalJobIcon(isHighlighted = false, score?: number, scoringInProgress = false) {
+function createExternalJobIcon(
+  isHighlighted = false,
+  score?: number,
+  scoringInProgress = false,
+  scoringMode: ScoringMode = "career",
+  payLabel = "—"
+) {
   const bgColor = "#334155";
   const glow = isHighlighted ? SELECTED_PIN_GLOW : "0 4px 12px rgba(0,0,0,0.22)";
   const scale = isHighlighted ? SELECTED_PIN_SCALE : "scale(1)";
-  const label = score !== undefined ? `${score}%` : scoringInProgress ? "···" : "EXT";
-  const fontSize = score !== undefined ? "11px" : "10px";
+  const label =
+    scoringMode === "quick"
+      ? payLabel
+      : score !== undefined
+      ? `${score}%`
+      : scoringInProgress
+      ? "···"
+      : "EXT";
+  // A fixed 36px circle clips a label as long as "$35k/yr" — widened to a
+  // pill (matching the grouped-pin shape) so pay labels never clip.
   return L.divIcon({
     className: "",
-    html: `<div style="display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9999px;border:2.5px solid white;background:${bgColor};color:white;font-size:${fontSize};font-weight:800;letter-spacing:0.04em;box-shadow:${glow};transform:${scale};transition:transform 150ms ease,box-shadow 150ms ease;">${label}</div>`,
-    iconSize: [36, 36],
-    iconAnchor: [18, 18],
+    html: `<div style="display:inline-flex;align-items:center;justify-content:center;min-width:66px;height:36px;padding:0 10px;border-radius:9999px;border:2.5px solid white;background:${bgColor};color:white;font-size:11px;font-weight:800;letter-spacing:0.03em;white-space:nowrap;box-shadow:${glow};transform:${scale};transition:transform 150ms ease,box-shadow 150ms ease;">${label}</div>`,
+    iconSize: [72, 36],
+    iconAnchor: [36, 18],
     popupAnchor: [0, -18]
   });
 }
