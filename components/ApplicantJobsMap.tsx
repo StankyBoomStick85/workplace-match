@@ -1625,7 +1625,10 @@ export function ApplicantJobsMap() {
     const expandedWpmJob = isExpanded && entry.source === "wpm" ? jobs.find((job) => job.id === entry.id) ?? null : null;
 
     return (
-      <div key={entry.key} className="space-y-2">
+      <div
+        key={entry.key}
+        className={isExpanded ? "overflow-hidden rounded-md border border-red-300 bg-white shadow-md" : "space-y-2"}
+      >
         <button
           ref={(el) => {
             listRowRefs.current[entry.key] = el;
@@ -1643,9 +1646,13 @@ export function ApplicantJobsMap() {
             if (entry.source === "wpm") setHoveredResultJobId(entry.id);
           }}
           onBlur={() => setHoveredResultJobId("")}
-          className={`w-full rounded-md border bg-white p-3 text-left transition ${
-            isHighlighted ? "border-red-300 shadow-md" : "border-gray-200 hover:border-red-200 hover:bg-red-50"
-          }`}
+          className={
+            isExpanded
+              ? "w-full rounded-t-md bg-white p-3 text-left transition"
+              : `w-full rounded-md border bg-white p-3 text-left transition ${
+                  isHighlighted ? "border-red-300 shadow-md" : "border-gray-200 hover:border-red-200 hover:bg-red-50"
+                }`
+          }
         >
           <div className="flex items-start justify-between gap-3">
             <span className="min-w-0">
@@ -1706,7 +1713,7 @@ export function ApplicantJobsMap() {
           </div>
         </button>
         {isExpanded ? (
-          <div className="rounded-md border border-gray-200 bg-white p-3 shadow-soft">
+          <div className="border-t border-gray-200 p-3">
             <p className="mb-3 text-xs font-semibold text-zinc-500">
               This job is also highlighted on the map.
             </p>
