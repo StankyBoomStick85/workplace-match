@@ -175,22 +175,29 @@ export async function POST(request: Request) {
     return NextResponse.json({ scored: 0, skipped, scores: cachedScoreMap, remaining: 0 });
   }
 
-  // Career Move: pre-filter gig/delivery jobs — assign score 0 without calling Claude
-  if (scoringMode === "career") {
-    const gigJobIds: string[] = [];
-    const nonGigJobs: typeof jobsToScore = [];
+  // Career Move: pre-filter gig/delivery jobs — assign score 0 without calling Claude.
+  // Quick Work: same gig pre-filter, plus every USAJobs listing — federal hiring is
+  // structurally slow (multi-week pipelines) regardless of how the posting reads,
+  // so it can never qualify as "start within about a week" work.
+  if (scoringMode === "career" || scoringMode === "quick") {
+    const excludedJobIds: string[] = [];
+    const remainingJobs: typeof jobsToScore = [];
     for (const job of jobsToScore) {
-      if (isGigJob(job)) {
-        gigJobIds.push(job.job_id);
+      const isExcluded = isGigJob(job) || (scoringMode === "quick" && job.job_id.startsWith("usajobs-"));
+      if (isExcluded) {
+        excludedJobIds.push(job.job_id);
       } else {
-        nonGigJobs.push(job);
+        remainingJobs.push(job);
       }
     }
-    if (gigJobIds.length > 0) {
-      console.log("[score-jobs] career mode: pre-filtering", gigJobIds.length, "gig jobs → score 0");
+    if (excludedJobIds.length > 0) {
+      console.log(
+        "[score-jobs]", scoringMode, "mode: pre-filtering", excludedJobIds.length,
+        "jobs (gig keywords" + (scoringMode === "quick" ? " + usajobs-" : "") + ") → score 0"
+      );
       const wpmExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
       const adzunaExpiry = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString();
-      const gigRows = gigJobIds.map((id) => {
+      const excludedRows = excludedJobIds.map((id) => {
         const src = jobsToScore.find((j) => j.job_id === id)?.source ?? "adzuna";
         return {
           candidate_id: candidateId,
@@ -202,9 +209,9 @@ export async function POST(request: Request) {
           expires_at: src === "wpm" ? wpmExpiry : adzunaExpiry
         };
       });
-      await adminClient.from("match_scores").upsert(gigRows, { onConflict: "candidate_id,job_id,scoring_mode" });
-      gigJobIds.forEach((id) => { cachedScoreMap[id] = 0; });
-      jobsToScore.splice(0, jobsToScore.length, ...nonGigJobs);
+      await adminClient.from("match_scores").upsert(excludedRows, { onConflict: "candidate_id,job_id,scoring_mode" });
+      excludedJobIds.forEach((id) => { cachedScoreMap[id] = 0; });
+      jobsToScore.splice(0, jobsToScore.length, ...remainingJobs);
     }
   }
 
@@ -228,11 +235,15 @@ export async function POST(request: Request) {
   const capabilityTags = Array.isArray(profile.capability_tags) ? profile.capability_tags.join(", ") : "Not specified";
   const jobTypes = Array.isArray(profile.job_types) ? profile.job_types.join(", ") : "Not specified";
 
-  console.log("[score-jobs] profile fields sent to Claude:");
-  console.log("  capability_summary:", profile.capability_summary ?? "(null)");
-  console.log("  recommended_position:", profile.recommended_position ?? "(null)");
-  console.log("  experience_level:", profile.experience_level ?? "(null)");
-  console.log("  capabilityTags:", capabilityTags);
+  if (scoringMode === "quick") {
+    console.log("[score-jobs] quick mode: no candidate fields sent — binary job classifier, job data only");
+  } else {
+    console.log("[score-jobs] profile fields sent to Claude:");
+    console.log("  capability_summary:", profile.capability_summary ?? "(null)");
+    console.log("  recommended_position:", profile.recommended_position ?? "(null)");
+    console.log("  experience_level:", profile.experience_level ?? "(null)");
+    console.log("  capabilityTags:", capabilityTags);
+  }
 
   const jobListJson = JSON.stringify(
     batch.map((job) => ({
@@ -271,25 +282,22 @@ ${jobListJson}
 
 Return ONLY: [{"job_id": string, "score": number}]`
     : scoringMode === "quick"
-    ? `You are a job match scorer. Score each job 0-100 based on whether this candidate can physically perform this job today.
+    ? `You are classifying jobs for "Quick Work" — a list of jobs where literally anyone can walk in, fill out an application, talk to a manager, and start within about a week. No resume screening, no multi-round interview, no license or credential the applicant must already hold. The kind of job a high schooler with no work history gets.
 
-CANDIDATE:
-- Capability summary: ${profile.capability_summary ?? "Not provided"}
-- Capability tags: ${capabilityTags}
+This is a property of the job alone, not the candidate. Do not consider any candidate information — none has been provided, and none is relevant.
 
-SCORING:
-- 80-95: They can clearly do this job with their current skills
-- 60-79: They can do this job with minimal adjustment
-- 40-59: Possible but requires some skill gap bridging
-- 20-39: Significant gaps but not impossible
-- 5-19: Missing required credentials or physical requirements
-- Overqualification is NOT a penalty - a senior leader who can work a warehouse shift scores 80+
-- Military experience = physical capability, discipline, reliability, teamwork, following/giving instructions
+QUESTION: Can a person with no relevant experience realistically be hired and start work within about a week?
 
-Jobs to score:
+Answer YES for: retail associate, cashier, fast food, grocery stocker, warehouse associate, gas station attendant, host, busser, dishwasher, janitorial, entry-level customer service, general labor. Training is provided on the job.
+
+Answer NO for: anything requiring a license or certification the applicant must already hold (CDL, RN, LPN, professional engineer, etc.), anything requiring prior experience or a resume, managerial or supervisory roles even in retail, professional or technical roles, and anything with a multi-week hiring pipeline.
+
+If a job is genuinely ambiguous, answer NO. This should be a short, trustworthy list, not a broad one.
+
+Jobs to classify:
 ${jobListJson}
 
-Return ONLY: [{"job_id": string, "score": number}]`
+Return ONLY: [{"job_id": string, "score": number}] where score is 100 if the answer is YES and 0 if the answer is NO.`
     : `You are a job match scorer. Score each job 0-100 based on how well it represents genuine career advancement or growth for this candidate.
 
 CANDIDATE:

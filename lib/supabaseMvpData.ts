@@ -40,6 +40,9 @@ export type MvpJobListing = {
   locationState: string;
   locationZip?: string;
   payRange: string;
+  payMin: number | null;
+  payMax: number | null;
+  payType: string | null;
   jobType: string;
   schedule: string;
   requiredSkills: string[];
@@ -360,6 +363,9 @@ function mapJob(data: any): MvpJobListing {
     locationState: "",
     locationZip: zip,
     payRange: formatPay(data.pay_min, data.pay_max, data.pay_type),
+    payMin: data.pay_min ?? null,
+    payMax: data.pay_max ?? null,
+    payType: data.pay_type ?? null,
     jobType: data.job_type ?? "",
     schedule: data.shift ?? "",
     requiredSkills: data.required_capabilities ?? [],

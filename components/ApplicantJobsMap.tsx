@@ -76,6 +76,9 @@ type JobListing = {
   locationState: string;
   locationZip?: string;
   payRange: string;
+  payMin?: number | null;
+  payMax?: number | null;
+  payType?: string | null;
   jobType: string;
   schedule: string;
   requiredSkills: string[];
@@ -127,7 +130,7 @@ type MutualMatch = {
 type InterestState = "none" | "candidate_interested" | "mutual_match";
 type SelectedJobSource = "cluster" | "single" | "results" | null;
 type InterestStatusFilter = "all" | "not_marked" | "interested" | "matched";
-type JobSortMode = "balanced" | "best_match" | "closest";
+type JobSortMode = "balanced" | "best_match" | "closest" | "pay";
 type ScoringMode = "career" | "quick" | "all" | "gig";
 type JobFilters = {
   minimumMatchPercent: number;
@@ -172,6 +175,8 @@ type PlottedJobEntry = {
   location?: string;
   salaryMin?: number | null;
   salaryMax?: number | null;
+  payIsHourly?: boolean;
+  payPillLabel: string;
   jobType?: string | null;
   description?: string;
   url?: string;
@@ -256,7 +261,8 @@ const interestStatusOptions: Array<{ label: string; value: InterestStatusFilter 
 const sortOptions: Array<{ label: string; value: JobSortMode }> = [
   { label: "Balanced", value: "balanced" },
   { label: "Best match", value: "best_match" },
-  { label: "Closest", value: "closest" }
+  { label: "Closest", value: "closest" },
+  { label: "Pay", value: "pay" }
 ];
 
 // A high-contrast ring shared by every pin's "selected" state — a solid white
@@ -628,6 +634,7 @@ export function ApplicantJobsMap() {
         const distanceMiles = applicantAreaPosition
           ? getDistanceMiles(applicantAreaPosition, getJobMapPosition(job))
           : null;
+        const wpmIsHourly = job.payType !== "annual";
         return {
           key: `wpm:${job.id}`,
           source: "wpm",
@@ -639,7 +646,11 @@ export function ApplicantJobsMap() {
           distanceMiles,
           position: getJobMapPosition(job),
           interestState,
-          hasMapPin: true
+          hasMapPin: true,
+          salaryMin: job.payMin,
+          salaryMax: job.payMax,
+          payIsHourly: wpmIsHourly,
+          payPillLabel: formatPayPill(job.payMin, job.payMax, wpmIsHourly)
         };
       })
     );
@@ -663,6 +674,7 @@ export function ApplicantJobsMap() {
         location: job.location,
         salaryMin: job.salary_min,
         salaryMax: job.salary_max,
+        payPillLabel: formatPayPill(job.salary_min, job.salary_max),
         jobType: job.job_type,
         description: job.description,
         url: job.url,
@@ -711,6 +723,7 @@ export function ApplicantJobsMap() {
         const distanceMiles = applicantAreaPosition
           ? getDistanceMiles(applicantAreaPosition, getJobMapPosition(job))
           : null;
+        const wpmIsHourly = job.payType !== "annual";
         return {
           key: `wpm:${job.id}`,
           source: "wpm",
@@ -722,7 +735,11 @@ export function ApplicantJobsMap() {
           distanceMiles,
           position: getJobMapPosition(job),
           interestState,
-          hasMapPin: true
+          hasMapPin: true,
+          salaryMin: job.payMin,
+          salaryMax: job.payMax,
+          payIsHourly: wpmIsHourly,
+          payPillLabel: formatPayPill(job.payMin, job.payMax, wpmIsHourly)
         };
       });
 
@@ -748,6 +765,7 @@ export function ApplicantJobsMap() {
           location: job.location,
           salaryMin: job.salary_min,
           salaryMax: job.salary_max,
+          payPillLabel: formatPayPill(job.salary_min, job.salary_max),
           jobType: job.job_type,
           description: job.description,
           url: job.url,
@@ -1282,7 +1300,7 @@ export function ApplicantJobsMap() {
           <PopupDetail label="Pay" value={job.payRange} />
           <PopupDetail label="Type" value={job.jobType} />
           <PopupDetail label="Schedule" value={job.schedule} />
-          <PopupDetail label="Match" value={`${matchPercent}%`} />
+          {scoringMode !== "quick" ? <PopupDetail label="Match" value={`${matchPercent}%`} /> : null}
         </div>
 
         {requiredSkills.length > 0 ? (
@@ -1416,7 +1434,11 @@ export function ApplicantJobsMap() {
             <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{job.company}</p>
             <h2 className="text-base font-bold text-zinc-950">{job.title}</h2>
           </div>
-          {extScore !== undefined ? (
+          {scoringMode === "quick" ? (
+            <span className="shrink-0 rounded-full bg-slate-700 px-2.5 py-1 text-xs font-bold text-white">
+              {formatPayPill(job.salary_min, job.salary_max)}
+            </span>
+          ) : extScore !== undefined ? (
             <span className="shrink-0 rounded-full bg-slate-700 px-2.5 py-1 text-xs font-bold text-white">
               {extScore}%
             </span>
@@ -1625,7 +1647,9 @@ export function ApplicantJobsMap() {
       listHighlightKey === entry.key ||
       (entry.source === "wpm" && (hoveredResultJobId === entry.id || selectedResultJobId === entry.id));
     const scorePillLabel =
-      entry.matchPercent !== null
+      scoringMode === "quick"
+        ? entry.payPillLabel
+        : entry.matchPercent !== null
         ? `${entry.matchPercent}%`
         : scoringInProgress && scoringMode !== "all"
         ? "Scoring..."
@@ -1956,7 +1980,9 @@ export function ApplicantJobsMap() {
                                 </span>
                               ) : null}
                               <span className="inline-flex min-w-12 items-center justify-center px-2 text-base font-extrabold text-red-800">
-                                {matchPercent}%
+                                {scoringMode === "quick"
+                                  ? formatPayPill(job.payMin, job.payMax, job.payType !== "annual")
+                                  : `${matchPercent}%`}
                               </span>
                             </span>
                           </button>
@@ -3187,6 +3213,10 @@ function sortJobs(
       return firstMetrics.commuteMinutes - secondMetrics.commuteMinutes;
     }
 
+    if (sortMode === "pay") {
+      return comparePayDescending(firstMetrics.annualizedPay, secondMetrics.annualizedPay);
+    }
+
     return secondMetrics.balancedScore - firstMetrics.balancedScore;
   });
 }
@@ -3195,12 +3225,22 @@ function getJobSortMetrics(job: JobListing, profile: ApplicantProfile | null, ap
   const matchPercent = calculateSkillMatch(job.requiredSkills, getApplicantMatchSignals(profile), job.title).percentage;
   const commuteMinutes = getJobCommuteEstimate(job, applicantPosition)?.minutes ?? Number.POSITIVE_INFINITY;
   const commuteScore = Number.isFinite(commuteMinutes) ? Math.max(0, 100 - Math.min(commuteMinutes, 100)) : 0;
+  const annualizedPay = getAnnualizedPay(job.payMin, job.payMax, job.payType !== "annual");
 
   return {
     matchPercent,
     commuteMinutes,
-    balancedScore: matchPercent * 0.7 + commuteScore * 0.3
+    balancedScore: matchPercent * 0.7 + commuteScore * 0.3,
+    annualizedPay
   };
+}
+
+// Descending by pay, with unlisted pay always sorting last regardless of direction.
+function comparePayDescending(first: number | null, second: number | null): number {
+  if (first === null && second === null) return 0;
+  if (first === null) return 1;
+  if (second === null) return -1;
+  return second - first;
 }
 
 function getSortLabel(sortMode: JobSortMode) {
@@ -3233,6 +3273,10 @@ function sortPlottedJobEntries(entries: PlottedJobEntry[], sortMode: JobSortMode
       return firstMetrics.commuteMinutes - secondMetrics.commuteMinutes;
     }
 
+    if (sortMode === "pay") {
+      return comparePayDescending(firstMetrics.annualizedPay, secondMetrics.annualizedPay);
+    }
+
     return secondMetrics.balancedScore - firstMetrics.balancedScore;
   });
 }
@@ -3242,11 +3286,13 @@ function getPlottedEntrySortMetrics(entry: PlottedJobEntry) {
   const commuteMinutes =
     entry.distanceMiles !== null ? getEstimatedCommuteMinutes(entry.distanceMiles) : Number.POSITIVE_INFINITY;
   const commuteScore = Number.isFinite(commuteMinutes) ? Math.max(0, 100 - Math.min(commuteMinutes, 100)) : 0;
+  const annualizedPay = getAnnualizedPay(entry.salaryMin, entry.salaryMax, entry.payIsHourly);
 
   return {
     matchPercent,
     commuteMinutes,
-    balancedScore: matchPercent * 0.7 + commuteScore * 0.3
+    balancedScore: matchPercent * 0.7 + commuteScore * 0.3,
+    annualizedPay
   };
 }
 
@@ -3813,6 +3859,31 @@ function formatExternalSalary(min: number | null, max: number | null): string {
   if (min) return `${fmt(min)}+/yr`;
   if (max) return `Up to ${fmt(max)}/yr`;
   return "";
+}
+
+// Normalized pay pill: uses the minimum of the range (keeps pill width
+// consistent instead of a "$X - $Y" range), hourly as $15/hr or annual as
+// $85k/yr. External jobs carry no explicit pay-frequency field, so a value
+// under $1000 is treated as hourly — hourly wages and annual salaries never
+// overlap in that range in practice (see report for what was checked).
+function formatPayPill(payMin: number | null | undefined, payMax: number | null | undefined, isHourly?: boolean): string {
+  const amount = payMin ?? payMax;
+  if (amount === null || amount === undefined || !Number.isFinite(amount) || amount <= 0) {
+    return "—";
+  }
+  const hourly = isHourly ?? amount < 1000;
+  return hourly ? `$${Math.round(amount)}/hr` : `$${Math.round(amount / 1000)}k/yr`;
+}
+
+// Annualizes an hourly rate (standard 2080 full-time hours/year) so Pay sort
+// can compare hourly and salaried jobs on one scale. Missing pay sorts last.
+function getAnnualizedPay(payMin: number | null | undefined, payMax: number | null | undefined, isHourly?: boolean): number | null {
+  const amount = payMin ?? payMax;
+  if (amount === null || amount === undefined || !Number.isFinite(amount) || amount <= 0) {
+    return null;
+  }
+  const hourly = isHourly ?? amount < 1000;
+  return hourly ? amount * 2080 : amount;
 }
 
 function calculateSkillMatch(requiredSkillsValue: string[], candidateSkillsValue: string[], jobTitle = "") {
