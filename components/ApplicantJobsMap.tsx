@@ -259,6 +259,12 @@ const sortOptions: Array<{ label: string; value: JobSortMode }> = [
   { label: "Closest", value: "closest" }
 ];
 
+// A high-contrast ring shared by every pin's "selected" state — a solid white
+// separator ring plus a bold gold ring reads clearly against both the red WPM
+// pins and the dark-blue external pins, unlike a same-hue low-opacity glow.
+const SELECTED_PIN_GLOW = "0 0 0 4px #ffffff, 0 0 0 9px #facc15, 0 16px 32px rgba(0,0,0,0.4)";
+const SELECTED_PIN_SCALE = "scale(1.2)";
+
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
   iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
@@ -315,6 +321,8 @@ export function ApplicantJobsMap() {
   const mapInstanceRef = useRef<L.Map | null>(null);
   const clusterMarkerRefs = useRef<Record<string, L.Marker | null>>({});
   const singleJobMarkerRefs = useRef<Record<string, L.Marker | null>>({});
+  const externalJobMarkerRefs = useRef<Record<string, L.Marker | null>>({});
+  const externalGroupMarkerRefs = useRef<Record<string, L.Marker | null>>({});
   const listRowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const suppressClusterReopenRef = useRef(false);
   const wasDrawingRef = useRef(false);
@@ -1335,13 +1343,17 @@ export function ApplicantJobsMap() {
           </p>
           <h2 className="mt-1 text-base font-bold text-zinc-950">{entry.title}</h2>
           <p className="mt-1 text-sm text-zinc-600">{entry.employer}</p>
-          {entry.hasMapPin ? (
-            entry.location ? <p className="mt-1 text-sm text-zinc-600">{entry.location}</p> : null
-          ) : (
+          {!entry.hasMapPin ? (
             <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-900">
               No map location available — see the job listing for location details.
             </p>
-          )}
+          ) : entry.sharesLocationCount ? (
+            <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-900">
+              Approximate area location, not the employer's exact address — see the original listing for specifics.
+            </p>
+          ) : entry.location ? (
+            <p className="mt-1 text-sm text-zinc-600">{entry.location}</p>
+          ) : null}
         </div>
 
         <div className="grid gap-2 text-sm">
@@ -1386,6 +1398,71 @@ export function ApplicantJobsMap() {
         {detailContent}
         <div className="sticky bottom-0 bg-white/95 pt-2">
           {actionBlock}
+        </div>
+      </div>
+    );
+  }
+
+  // Shared by the single-external-pin popup and the grouped-pin popup, so the
+  // two surfaces never drift apart on what an external job's popup shows.
+  function renderExternalJobPopupContent(job: ExternalJob, options?: { showApproximateNotice?: boolean }) {
+    const extScore = matchScores[job.id];
+    const isSaved = savedExternalJobIds.has(job.id);
+
+    return (
+      <div className="box-border w-[min(20rem,calc(100vw-6rem))] max-w-full space-y-2 px-1 py-1">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{job.company}</p>
+            <h2 className="text-base font-bold text-zinc-950">{job.title}</h2>
+          </div>
+          {extScore !== undefined ? (
+            <span className="shrink-0 rounded-full bg-slate-700 px-2.5 py-1 text-xs font-bold text-white">
+              {extScore}%
+            </span>
+          ) : scoringInProgress ? (
+            <span className="shrink-0 rounded-full bg-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-500">
+              Scoring...
+            </span>
+          ) : null}
+        </div>
+        {options?.showApproximateNotice ? (
+          <p className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-900">
+            Approximate area location, not the employer's exact address — see the original listing for specifics.
+          </p>
+        ) : job.location ? (
+          <p className="text-xs text-zinc-500">{job.location}</p>
+        ) : null}
+        {job.salary_min || job.salary_max ? (
+          <p className="text-xs font-semibold text-zinc-700">{formatExternalSalary(job.salary_min, job.salary_max)}</p>
+        ) : null}
+        {job.job_type ? <p className="text-xs text-zinc-500">{job.job_type}</p> : null}
+        {job.description ? (
+          <p className="max-h-20 overflow-y-auto rounded border border-gray-200 bg-gray-50 px-2 py-1.5 text-xs leading-5 text-zinc-600">
+            {job.description}
+          </p>
+        ) : null}
+        <div className="flex items-center gap-2 pt-1">
+          <a
+            href={job.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex flex-1 items-center justify-center rounded-md bg-slate-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
+          >
+            View Job ↗
+          </a>
+          <button
+            type="button"
+            onClick={() => handleSaveExternalJob(job)}
+            className={`inline-flex items-center justify-center rounded-md border px-3 py-2 text-xs font-semibold transition ${
+              isSaved
+                ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200"
+                : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+            }`}
+            aria-label={isSaved ? "Unsave job" : "Save job"}
+          >
+            {isSaved ? "♥ Saved" : "♡ Save"}
+          </button>
         </div>
       </div>
     );
@@ -1464,8 +1541,14 @@ export function ApplicantJobsMap() {
   }
 
   function highlightFromPin(key: string) {
+    // Deliberately does NOT touch selectedGroupedJobId/selectedJobSource here —
+    // the "pick a job" list inside a cluster popup sets those itself right
+    // before calling this, and the existing popupclose handlers already reset
+    // them when a cluster's own popup closes (e.g. because a different pin's
+    // popup just opened). Resetting them here too would stomp that flow.
     setLocationFilterKey("");
     setListHighlightKey(key);
+    setExpandedEntryKey(key);
     setIsJobsPanelOpen(true);
     setIsAllJobsSectionOpen(true);
     scrollListRowIntoView(key);
@@ -1474,14 +1557,54 @@ export function ApplicantJobsMap() {
   function openPlottedEntry(entry: PlottedJobEntry) {
     mapInstanceRef.current?.closePopup();
     setListHighlightKey(entry.key);
-    setExpandedEntryKey((current) => (current === entry.key ? "" : entry.key));
+    setSelectedGroupedJobId("");
+    setSelectedJobSource(null);
+
+    const nextExpandedKey = expandedEntryKey === entry.key ? "" : entry.key;
+    setExpandedEntryKey(nextExpandedKey);
+
+    if (nextExpandedKey === "") {
+      return;
+    }
+
+    if (entry.source === "wpm") {
+      const group = visibleJobGroups.find((candidateGroup) =>
+        candidateGroup.jobs.some((job) => job.id === entry.id)
+      );
+
+      if (group && group.jobs.length > 1) {
+        setSelectedGroupedJobId(entry.id);
+        setSelectedJobSource("cluster");
+        // Deferred: the cluster marker's popupopen handler reads selectedGroupedJobId
+        // from its own render's closure, so it must fire after the state above commits.
+        window.setTimeout(() => clusterMarkerRefs.current[group.key]?.openPopup(), 0);
+      } else {
+        window.setTimeout(() => singleJobMarkerRefs.current[entry.id]?.openPopup(), 0);
+      }
+      return;
+    }
+
+    const externalGroup = externalJobGroups.find((candidateGroup) =>
+      candidateGroup.jobs.some((job) => job.id === entry.id)
+    );
+
+    if (externalGroup && externalGroup.jobs.length > 1) {
+      window.setTimeout(() => externalGroupMarkerRefs.current[externalGroup.key]?.openPopup(), 0);
+    } else {
+      window.setTimeout(() => externalJobMarkerRefs.current[entry.id]?.openPopup(), 0);
+    }
   }
 
   function openExternalLocationGroup(group: ExternalJobGroup) {
     mapInstanceRef.current?.closePopup();
+    setSelectedGroupedJobId("");
+    setSelectedJobSource(null);
     setIsJobsPanelOpen(true);
     setIsAllJobsSectionOpen(true);
     setLocationFilterKey(group.key);
+    const firstJobKey = `adzuna:${group.jobs[0].id}`;
+    setListHighlightKey(firstJobKey);
+    setExpandedEntryKey(firstJobKey);
   }
 
   function renderPlottedEntryRow(
@@ -1727,10 +1850,17 @@ export function ApplicantJobsMap() {
               zIndexOffset={isGroupHighlighted ? 500 : 0}
               eventHandlers={{
                 popupopen: () => {
+                  // A panel-row click may have already picked a specific job in this
+                  // cluster (via selectedGroupedJobId) before programmatically opening
+                  // this popup — respect that instead of always defaulting to jobs[0].
+                  const targetJob =
+                    selectedGroupedJobId && group.jobs.some((job) => job.id === selectedGroupedJobId)
+                      ? selectedGroupedJobId
+                      : group.jobs[0].id;
                   if (!selectedGroupedJobId) {
                     setSelectedJobSource(null);
                   }
-                  highlightFromPin(`wpm:${group.jobs[0].id}`);
+                  highlightFromPin(`wpm:${targetJob}`);
                 },
                 popupclose: () => {
                   if (suppressClusterReopenRef.current) {
@@ -1829,10 +1959,12 @@ export function ApplicantJobsMap() {
           if (group.jobs.length === 1) {
             const job = group.jobs[0];
             const extScore = matchScores[job.id];
-            const isSaved = savedExternalJobIds.has(job.id);
             return (
               <Marker
                 key={job.id}
+                ref={(marker) => {
+                  externalJobMarkerRefs.current[job.id] = marker;
+                }}
                 position={[job.lat, job.lng]}
                 icon={createExternalJobIcon(
                   listHighlightKey === `adzuna:${job.id}`,
@@ -1843,70 +1975,29 @@ export function ApplicantJobsMap() {
                   click: () => highlightFromPin(`adzuna:${job.id}`)
                 }}
               >
-                <Popup maxWidth={340}>
-                  <div className="box-border w-[min(20rem,calc(100vw-6rem))] max-w-full space-y-2 px-1 py-1">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{job.company}</p>
-                        <h2 className="text-base font-bold text-zinc-950">{job.title}</h2>
-                      </div>
-                      {extScore !== undefined ? (
-                        <span className="shrink-0 rounded-full bg-slate-700 px-2.5 py-1 text-xs font-bold text-white">
-                          {extScore}%
-                        </span>
-                      ) : scoringInProgress ? (
-                        <span className="shrink-0 rounded-full bg-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-500">
-                          Scoring...
-                        </span>
-                      ) : null}
-                    </div>
-                    {job.location ? <p className="text-xs text-zinc-500">{job.location}</p> : null}
-                    {job.salary_min || job.salary_max ? (
-                      <p className="text-xs font-semibold text-zinc-700">{formatExternalSalary(job.salary_min, job.salary_max)}</p>
-                    ) : null}
-                    {job.job_type ? <p className="text-xs text-zinc-500">{job.job_type}</p> : null}
-                    {job.description ? (
-                      <p className="max-h-20 overflow-y-auto rounded border border-gray-200 bg-gray-50 px-2 py-1.5 text-xs leading-5 text-zinc-600">
-                        {job.description}
-                      </p>
-                    ) : null}
-                    <div className="flex items-center gap-2 pt-1">
-                      <a
-                        href={job.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex flex-1 items-center justify-center rounded-md bg-slate-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
-                      >
-                        View Job ↗
-                      </a>
-                      <button
-                        type="button"
-                        onClick={() => handleSaveExternalJob(job)}
-                        className={`inline-flex items-center justify-center rounded-md border px-3 py-2 text-xs font-semibold transition ${
-                          isSaved
-                            ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200"
-                            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                        }`}
-                        aria-label={isSaved ? "Unsave job" : "Save job"}
-                      >
-                        {isSaved ? "♥ Saved" : "♡ Save"}
-                      </button>
-                    </div>
-                  </div>
-                </Popup>
+                <Popup maxWidth={340}>{renderExternalJobPopupContent(job)}</Popup>
               </Marker>
             );
           }
 
+          const focusedJob = group.jobs.find((job) => `adzuna:${job.id}` === expandedEntryKey) ?? group.jobs[0];
+
           return (
             <Marker
               key={group.key}
+              ref={(marker) => {
+                externalGroupMarkerRefs.current[group.key] = marker;
+              }}
               position={group.position}
               icon={createExternalGroupIcon(group.jobs.length, locationFilterKey === group.key)}
               eventHandlers={{
                 click: () => openExternalLocationGroup(group)
               }}
-            />
+            >
+              <Popup maxWidth={340}>
+                {renderExternalJobPopupContent(focusedJob, { showApproximateNotice: true })}
+              </Popup>
+            </Marker>
           );
         })}
       </MapContainer>
@@ -3617,11 +3708,11 @@ function createUnifiedJobMatchIcon(
       : "";
   const glow =
     isHighlighted
-      ? "0 0 0 6px rgba(220,38,38,0.22), 0 14px 30px rgba(0,0,0,0.32)"
+      ? SELECTED_PIN_GLOW
       : interestState === "mutual_match"
       ? "0 0 0 4px rgba(220,38,38,0.18), 0 10px 24px rgba(0,0,0,0.25)"
       : "0 10px 24px rgba(0,0,0,0.25)";
-  const scale = isHighlighted ? "scale(1.08)" : "scale(1)";
+  const scale = isHighlighted ? SELECTED_PIN_SCALE : "scale(1)";
 
   return L.divIcon({
     className: "",
@@ -3643,11 +3734,11 @@ function createGroupedJobIcon(count: number, interestState: InterestState, isHig
       : "";
   const glow =
     isHighlighted
-      ? "0 0 0 6px rgba(220,38,38,0.22), 0 14px 30px rgba(0,0,0,0.32)"
+      ? SELECTED_PIN_GLOW
       : interestState === "mutual_match"
       ? "0 0 0 4px rgba(220,38,38,0.18), 0 10px 24px rgba(0,0,0,0.25)"
       : "0 10px 24px rgba(0,0,0,0.25)";
-  const scale = isHighlighted ? "scale(1.08)" : "scale(1)";
+  const scale = isHighlighted ? SELECTED_PIN_SCALE : "scale(1)";
 
   return L.divIcon({
     className: "",
@@ -3673,11 +3764,8 @@ function getJobSourceLabel(source: PlottedJobEntry["source"]): string {
 
 function createExternalJobIcon(isHighlighted = false, score?: number, scoringInProgress = false) {
   const bgColor = "#334155";
-  const glowRgb = "51,65,85";
-  const glow = isHighlighted
-    ? `0 0 0 4px rgba(${glowRgb},0.28), 0 8px 20px rgba(0,0,0,0.25)`
-    : "0 4px 12px rgba(0,0,0,0.22)";
-  const scale = isHighlighted ? "scale(1.12)" : "scale(1)";
+  const glow = isHighlighted ? SELECTED_PIN_GLOW : "0 4px 12px rgba(0,0,0,0.22)";
+  const scale = isHighlighted ? SELECTED_PIN_SCALE : "scale(1)";
   const label = score !== undefined ? `${score}%` : scoringInProgress ? "···" : "EXT";
   const fontSize = score !== undefined ? "11px" : "10px";
   return L.divIcon({
@@ -3692,10 +3780,8 @@ function createExternalJobIcon(isHighlighted = false, score?: number, scoringInP
 // Mirrors createGroupedJobIcon's count-pill shape for WPM clusters, but
 // stays dark blue — external pins encode source, not scoring mode or count.
 function createExternalGroupIcon(count: number, isHighlighted = false) {
-  const glow = isHighlighted
-    ? "0 0 0 6px rgba(51,65,85,0.22), 0 14px 30px rgba(0,0,0,0.32)"
-    : "0 10px 24px rgba(0,0,0,0.25)";
-  const scale = isHighlighted ? "scale(1.08)" : "scale(1)";
+  const glow = isHighlighted ? SELECTED_PIN_GLOW : "0 10px 24px rgba(0,0,0,0.25)";
+  const scale = isHighlighted ? SELECTED_PIN_SCALE : "scale(1)";
 
   return L.divIcon({
     className: "",
