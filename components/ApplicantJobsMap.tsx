@@ -1535,9 +1535,17 @@ export function ApplicantJobsMap() {
   }
 
   function scrollListRowIntoView(key: string) {
-    window.setTimeout(() => {
-      listRowRefs.current[key]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }, 0);
+    // Double rAF: the row expands in the same state update that triggers this
+    // scroll, so we need to wait until the browser has actually painted the
+    // expanded (taller) layout before measuring where to scroll — a single
+    // setTimeout(0) can still land before that paint. block: "start" pins the
+    // row to the top of the panel's scroll container instead of doing the
+    // minimum scroll "nearest" would, which used to leave it near the bottom.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        listRowRefs.current[key]?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
   }
 
   function highlightFromPin(key: string) {
