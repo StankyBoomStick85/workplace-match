@@ -300,7 +300,7 @@ export function ApplicantJobsMap() {
   const [scoringInProgress, setScoringInProgress] = useState(false);
   const [savedExternalJobIds, setSavedExternalJobIds] = useState<Set<string>>(new Set());
   const [listHighlightKey, setListHighlightKey] = useState("");
-  const [selectedExternalEntryKey, setSelectedExternalEntryKey] = useState("");
+  const [expandedEntryKey, setExpandedEntryKey] = useState("");
   const pollAttemptsRef = useRef(0);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const visibleExternalJobsRef = useRef<ExternalJob[]>([]);
@@ -308,7 +308,6 @@ export function ApplicantJobsMap() {
   const clusterMarkerRefs = useRef<Record<string, L.Marker | null>>({});
   const singleJobMarkerRefs = useRef<Record<string, L.Marker | null>>({});
   const listRowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const detailPanelRef = useRef<HTMLDivElement | null>(null);
   const suppressClusterReopenRef = useRef(false);
   const wasDrawingRef = useRef(false);
 
@@ -737,21 +736,6 @@ export function ApplicantJobsMap() {
     () => (selectedResultJob ? getJobMapPosition(selectedResultJob) : null),
     [selectedResultJob]
   );
-  const selectedExternalEntry = useMemo(() => {
-    if (!selectedExternalEntryKey) {
-      return null;
-    }
-
-    return (
-      plottedJobEntries.find((item) => item.key === selectedExternalEntryKey) ??
-      interestedAndSavedEntries.find((item) => item.key === selectedExternalEntryKey) ??
-      null
-    );
-  }, [plottedJobEntries, interestedAndSavedEntries, selectedExternalEntryKey]);
-
-  useEffect(() => {
-    detailPanelRef.current?.scrollTo({ top: 0, behavior: "auto" });
-  }, [selectedResultJob?.id, selectedExternalEntry?.key]);
 
   useEffect(() => {
     focusMatchFromLocation();
@@ -782,6 +766,10 @@ export function ApplicantJobsMap() {
       setSelectedGroupedJobId("");
       setClusterToReopenKey("");
       openJobFromResults(matchedJob);
+      setIsJobsPanelOpen(true);
+      setIsAllJobsSectionOpen(true);
+      setListHighlightKey(`wpm:${matchedJob.id}`);
+      setExpandedEntryKey(`wpm:${matchedJob.id}`);
     }
   }, [jobs]);
 
@@ -1443,23 +1431,13 @@ export function ApplicantJobsMap() {
   function openPlottedEntry(entry: PlottedJobEntry) {
     mapInstanceRef.current?.closePopup();
     setListHighlightKey(entry.key);
-
-    if (entry.source !== "wpm") {
-      setSelectedResultJobId("");
-      setSelectedJobSource(null);
-      setSelectedExternalEntryKey(entry.key);
-      return;
-    }
-
-    setSelectedExternalEntryKey("");
-    const job = jobs.find((candidateJob) => candidateJob.id === entry.id);
-    if (job) {
-      openJobFromResults(job);
-    }
+    setExpandedEntryKey((current) => (current === entry.key ? "" : entry.key));
   }
 
   function renderPlottedEntryRow(entry: PlottedJobEntry, options?: { showEmployerVisibilityLabel?: boolean }) {
+    const isExpanded = expandedEntryKey === entry.key;
     const isHighlighted =
+      isExpanded ||
       listHighlightKey === entry.key ||
       (entry.source === "wpm" && (hoveredResultJobId === entry.id || selectedResultJobId === entry.id));
     const scorePillLabel =
@@ -1468,80 +1446,96 @@ export function ApplicantJobsMap() {
         : scoringInProgress && scoringMode !== "all"
         ? "Scoring..."
         : "—";
+    const expandedWpmJob = isExpanded && entry.source === "wpm" ? jobs.find((job) => job.id === entry.id) ?? null : null;
 
     return (
-      <button
-        key={entry.key}
-        ref={(el) => {
-          listRowRefs.current[entry.key] = el;
-        }}
-        type="button"
-        onClick={() => openPlottedEntry(entry)}
-        onMouseEnter={() => {
-          if (entry.source === "wpm") setHoveredResultJobId(entry.id);
-        }}
-        onMouseLeave={() => setHoveredResultJobId("")}
-        onFocus={() => {
-          if (entry.source === "wpm") setHoveredResultJobId(entry.id);
-        }}
-        onBlur={() => setHoveredResultJobId("")}
-        className={`w-full rounded-md border bg-white p-3 text-left transition ${
-          isHighlighted ? "border-red-300 shadow-md" : "border-gray-200 hover:border-red-200 hover:bg-red-50"
-        }`}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <span className="min-w-0">
-            <span className="block truncate text-sm font-bold text-zinc-950">{entry.title}</span>
-            <span className="mt-1 block truncate text-xs font-semibold text-zinc-500">{entry.employer}</span>
-          </span>
-          <span
-            className={`shrink-0 rounded-full px-3 py-1.5 text-sm font-extrabold text-white ${
-              entry.source === "wpm" ? "bg-red-900" : "bg-slate-700"
-            }`}
-          >
-            {scorePillLabel}
-          </span>
-        </div>
-        <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-zinc-700">
-            {entry.distanceLabel}
-          </span>
-          <span className="flex items-center gap-1.5 rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-zinc-700">
-            <span
-              style={{
-                display: "inline-block",
-                width: 8,
-                height: 8,
-                borderRadius: "9999px",
-                background: entry.source === "wpm" ? "#dc2626" : "#334155"
-              }}
-            />
-            {getJobSourceLabel(entry.source)}
-          </span>
-          {entry.source !== "wpm" && !entry.hasMapPin ? (
-            <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">
-              No map pin
+      <div key={entry.key} className="space-y-2">
+        <button
+          ref={(el) => {
+            listRowRefs.current[entry.key] = el;
+          }}
+          type="button"
+          onClick={() => openPlottedEntry(entry)}
+          onMouseEnter={() => {
+            if (entry.source === "wpm") setHoveredResultJobId(entry.id);
+          }}
+          onMouseLeave={() => setHoveredResultJobId("")}
+          onFocus={() => {
+            if (entry.source === "wpm") setHoveredResultJobId(entry.id);
+          }}
+          onBlur={() => setHoveredResultJobId("")}
+          className={`w-full rounded-md border bg-white p-3 text-left transition ${
+            isHighlighted ? "border-red-300 shadow-md" : "border-gray-200 hover:border-red-200 hover:bg-red-50"
+          }`}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-bold text-zinc-950">{entry.title}</span>
+              <span className="mt-1 block truncate text-xs font-semibold text-zinc-500">{entry.employer}</span>
             </span>
-          ) : null}
-          {entry.interestState === "candidate_interested" || entry.interestState === "mutual_match" ? (
-            <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-bold text-red-800">&hearts;</span>
-          ) : null}
-          {entry.interestState === "mutual_match" ? (
-            <span className="rounded-full bg-red-800 px-2.5 py-1 text-xs font-bold text-white">MATCH</span>
-          ) : null}
-          {options?.showEmployerVisibilityLabel ? (
-            entry.source === "wpm" ? (
-              <span className="rounded-full bg-gray-200 px-2 py-1 text-xs font-semibold text-zinc-700">
-                Employer notified
+            <span
+              className={`shrink-0 rounded-full px-3 py-1.5 text-sm font-extrabold text-white ${
+                entry.source === "wpm" ? "bg-red-900" : "bg-slate-700"
+              }`}
+            >
+              {scorePillLabel}
+            </span>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-zinc-700">
+              {entry.distanceLabel}
+            </span>
+            <span className="flex items-center gap-1.5 rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-zinc-700">
+              <span
+                style={{
+                  display: "inline-block",
+                  width: 8,
+                  height: 8,
+                  borderRadius: "9999px",
+                  background: entry.source === "wpm" ? "#dc2626" : "#334155"
+                }}
+              />
+              {getJobSourceLabel(entry.source)}
+            </span>
+            {entry.source !== "wpm" && !entry.hasMapPin ? (
+              <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">
+                No map pin
               </span>
+            ) : null}
+            {entry.interestState === "candidate_interested" || entry.interestState === "mutual_match" ? (
+              <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-bold text-red-800">&hearts;</span>
+            ) : null}
+            {entry.interestState === "mutual_match" ? (
+              <span className="rounded-full bg-red-800 px-2.5 py-1 text-xs font-bold text-white">MATCH</span>
+            ) : null}
+            {options?.showEmployerVisibilityLabel ? (
+              entry.source === "wpm" ? (
+                <span className="rounded-full bg-gray-200 px-2 py-1 text-xs font-semibold text-zinc-700">
+                  Employer notified
+                </span>
+              ) : (
+                <span className="rounded-full bg-gray-200 px-2 py-1 text-xs font-semibold text-zinc-700">
+                  Not visible to employer
+                </span>
+              )
+            ) : null}
+          </div>
+        </button>
+        {isExpanded ? (
+          <div className="rounded-md border border-gray-200 bg-white p-3 shadow-soft">
+            <p className="mb-3 text-xs font-semibold text-zinc-500">
+              This job is also highlighted on the map.
+            </p>
+            {entry.source === "wpm" ? (
+              expandedWpmJob ? (
+                renderJobDetail(expandedWpmJob, () => setExpandedEntryKey(""))
+              ) : null
             ) : (
-              <span className="rounded-full bg-gray-200 px-2 py-1 text-xs font-semibold text-zinc-700">
-                Not visible to employer
-              </span>
-            )
-          ) : null}
-        </div>
-      </button>
+              renderExternalJobDetail(entry, () => setExpandedEntryKey(""))
+            )}
+          </div>
+        ) : null}
+      </div>
     );
   }
 
@@ -2287,55 +2281,6 @@ export function ApplicantJobsMap() {
             ) : null}
           </div>
         </div>
-        {selectedResultJob ? (
-          <div
-            ref={detailPanelRef}
-            className="max-h-[42vh] shrink-0 overflow-y-auto overflow-x-hidden rounded-lg border border-gray-200 bg-white/95 p-4 shadow-soft"
-          >
-            <div className="mb-3 flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-800">Selected job</p>
-                <p className="mt-1 text-xs leading-5 text-zinc-600">Opened from jobs panel</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedResultJobId("");
-                  setSelectedJobSource(null);
-                }}
-                aria-label="Close selected job detail"
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-zinc-300 bg-white text-sm font-bold text-zinc-700 transition hover:bg-zinc-50"
-              >
-                X
-              </button>
-            </div>
-            {renderJobDetail(selectedResultJob, () => {
-              setSelectedResultJobId("");
-              setSelectedJobSource(null);
-            })}
-          </div>
-        ) : selectedExternalEntry ? (
-          <div
-            ref={detailPanelRef}
-            className="max-h-[42vh] shrink-0 overflow-y-auto overflow-x-hidden rounded-lg border border-gray-200 bg-white/95 p-4 shadow-soft"
-          >
-            <div className="mb-3 flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-800">Selected job</p>
-                <p className="mt-1 text-xs leading-5 text-zinc-600">Opened from jobs panel</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedExternalEntryKey("")}
-                aria-label="Close selected job detail"
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-zinc-300 bg-white text-sm font-bold text-zinc-700 transition hover:bg-zinc-50"
-              >
-                X
-              </button>
-            </div>
-            {renderExternalJobDetail(selectedExternalEntry, () => setSelectedExternalEntryKey(""))}
-          </div>
-        ) : null}
       </div>
 
       {showMatchPopup ? (
