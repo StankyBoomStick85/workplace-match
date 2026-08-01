@@ -315,14 +315,15 @@ export function ApplicantJobsMap() {
   const [geocodedZipCenter, setGeocodedZipCenter] = useState<Coordinates | null>(null);
   const [externalJobs, setExternalJobs] = useState<ExternalJob[]>([]);
   const [scoringMode, setScoringMode] = useState<ScoringMode>("career");
-  const [matchScores, setMatchScores] = useState<Record<string, number>>({});
+  // Namespaced by scoring mode — a stale response from a superseded mode's
+  // polling loop must never be readable by whichever mode is active now.
+  const [matchScoresByMode, setMatchScoresByMode] = useState<Record<string, Record<string, number>>>({});
   const [scoringInProgress, setScoringInProgress] = useState(false);
   const [savedExternalJobIds, setSavedExternalJobIds] = useState<Set<string>>(new Set());
   const [listHighlightKey, setListHighlightKey] = useState("");
   const [expandedEntryKey, setExpandedEntryKey] = useState("");
   const [locationFilterKey, setLocationFilterKey] = useState("");
-  const pollAttemptsRef = useRef(0);
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const scorePollingGenerationRef = useRef(0);
   const visibleExternalJobsRef = useRef<ExternalJob[]>([]);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const clusterMarkerRefs = useRef<Record<string, L.Marker | null>>({});
@@ -332,6 +333,14 @@ export function ApplicantJobsMap() {
   const listRowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const suppressClusterReopenRef = useRef(false);
   const wasDrawingRef = useRef(false);
+
+  // Flat view of the current mode's scores — every existing matchScores[job.id]
+  // read site keeps working unchanged, it just now only ever sees the active
+  // mode's own scores instead of whatever any mode last wrote.
+  const matchScores = useMemo(
+    () => matchScoresByMode[scoringMode] ?? {},
+    [matchScoresByMode, scoringMode]
+  );
 
   useEffect(() => {
     loadMapData();
@@ -366,16 +375,20 @@ export function ApplicantJobsMap() {
         setSavedExternalJobIds(new Set((savedRows as Array<{ job_id: string }>).map((r) => r.job_id)));
       }
 
-      // Load any already-computed scores
+      // Load any already-computed scores, bucketed by scoring mode — a score
+      // computed under one mode must never be readable under a different one.
       const { data: scoreRows } = await supabase
         .from("match_scores")
-        .select("job_id, score")
+        .select("job_id, score, scoring_mode")
         .eq("candidate_id", user.id)
         .gt("expires_at", new Date().toISOString());
       if (scoreRows && scoreRows.length > 0) {
-        const initial: Record<string, number> = {};
-        (scoreRows as Array<{ job_id: string; score: number }>).forEach((r) => { initial[r.job_id] = r.score; });
-        setMatchScores(initial);
+        const initial: Record<string, Record<string, number>> = {};
+        (scoreRows as Array<{ job_id: string; score: number; scoring_mode: string }>).forEach((r) => {
+          if (!initial[r.scoring_mode]) initial[r.scoring_mode] = {};
+          initial[r.scoring_mode][r.job_id] = r.score;
+        });
+        setMatchScoresByMode(initial);
       }
 
       setJobs(getEmployerCreatedJobs(savedJobs as JobListing[]));
@@ -386,12 +399,11 @@ export function ApplicantJobsMap() {
     }
   }, []);
 
-  // Cleanup polling interval on unmount
+  // Invalidate any in-flight score-polling loop on unmount, so it stops
+  // applying results (and stops calling setState) after the page is gone.
   useEffect(() => {
     return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-      }
+      scorePollingGenerationRef.current += 1;
     };
   }, []);
 
@@ -1080,10 +1092,21 @@ export function ApplicantJobsMap() {
   }
 
   function startScorePolling(userId: string, mode: ScoringMode = "career", forceRescore = false) {
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
+    // Supersede whatever polling loop (any mode) is currently in flight. Each
+    // loop iteration below re-checks this before acting on a response, so a
+    // response that lands after a newer call has started is discarded instead
+    // of being applied to state.
+    scorePollingGenerationRef.current += 1;
+    const generation = scorePollingGenerationRef.current;
+    const isCurrent = () => scorePollingGenerationRef.current === generation;
+
+    function mergeScores(scores: Record<string, number>) {
+      setMatchScoresByMode((prev) => ({
+        ...prev,
+        [mode]: { ...(prev[mode] ?? {}), ...scores }
+      }));
     }
+
     setScoringInProgress(true);
 
     (async () => {
@@ -1092,16 +1115,19 @@ export function ApplicantJobsMap() {
         // Phase 1: immediately surface any scores already stored in the DB —
         // no Claude call, no wait. Users see cached scores before batch 1 fires.
         if (!forceRescore) {
+          if (!isCurrent()) return;
           console.log("[startScorePolling] phase 1 — fetching cached scores");
           const cachedRes = await fetch("/api/scoring/score-jobs", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ candidateId: userId, scoringMode: mode, onlyCached: true })
           });
+          if (!isCurrent()) return;
           if (cachedRes.ok) {
             const cachedData = await cachedRes.json();
+            if (!isCurrent()) return;
             if (cachedData.scores && Object.keys(cachedData.scores).length > 0) {
-              setMatchScores((prev) => ({ ...prev, ...cachedData.scores }));
+              mergeScores(cachedData.scores);
             }
             console.log("[startScorePolling] phase 1 done | cached:", Object.keys(cachedData.scores ?? {}).length, "remaining:", cachedData.remaining);
             if ((cachedData.remaining ?? 1) === 0) return;
@@ -1114,6 +1140,7 @@ export function ApplicantJobsMap() {
         // Phase 2: score all remaining jobs, always sending visible viewport IDs
         // so they land in the first batch of 20 on each call.
         while (true) {
+          if (!isCurrent()) return;
           const priorityJobIds = visibleExternalJobsRef.current.map((j) => j.id);
           console.log("[startScorePolling] batch fetch | mode:", mode, "forceRescore:", firstCall && forceRescore, "priorityIds:", priorityJobIds.length);
           const res = await fetch("/api/scoring/score-jobs", {
@@ -1127,10 +1154,12 @@ export function ApplicantJobsMap() {
             })
           });
           firstCall = false;
+          if (!isCurrent()) return;
           if (!res.ok) break;
           const data = await res.json();
+          if (!isCurrent()) return;
           if (data.scores && Object.keys(data.scores).length > 0) {
-            setMatchScores((prev) => ({ ...prev, ...data.scores }));
+            mergeScores(data.scores);
           }
           console.log("[startScorePolling] batch result | scored:", data.scored, "skipped:", data.skipped, "scores returned:", Object.keys(data.scores ?? {}).length);
           if ((data.scored ?? 0) === 0) break;
@@ -1138,7 +1167,11 @@ export function ApplicantJobsMap() {
       } catch {
         // Network or parse error — exit loop
       } finally {
-        setScoringInProgress(false);
+        // Only the generation that's still current gets to clear the flag —
+        // a superseded loop finishing later must not mark the new one as done.
+        if (isCurrent()) {
+          setScoringInProgress(false);
+        }
       }
     })();
   }
@@ -2259,9 +2292,10 @@ export function ApplicantJobsMap() {
                     if (mode === scoringMode) return;
                     setLocationFilterKey("");
                     setScoringMode(mode);
-                    // Always clear — scores are per-mode now, so a score cached under
-                    // one mode must never be shown while a different mode is active.
-                    setMatchScores({});
+                    // No reset needed — matchScoresByMode is namespaced per mode now,
+                    // so switching modes just reads that mode's own bucket (see the
+                    // derived `matchScores` memo). forceRescore=true still forces a
+                    // fresh Claude pass for this mode's bucket specifically.
                     if (mode !== "all" && account?.id) {
                       startScorePolling(account.id, mode, true);
                     }
