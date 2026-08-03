@@ -197,6 +197,10 @@ export function AdminDashboard() {
         </button>
       </div>
 
+      <div className="mb-6">
+        <AccessRequestsPanel />
+      </div>
+
       <div className="grid gap-3 md:grid-cols-4">
         <Stat label="Applicants" value={data.applicants.length} />
         <Stat label="Employers" value={data.employers.length} />
@@ -362,10 +366,6 @@ export function AdminDashboard() {
           </p>
         )}
       </Panel>
-
-      <div className="mt-6">
-        <AccessRequestsPanel />
-      </div>
     </section>
   );
 }

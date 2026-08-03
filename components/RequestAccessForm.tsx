@@ -7,6 +7,7 @@ export function RequestAccessForm() {
   const [email, setEmail] = useState("");
   const [message, setMessage] = useState("");
   const [status, setStatus] = useState<"idle" | "sending" | "success" | "error">("idle");
+  const [errorMessage, setErrorMessage] = useState("");
 
   async function handleSubmit() {
     if (!name.trim() || !email.trim() || !message.trim()) return;
@@ -20,9 +21,12 @@ export function RequestAccessForm() {
       if (res.ok) {
         setStatus("success");
       } else {
+        const body = await res.json().catch(() => null);
+        setErrorMessage(typeof body?.error === "string" ? body.error : "Something went wrong. Please try again.");
         setStatus("error");
       }
     } catch {
+      setErrorMessage("Something went wrong. Please try again.");
       setStatus("error");
     }
   }
@@ -77,7 +81,7 @@ export function RequestAccessForm() {
         {status === "sending" ? "Submitting…" : "Submit Request"}
       </button>
       {status === "error" ? (
-        <p className="text-sm font-semibold text-red-700">Something went wrong. Please try again.</p>
+        <p className="text-sm font-semibold text-red-700">{errorMessage}</p>
       ) : null}
     </div>
   );
