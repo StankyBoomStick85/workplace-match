@@ -731,6 +731,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
       setProfile((prev) => prev ? {
         ...prev,
         capabilityProfile: result.capabilitySummary ?? "",
+        capabilityEntries: Array.isArray(result.capabilityEntries) ? result.capabilityEntries : [],
         recommendedPosition: result.recommendedPosition ?? "",
         entryPoint: result.entryPoint ?? "",
         futurePositions: result.futurePositions ?? "",
