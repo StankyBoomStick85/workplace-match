@@ -34,7 +34,7 @@ export function RequestAccessForm() {
   if (status === "success") {
     return (
       <div className="mt-6 rounded-md border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">
-        Thanks — your request has been submitted. We&apos;ll be in touch with an access code if approved.
+        Thanks, your request has been submitted. If approved, you will be able to create an account using the email address you entered here.
       </div>
     );
   }
