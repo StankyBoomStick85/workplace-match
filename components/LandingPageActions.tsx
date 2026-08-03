@@ -51,19 +51,30 @@ export function LandingPageActions() {
 
   if (authState === "loggedOut") {
     return (
-      <div className="mt-10 flex flex-col gap-3 sm:flex-row">
-        <Link
-          href="/request-access"
-          className="inline-flex items-center justify-center rounded-md bg-red-900 px-8 py-3 text-base font-semibold text-white shadow-soft transition hover:bg-red-950"
-        >
-          Request Access
-        </Link>
-        <Link
-          href="/about"
-          className="inline-flex items-center justify-center rounded-md border border-zinc-800 bg-white px-8 py-3 text-base font-semibold text-zinc-950 transition hover:bg-zinc-50"
-        >
-          Learn More
-        </Link>
+      <div className="mt-10 flex flex-col items-center gap-4">
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <Link
+            href="/request-access"
+            className="inline-flex items-center justify-center rounded-md bg-red-900 px-8 py-3 text-base font-semibold text-white shadow-soft transition hover:bg-red-950"
+          >
+            Request Access
+          </Link>
+          <Link
+            href="/about"
+            className="inline-flex items-center justify-center rounded-md border border-zinc-800 bg-white px-8 py-3 text-base font-semibold text-zinc-950 transition hover:bg-zinc-50"
+          >
+            Learn More
+          </Link>
+        </div>
+        <p className="text-base text-zinc-700">
+          Already approved?{" "}
+          <Link
+            href="/login"
+            className="font-semibold text-red-800 underline underline-offset-2 transition hover:text-red-900"
+          >
+            Log in or create your account here
+          </Link>
+        </p>
       </div>
     );
   }

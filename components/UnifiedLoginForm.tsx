@@ -91,13 +91,25 @@ export function UnifiedLoginForm() {
           </button>
         </form>
 
-        <div className="mt-5 flex flex-wrap gap-3 text-sm text-zinc-600">
-          <Link href="/applicant/signup" className="font-semibold text-red-800">
-            Create profile
-          </Link>
-          <Link href="/employer/signup" className="font-semibold text-red-800">
-            Create employer account
-          </Link>
+        <div className="mt-6 border-t border-gray-200 pt-6">
+          <h2 className="text-base font-bold text-zinc-950">First time here?</h2>
+          <p className="mt-2 text-sm leading-6 text-zinc-600">
+            If your access request was approved, use the email address you submitted to create your account and set your password.
+          </p>
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+            <Link
+              href="/applicant/signup"
+              className="inline-flex items-center justify-center rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
+            >
+              Create your profile
+            </Link>
+            <Link
+              href="/employer/signup"
+              className="inline-flex items-center justify-center rounded-md border border-zinc-800 bg-white px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-50"
+            >
+              Create an employer account
+            </Link>
+          </div>
         </div>
       </div>
     </section>
