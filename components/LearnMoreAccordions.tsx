@@ -2,16 +2,13 @@
 
 import { useState } from "react";
 
-type AccordionKey = "people" | "employers";
+type AccordionKey = "people" | "employers" | "bio";
 
 export function LearnMoreAccordions() {
-  const [openSections, setOpenSections] = useState<Record<AccordionKey, boolean>>({
-    people: false,
-    employers: false
-  });
+  const [openSection, setOpenSection] = useState<AccordionKey | null>(null);
 
   function toggleSection(key: AccordionKey) {
-    setOpenSections((current) => ({ ...current, [key]: !current[key] }));
+    setOpenSection((current) => (current === key ? null : key));
   }
 
   return (
@@ -23,9 +20,9 @@ export function LearnMoreAccordions() {
           className="flex w-full items-center justify-between text-left"
         >
           <span className="min-w-0 text-lg font-bold text-zinc-950">For people looking for work</span>
-          <span className="shrink-0 text-sm font-bold text-zinc-500">{openSections.people ? "▾" : "▸"}</span>
+          <span className="shrink-0 text-sm font-bold text-zinc-500">{openSection === "people" ? "▾" : "▸"}</span>
         </button>
-        {openSections.people ? (
+        {openSection === "people" ? (
           <div className="mt-4 space-y-4 border-t border-gray-200 pt-4">
             <p className="text-sm leading-7 text-zinc-700">
               Every job board asks you to summarize yourself into a resume, then runs that resume through a keyword filter before a human ever sees it. If your words do not match their words, you disappear. What you can actually do never enters into it.
@@ -60,9 +57,9 @@ export function LearnMoreAccordions() {
           className="flex w-full items-center justify-between text-left"
         >
           <span className="min-w-0 text-lg font-bold text-zinc-950">For employers</span>
-          <span className="shrink-0 text-sm font-bold text-zinc-500">{openSections.employers ? "▾" : "▸"}</span>
+          <span className="shrink-0 text-sm font-bold text-zinc-500">{openSection === "employers" ? "▾" : "▸"}</span>
         </button>
-        {openSections.employers ? (
+        {openSection === "employers" ? (
           <div className="mt-4 space-y-4 border-t border-gray-200 pt-4">
             <p className="text-sm leading-7 text-zinc-700">
               Every hiring platform sells the same thing: more applicants. Post a role, receive hundreds of resumes, filter aggressively, hope the filter did not discard the person you needed.
@@ -88,6 +85,42 @@ export function LearnMoreAccordions() {
             <p className="text-sm leading-7 text-zinc-700">
               Verified before the interview. Capability claims are backed by uploaded documents rather than self-description, so the interview can be about fit instead of about confirming whether the resume was true.
             </p>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
+        <button
+          type="button"
+          onClick={() => toggleSection("bio")}
+          className="flex w-full items-center justify-between text-left"
+        >
+          <span className="min-w-0 text-lg font-bold text-zinc-950">A note from the person who built this</span>
+          <span className="shrink-0 text-sm font-bold text-zinc-500">{openSection === "bio" ? "▾" : "▸"}</span>
+        </button>
+        {openSection === "bio" ? (
+          <div className="mt-4 space-y-4 border-t border-gray-200 pt-4">
+            <p className="text-sm leading-7 text-zinc-700">
+              I spent 20 years in the Army, 15 of them as a Green Beret. Real autonomy, real responsibility, decisions that mattered under pressure and could not be walked back.
+            </p>
+            <p className="text-sm leading-7 text-zinc-700">
+              Then I got out, and I felt what millions of people feel every time they look for work. You go from being trusted with consequential decisions to being an applicant, asking systems that cannot actually see you for permission to be considered. Nothing about my capability changed the day I took off the uniform. What changed was that nobody could see it anymore, because the only way to show it was a resume, and a resume is a sales document filtered by keyword before a human ever reads it.
+            </p>
+            <p className="text-sm leading-7 text-zinc-700">
+              I live in a small town. Families here are working jobs that start around $30,000 a year and struggling on it. Employers in the same town say they cannot find workers. Both of those things are true at once, and the gap between them is not talent. It is visibility. Workers with real skills have no way to prove them. Employers have no way to see past a keyword filter to the person who could actually do the job.
+            </p>
+            <p className="text-sm leading-7 text-zinc-700">
+              I built this because I wanted it to exist. I am not a traditional developer. I direct AI to build what I can see clearly, and what I can see clearly is a system where what you have actually done is visible without having to sell it, and where employers can see capability instead of guessing at it from job titles.
+            </p>
+            <p className="text-sm leading-7 text-zinc-700">
+              That is what this is. It is early, and it is being built in the open.
+            </p>
+
+            <div className="mt-6 border-t border-gray-200 pt-4">
+              <p className="text-lg font-bold text-zinc-950">Joel DeToy</p>
+              <p className="mt-1 text-sm text-zinc-500">Founder, Workplace Match</p>
+              <p className="text-sm text-zinc-500">20-year Army veteran, 15 years as a Green Beret</p>
+            </div>
           </div>
         ) : null}
       </div>
