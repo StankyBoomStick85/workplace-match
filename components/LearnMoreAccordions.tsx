@@ -95,22 +95,37 @@ export function LearnMoreAccordions() {
           onClick={() => toggleSection("bio")}
           className="flex w-full items-center justify-between text-left"
         >
-          <span className="min-w-0 text-lg font-bold text-zinc-950">A note from the person who built this</span>
+          <span className="min-w-0 text-lg font-bold text-zinc-950">A note from the founder</span>
           <span className="shrink-0 text-sm font-bold text-zinc-500">{openSection === "bio" ? "▾" : "▸"}</span>
         </button>
         {openSection === "bio" ? (
           <div className="mt-4 space-y-4 border-t border-gray-200 pt-4">
             <p className="text-sm leading-7 text-zinc-700">
-              I spent 20 years in the Army, 15 of them as a Green Beret. Real autonomy, real responsibility, decisions that mattered under pressure and could not be walked back.
+              Think about how you sell a house. You do not tape a flyer to a bulletin board and hope the right buyer walks past it. You list it where the people actively looking for exactly what you have can see it, with photos, with real numbers, with an inspection report. Both sides can see each other clearly before anyone commits a Saturday to a walkthrough.
             </p>
             <p className="text-sm leading-7 text-zinc-700">
-              Then I got out, and I felt what millions of people feel every time they look for work. You go from being trusted with consequential decisions to being an applicant, asking systems that cannot actually see you for permission to be considered. Nothing about my capability changed the day I took off the uniform. What changed was that nobody could see it anymore, because the only way to show it was a resume, and a resume is a sales document filtered by keyword before a human ever reads it.
+              Think about how people meet now. We stopped posting paragraphs into the void and hoping. We built profiles, filters, verification, mutual interest. Both sides have to say yes before anything happens, and nobody wastes months on someone who was never going to be a fit.
+            </p>
+            <p className="text-sm leading-7 text-zinc-700">
+              Think about hiring a contractor. You do not take their word for it. You look at licensing, at photos of finished work, at what other people said afterward. Proof comes before the handshake.
+            </p>
+            <p className="text-sm leading-7 text-zinc-700">
+              Now think about how hiring still works. One side writes a paragraph and waits. The other side sends a resume into a system and waits. An algorithm neither of them can see decides who was qualified. Most people never hear anything back at all. It is the last major decision in adult life still being made on hope and volume.
+            </p>
+            <p className="text-sm leading-7 text-zinc-700">
+              I spent 20 years in the Army, 15 of them as a Green Beret. Real autonomy, real responsibility, decisions that mattered under pressure and could not be walked back. Then I got out, and I felt what millions of people feel every time they look for work. You go from being trusted with consequential decisions to being an applicant, asking a system that cannot actually see you for permission to be considered. Nothing about my capability changed the day I took off the uniform. What changed was that nobody could see it anymore, because the only way to show it was a resume, and a resume is a sales document filtered by keyword before a human ever reads it.
             </p>
             <p className="text-sm leading-7 text-zinc-700">
               I live in a small town. Families here are working jobs that start around $30,000 a year and struggling on it. Employers in the same town say they cannot find workers. Both of those things are true at once, and the gap between them is not talent. It is visibility. Workers with real skills have no way to prove them. Employers have no way to see past a keyword filter to the person who could actually do the job.
             </p>
             <p className="text-sm leading-7 text-zinc-700">
-              I built this because I wanted it to exist. I am not a traditional developer. I direct AI to build what I can see clearly, and what I can see clearly is a system where what you have actually done is visible without having to sell it, and where employers can see capability instead of guessing at it from job titles.
+              That gap is not a small inefficiency. It is people staying in jobs that are beneath them because nobody can see what they are capable of, and businesses going without because the person they needed was thirty minutes away and invisible.
+            </p>
+            <p className="text-sm leading-7 text-zinc-700">
+              So I built the thing I wanted to exist. Capability made visible from what you have actually done rather than from how well you sell it. Both sides choosing each other instead of one side applying and the other side filtering. Proof before the conversation, so the conversation can be about fit.
+            </p>
+            <p className="text-sm leading-7 text-zinc-700">
+              I am not a traditional developer. I direct AI to build what I can see clearly. What I can see clearly is a system where the right person and the right work can actually find each other.
             </p>
             <p className="text-sm leading-7 text-zinc-700">
               That is what this is. It is early, and it is being built in the open.

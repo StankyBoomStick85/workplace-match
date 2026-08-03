@@ -26,16 +26,22 @@ export default function AboutPage() {
       </section>
 
       <section className="mx-auto max-w-5xl px-4 py-14">
-        <LearnMoreAccordions />
-      </section>
-
-      <section className="mx-auto max-w-5xl px-4 pb-14">
         <div className="rounded-lg border border-red-200 bg-red-50 p-6">
           <p className="text-sm font-semibold uppercase tracking-[0.16em] text-red-800">Early Access</p>
           <p className="mt-3 text-sm leading-7 text-zinc-700">
             Workplace Match is currently in early build and validation, testing with real users before broader launch. Currently by invite only.
           </p>
+          <Link
+            href="/request-access"
+            className="mt-4 inline-flex items-center justify-center rounded-md bg-red-900 px-8 py-3 text-base font-semibold text-white transition hover:bg-red-950"
+          >
+            Request Access
+          </Link>
         </div>
+      </section>
+
+      <section className="mx-auto max-w-5xl px-4 pb-14">
+        <LearnMoreAccordions />
       </section>
 
       <section className="mx-auto max-w-5xl px-4 pb-14">
@@ -51,13 +57,19 @@ export default function AboutPage() {
         </div>
       </section>
 
-      <section className="mx-auto max-w-3xl px-4 pb-16 text-center">
-        <Link
-          href="/request-access"
-          className="inline-flex items-center justify-center rounded-md bg-red-900 px-8 py-3 text-base font-semibold text-white transition hover:bg-red-950"
-        >
-          Request Access
-        </Link>
+      <section className="mx-auto max-w-5xl px-4 pb-16">
+        <div className="rounded-lg border border-red-200 bg-red-50 p-6">
+          <p className="text-sm font-semibold uppercase tracking-[0.16em] text-red-800">Early Access</p>
+          <p className="mt-3 text-sm leading-7 text-zinc-700">
+            Workplace Match is currently in early build and validation, testing with real users before broader launch. Currently by invite only.
+          </p>
+          <Link
+            href="/request-access"
+            className="mt-4 inline-flex items-center justify-center rounded-md bg-red-900 px-8 py-3 text-base font-semibold text-white transition hover:bg-red-950"
+          >
+            Request Access
+          </Link>
+        </div>
       </section>
     </>
   );
