@@ -187,6 +187,37 @@ type PlottedJobEntry = {
   sharesLocationCount?: number;
 };
 
+// Career Move gap analysis - generated on demand per job via /api/scoring/job-gap-analysis,
+// never during batch scoring. Mirrors the response shape that route returns.
+type GapKind = "hard_blocker" | "closeable" | "experience_only";
+
+type CapabilityGap = {
+  missing: string;
+  isHardRequirement: boolean;
+  kind: GapKind;
+  closingPath: string;
+  estimatedTime: string;
+};
+
+type MatchingStrength = {
+  capability: string;
+  relevance: string;
+  // Absent on analyses cached before these fields were added - always read with
+  // fallbacks (?? "" / falsy check), never assumed present.
+  sourceCapability?: string;
+  isDocumented?: boolean;
+};
+
+type JobGapAnalysis = {
+  strengths: MatchingStrength[];
+  gaps: CapabilityGap[];
+};
+
+type GapAnalysisState =
+  | { status: "loading" }
+  | { status: "loaded"; data: JobGapAnalysis }
+  | { status: "error"; errorMessage: string };
+
 type ExternalJob = {
   id: string;
   title: string;
@@ -328,6 +359,11 @@ export function ApplicantJobsMap() {
   const [savedExternalJobIds, setSavedExternalJobIds] = useState<Set<string>>(new Set());
   const [listHighlightKey, setListHighlightKey] = useState("");
   const [expandedEntryKey, setExpandedEntryKey] = useState("");
+  const [gapAnalysisState, setGapAnalysisState] = useState<Record<string, GapAnalysisState>>({});
+  // Client-side "already requested" guard, keyed by job id. The server also caches
+  // in job_gap_analysis, so this only prevents redundant requests within one page
+  // load - it is not the source of truth for whether a result already exists.
+  const gapAnalysisRequestedRef = useRef<Set<string>>(new Set());
   const [locationFilterKey, setLocationFilterKey] = useState("");
   const scorePollingGenerationRef = useRef(0);
   const visibleExternalJobsRef = useRef<ExternalJob[]>([]);
@@ -1399,6 +1435,8 @@ export function ApplicantJobsMap() {
             </p>
           </div>
         ) : null}
+
+        {renderGapAnalysisSection(job.id, matchPercent)}
       </>
     );
 
@@ -1464,6 +1502,8 @@ export function ApplicantJobsMap() {
             </p>
           </div>
         ) : null}
+
+        {renderGapAnalysisSection(entry.id, entry.matchPercent)}
       </>
     );
 
@@ -1661,6 +1701,145 @@ export function ApplicantJobsMap() {
         listRowRefs.current[key]?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
     });
+  }
+
+  // Career Move only - generated the first time a row for this job is expanded,
+  // not during batch scoring. The server (job_gap_analysis) caches across page
+  // loads; gapAnalysisRequestedRef guards against re-firing within this one.
+  async function fetchGapAnalysis(jobId: string, jobSourceForGap: "wpm" | "adzuna", matchPercent: number | null) {
+    setGapAnalysisState((prev) => ({ ...prev, [jobId]: { status: "loading" } }));
+    try {
+      const res = await fetch("/api/scoring/job-gap-analysis", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId, jobSource: jobSourceForGap, matchPercent })
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        setGapAnalysisState((prev) => ({ ...prev, [jobId]: { status: "error", errorMessage: result?.error ?? "Couldn't generate the gap analysis." } }));
+        return;
+      }
+      setGapAnalysisState((prev) => ({ ...prev, [jobId]: { status: "loaded", data: result.gapAnalysis } }));
+    } catch {
+      setGapAnalysisState((prev) => ({ ...prev, [jobId]: { status: "error", errorMessage: "Couldn't generate the gap analysis." } }));
+    }
+  }
+
+  useEffect(() => {
+    if (scoringMode !== "career" || !expandedEntryKey) return;
+    const entry = plottedJobEntries.find((candidate) => candidate.key === expandedEntryKey);
+    if (!entry) return;
+    if (gapAnalysisRequestedRef.current.has(entry.id)) return;
+    gapAnalysisRequestedRef.current.add(entry.id);
+    fetchGapAnalysis(entry.id, entry.source === "wpm" ? "wpm" : "adzuna", entry.matchPercent);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedEntryKey, scoringMode, plottedJobEntries]);
+
+  function renderGapItem(gap: CapabilityGap, key: string, isBlocker: boolean) {
+    return (
+      <div
+        key={key}
+        className={
+          isBlocker
+            ? "rounded-md border-2 border-red-300 bg-red-50 p-2.5"
+            : "rounded-md border border-amber-200 bg-amber-50 p-2.5"
+        }
+      >
+        <div className="flex items-start justify-between gap-2">
+          <span className={`text-xs font-bold ${isBlocker ? "text-red-900" : "text-amber-900"}`}>
+            {isBlocker ? "⛔ " : ""}
+            {gap.missing}
+          </span>
+          <span
+            className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+              gap.isHardRequirement ? "bg-zinc-800 text-white" : "bg-zinc-200 text-zinc-700"
+            }`}
+          >
+            {gap.isHardRequirement ? "Required" : "Preferred"}
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-zinc-700">{gap.closingPath}</p>
+        <p className="mt-0.5 text-[11px] font-semibold text-zinc-500">{gap.estimatedTime}</p>
+      </div>
+    );
+  }
+
+  function renderGapAnalysisSection(jobId: string, matchPercent: number | null) {
+    if (scoringMode !== "career") return null;
+    const state = gapAnalysisState[jobId];
+
+    return (
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
+          {matchPercent !== null ? `${matchPercent}% match — what makes up the difference` : "What makes up the difference"}
+        </p>
+
+        {!state || state.status === "loading" ? (
+          <p className="mt-2 text-sm text-zinc-600">Analyzing this job against your profile...</p>
+        ) : state.status === "error" ? (
+          <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-2.5">
+            <p className="text-xs font-semibold text-red-800">{state.errorMessage}</p>
+            <button
+              type="button"
+              onClick={() => {
+                gapAnalysisRequestedRef.current.delete(jobId);
+                setGapAnalysisState((prev) => {
+                  const next = { ...prev };
+                  delete next[jobId];
+                  return next;
+                });
+              }}
+              className="mt-2 rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-800 transition hover:bg-red-100"
+            >
+              Retry
+            </button>
+          </div>
+        ) : (
+          <div className="mt-2 space-y-3">
+            {state.data.strengths.length > 0 ? (
+              <div>
+                <p className="text-xs font-bold text-zinc-900">What you already bring</p>
+                <div className="mt-1.5 space-y-1.5">
+                  {state.data.strengths.map((strength, idx) => (
+                    <div key={idx} className="rounded-md border border-green-200 bg-green-50 p-2.5">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-xs font-semibold text-green-900">{strength.capability}</p>
+                        {strength.isDocumented ? (
+                          <span className="shrink-0 rounded-full bg-green-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-900">
+                            Documented
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="mt-0.5 text-xs text-zinc-700">{strength.relevance}</p>
+                      {strength.sourceCapability ? (
+                        <p className="mt-1 text-[11px] text-zinc-500">From: {strength.sourceCapability}</p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {state.data.gaps.length > 0 ? (
+              <div>
+                <p className="text-xs font-bold text-zinc-900">What's missing</p>
+                <div className="mt-1.5 space-y-1.5">
+                  {state.data.gaps
+                    .filter((g) => g.kind === "closeable")
+                    .map((g, idx) => renderGapItem(g, `closeable-${idx}`, false))}
+                  {state.data.gaps
+                    .filter((g) => g.kind === "experience_only")
+                    .map((g, idx) => renderGapItem(g, `experience-${idx}`, false))}
+                  {state.data.gaps
+                    .filter((g) => g.kind === "hard_blocker")
+                    .map((g, idx) => renderGapItem(g, `blocker-${idx}`, true))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        )}
+      </div>
+    );
   }
 
   function highlightFromPin(key: string) {
