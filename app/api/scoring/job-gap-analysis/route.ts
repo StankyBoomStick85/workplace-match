@@ -15,6 +15,7 @@ type CapabilityGap = {
   kind: GapKind;
   closingPath: string;
   estimatedTime: string;
+  rampUpOnly: boolean;
 };
 
 type MatchingStrength = {
@@ -117,7 +118,11 @@ function parseGapAnalysis(raw: string): JobGapAnalysis | null {
         isHardRequirement: record.isHardRequirement,
         kind: record.kind,
         closingPath: record.closingPath,
-        estimatedTime: record.estimatedTime
+        estimatedTime: record.estimatedTime,
+        // Treat missing/non-boolean as false - undefined only means the model
+        // (or an older cached row, though those are returned before this parser
+        // ever runs) didn't mark it as ramp-up, not that it safely is.
+        rampUpOnly: record.rampUpOnly === true
       });
     }
   }
@@ -263,6 +268,7 @@ Identify what specifically separates this candidate from a stronger match for th
 - Classify it as exactly one of: "hard_blocker" (the candidate cannot currently satisfy this - an active clearance, a state-issued license they do not hold, a degree requirement with no substitution path), "closeable" (a specific certification, course, or credential would close it), or "experience_only" (only time actually spent in a role like this closes it - no certification substitutes).
 - Give a specific, realistic closing path - name the actual certification, course, or license if there is one, not "get more experience."
 - Estimate how long that realistically takes.
+- Set "rampUpOnly" to distinguish knowledge a capable person absorbs during normal onboarding from knowledge that takes real time to build. Learning an employer's internal systems, vocabulary, reporting structure, or administrative processes is normal ramp-up, not a gap - mark those rampUpOnly true. Learning a regulated domain, earning a credential, or building genuine operational experience in a field is a real gap - mark those rampUpOnly false. Do not treat unfamiliarity with an organization's internal way of doing things as a barrier to someone who has done equivalent work elsewhere.
 ${hasCapabilityEntries ? `
 Verification status is a confidence signal, not a scoring signal - it describes how provable a match is, not whether it is a match. A capability the candidate claims, VERIFIED or USER_PROVIDED, counts as meeting any requirement it addresses. Do not treat a USER_PROVIDED capability as weaker evidence of fit than a VERIFIED one, and do not list a requirement as a gap just because the capability addressing it happens to be self-reported rather than documented - most candidates cannot produce paperwork for most of their work history, and that absence says nothing about whether they can actually do the job. A requirement is only a gap when nothing in the candidate's demonstrated capabilities addresses it at all. When a strength is drawn from a USER_PROVIDED capability, describe it exactly as you would describe a VERIFIED one - do not downgrade, hedge, or qualify it in the strength text.
 ` : ""}
@@ -271,7 +277,7 @@ Separately, identify what the candidate's background already demonstrates that m
 Return ONLY valid JSON matching this exact shape, no markdown fences, no explanation, no text outside the JSON:
 {
   "strengths": [{ "capability": string, "relevance": string, "sourceCapability": string }],
-  "gaps": [{ "missing": string, "isHardRequirement": boolean, "kind": "hard_blocker" | "closeable" | "experience_only", "closingPath": string, "estimatedTime": string }]
+  "gaps": [{ "missing": string, "isHardRequirement": boolean, "kind": "hard_blocker" | "closeable" | "experience_only", "closingPath": string, "estimatedTime": string, "rampUpOnly": boolean }]
 }`;
 
   const anthropic = new Anthropic({ apiKey });

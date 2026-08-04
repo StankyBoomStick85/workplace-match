@@ -197,6 +197,9 @@ type CapabilityGap = {
   kind: GapKind;
   closingPath: string;
   estimatedTime: string;
+  // Absent on analyses cached before this field was added - always read with a
+  // fallback (?? false), never assumed present.
+  rampUpOnly?: boolean;
 };
 
 type MatchingStrength = {
@@ -1745,21 +1748,24 @@ export function ApplicantJobsMap() {
             : "rounded-md border border-amber-200 bg-amber-50 p-2.5"
         }
       >
-        <div className="flex items-start justify-between gap-2">
-          <span className={`text-xs font-bold ${isBlocker ? "text-red-900" : "text-amber-900"}`}>
-            {isBlocker ? "⛔ " : ""}
-            {gap.missing}
-          </span>
-          <span
-            className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
-              gap.isHardRequirement ? "bg-zinc-800 text-white" : "bg-zinc-200 text-zinc-700"
-            }`}
-          >
-            {gap.isHardRequirement ? "Required" : "Preferred"}
-          </span>
-        </div>
+        <span className={`text-xs font-bold ${isBlocker ? "text-red-900" : "text-amber-900"}`}>
+          {isBlocker ? "⛔ " : ""}
+          {gap.missing}
+        </span>
         <p className="mt-1 text-xs text-zinc-700">{gap.closingPath}</p>
         <p className="mt-0.5 text-[11px] font-semibold text-zinc-500">{gap.estimatedTime}</p>
+      </div>
+    );
+  }
+
+  // Lightest of the three gap tiers - deliberately no red/amber accent and no
+  // "gap"-style framing, since this is normal onboarding, not a real deficiency.
+  function renderRampUpItem(gap: CapabilityGap, key: string) {
+    return (
+      <div key={key} className="rounded-md border border-gray-200 bg-gray-50 p-2.5">
+        <p className="text-xs font-semibold text-zinc-700">{gap.missing}</p>
+        <p className="mt-1 text-xs text-zinc-600">{gap.closingPath}</p>
+        <p className="mt-0.5 text-[11px] text-zinc-500">{gap.estimatedTime}</p>
       </div>
     );
   }
@@ -1821,19 +1827,51 @@ export function ApplicantJobsMap() {
             ) : null}
 
             {state.data.gaps.length > 0 ? (
-              <div>
-                <p className="text-xs font-bold text-zinc-900">What's missing</p>
-                <div className="mt-1.5 space-y-1.5">
-                  {state.data.gaps
-                    .filter((g) => g.kind === "closeable")
-                    .map((g, idx) => renderGapItem(g, `closeable-${idx}`, false))}
-                  {state.data.gaps
-                    .filter((g) => g.kind === "experience_only")
-                    .map((g, idx) => renderGapItem(g, `experience-${idx}`, false))}
-                  {state.data.gaps
-                    .filter((g) => g.kind === "hard_blocker")
-                    .map((g, idx) => renderGapItem(g, `blocker-${idx}`, true))}
-                </div>
+              <div className="space-y-3">
+                {state.data.gaps.some((g) => g.isHardRequirement && !g.rampUpOnly) ? (
+                  <div>
+                    <p className="text-xs font-bold text-zinc-900">What this role requires that you would need to build</p>
+                    <div className="mt-1.5 space-y-1.5">
+                      {state.data.gaps
+                        .filter((g) => g.isHardRequirement && !g.rampUpOnly && g.kind === "closeable")
+                        .map((g, idx) => renderGapItem(g, `required-closeable-${idx}`, false))}
+                      {state.data.gaps
+                        .filter((g) => g.isHardRequirement && !g.rampUpOnly && g.kind === "experience_only")
+                        .map((g, idx) => renderGapItem(g, `required-experience-${idx}`, false))}
+                      {state.data.gaps
+                        .filter((g) => g.isHardRequirement && !g.rampUpOnly && g.kind === "hard_blocker")
+                        .map((g, idx) => renderGapItem(g, `required-blocker-${idx}`, true))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {state.data.gaps.some((g) => !g.isHardRequirement && !g.rampUpOnly) ? (
+                  <div>
+                    <p className="text-xs font-semibold text-zinc-600">Preferred, but not required</p>
+                    <div className="mt-1.5 space-y-1.5">
+                      {state.data.gaps
+                        .filter((g) => !g.isHardRequirement && !g.rampUpOnly && g.kind === "closeable")
+                        .map((g, idx) => renderGapItem(g, `preferred-closeable-${idx}`, false))}
+                      {state.data.gaps
+                        .filter((g) => !g.isHardRequirement && !g.rampUpOnly && g.kind === "experience_only")
+                        .map((g, idx) => renderGapItem(g, `preferred-experience-${idx}`, false))}
+                      {state.data.gaps
+                        .filter((g) => !g.isHardRequirement && !g.rampUpOnly && g.kind === "hard_blocker")
+                        .map((g, idx) => renderGapItem(g, `preferred-blocker-${idx}`, true))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {state.data.gaps.some((g) => g.rampUpOnly) ? (
+                  <div>
+                    <p className="text-xs font-semibold text-zinc-500">Normal onboarding, not a gap</p>
+                    <div className="mt-1.5 space-y-1.5">
+                      {state.data.gaps
+                        .filter((g) => g.rampUpOnly)
+                        .map((g, idx) => renderRampUpItem(g, `rampup-${idx}`))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>
