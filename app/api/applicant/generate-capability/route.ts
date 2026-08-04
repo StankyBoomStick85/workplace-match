@@ -78,6 +78,8 @@ export async function POST(request: Request) {
 
   const anthropic = new Anthropic({ apiKey });
 
+  console.log("[generate-capability][timing] STAGE INPUT docCount=" + storedDocs.length + " correctionMessagePresent=" + Boolean(correctionMessage));
+
   // --- Step 1: per-document evidence extraction ---
   const { items: extractedItems, unreadableDocLabels, evidenceExtractionFailures } =
     await extractEvidenceFromDocuments(storedDocs, adminClient, anthropic, correctionMessage);
@@ -85,7 +87,7 @@ export async function POST(request: Request) {
   const allEvidenceItems: EvidenceItem[] = [...extractedItems];
 
   const t4 = Date.now();
-  console.log("[generate-capability][timing] step1 complete t4=" + t4 + " delta=" + (t4 - t2) + "ms extractedEvidence=" + allEvidenceItems.length + " unreadable=" + unreadableDocLabels.length + " extractionFailures=" + evidenceExtractionFailures.length);
+  console.log("[generate-capability][timing] document extraction complete delta=" + (t4 - t2) + "ms docCount=" + storedDocs.length + " extractedEvidence=" + allEvidenceItems.length + " unreadable=" + unreadableDocLabels.length + " extractionFailures=" + evidenceExtractionFailures.length + " correctionMessagePresent=" + Boolean(correctionMessage));
 
   // Add self-reported profile evidence as USER_PROVIDED items
   allEvidenceItems.push(...buildSelfReportedEvidenceItems({
@@ -97,9 +99,34 @@ export async function POST(request: Request) {
 
   // --- Step 2: cross-document grouping pass (chunked + merge) ---
   const t5 = Date.now();
-  const evidenceGroups = await runEvidenceGrouping(allEvidenceItems, anthropic, correctionMessage);
+  const groupingResult = await runEvidenceGrouping(allEvidenceItems, anthropic, correctionMessage);
+  const evidenceGroups = groupingResult.groups;
+
+  for (const batchTiming of groupingResult.batchTimings) {
+    console.log(
+      "[generate-capability][timing] each grouping batch complete batchIndex=" + batchTiming.batchIndex +
+      " delta=" + batchTiming.elapsedMs + "ms itemsIn=" + batchTiming.itemsIn + " groupsOut=" + batchTiming.groupsOut
+    );
+  }
+
+  if (groupingResult.mergeRan) {
+    console.log(
+      "[generate-capability][timing] merge pass complete delta=" + groupingResult.mergeElapsedMs + "ms" +
+      " preliminaryGroups=" + groupingResult.preliminaryGroupCount + " finalGroups=" + evidenceGroups.length
+    );
+  } else {
+    console.log("[generate-capability][timing] merge pass SKIPPED (preliminaryGroupCount=" + groupingResult.preliminaryGroupCount + ", batchCount=" + groupingResult.batchCount + ")");
+  }
+
   const t5b = Date.now();
-  console.log("[generate-capability][timing] step2 complete delta=" + (t5b - t5) + "ms groupCount=" + evidenceGroups.length);
+  console.log(
+    "[generate-capability][timing] step2 (grouping) complete delta=" + (t5b - t5) + "ms" +
+    " batchCount=" + groupingResult.batchCount +
+    " totalEvidenceItems=" + allEvidenceItems.length +
+    " mergeRan=" + groupingResult.mergeRan +
+    " groupCount=" + evidenceGroups.length +
+    " correctionMessagePresent=" + Boolean(correctionMessage)
+  );
 
   // --- Phase 1 handoff: save grouped evidence for Phase 2 (and later corrections) to pick up ---
   // A correction invalidates any prior approval and is recorded on the profile here,
@@ -115,15 +142,20 @@ export async function POST(request: Request) {
     updatePayload.is_approved = false;
   }
 
+  const tDbWriteStart = Date.now();
   const { error: updateError } = await adminClient
     .from("candidate_profiles")
     .update(updatePayload)
     .eq("user_id", user.id);
+  const tDbWriteEnd = Date.now();
 
   if (updateError) {
     console.error("[generate-capability] Failed to save pending evidence groups", updateError);
+    console.log("[generate-capability][timing] DB write FAILED delta=" + (tDbWriteEnd - tDbWriteStart) + "ms");
     return NextResponse.json({ error: "Failed to save evidence groups." }, { status: 500 });
   }
+
+  console.log("[generate-capability][timing] DB write complete delta=" + (tDbWriteEnd - tDbWriteStart) + "ms");
 
   // Temporary debug gate: when set, Phase 1 still saves pending_evidence_groups as
   // normal but tells the frontend not to auto-chain into Phase 2, so the raw groups
@@ -131,13 +163,28 @@ export async function POST(request: Request) {
   const skipAutoFinalize = process.env.SKIP_AUTO_FINALIZE === "true";
 
   const tEnd = Date.now();
-  console.log("[generate-capability][timing] phase1 complete tEnd=" + tEnd + " totalDelta=" + (tEnd - t0) + "ms evidenceCount=" + allEvidenceItems.length + " groupCount=" + evidenceGroups.length + " skipAutoFinalize=" + skipAutoFinalize);
+  const totalElapsedSeconds = (tEnd - t0) / 1000;
+  console.log(
+    "[generate-capability][timing] phase1 complete tEnd=" + tEnd +
+    " totalDelta=" + (tEnd - t0) + "ms" +
+    " totalElapsedSeconds=" + totalElapsedSeconds.toFixed(2) +
+    " docCount=" + storedDocs.length +
+    " evidenceCount=" + allEvidenceItems.length +
+    " batchCount=" + groupingResult.batchCount +
+    " mergeRan=" + groupingResult.mergeRan +
+    " groupCount=" + evidenceGroups.length +
+    " correctionMessagePresent=" + Boolean(correctionMessage) +
+    " skipAutoFinalize=" + skipAutoFinalize
+  );
 
   return NextResponse.json({
     success: true,
     status: "groups_ready",
     evidenceCount: allEvidenceItems.length,
     groupCount: evidenceGroups.length,
+    batchCount: groupingResult.batchCount,
+    mergeRan: groupingResult.mergeRan,
+    totalElapsedSeconds,
     skipAutoFinalize
   });
 }

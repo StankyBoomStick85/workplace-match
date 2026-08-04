@@ -404,19 +404,38 @@ Return ONLY a valid JSON array of the final merged groups. Each object must have
 No markdown fences. No explanation. No text outside the JSON array.`;
 }
 
+export type BatchTiming = {
+  batchIndex: number;
+  itemsIn: number;
+  groupsOut: number;
+  elapsedMs: number;
+};
+
+export type GroupingResult = {
+  groups: EvidenceGroup[];
+  batchCount: number;
+  batchTimings: BatchTiming[];
+  mergeRan: boolean;
+  mergeElapsedMs: number | null;
+  preliminaryGroupCount: number;
+};
+
 export async function runEvidenceGrouping(
   evidenceItems: EvidenceItem[],
   anthropic: Anthropic,
   correctionInstruction?: string
-): Promise<EvidenceGroup[]> {
-  if (evidenceItems.length === 0) return [];
+): Promise<GroupingResult> {
+  if (evidenceItems.length === 0) {
+    return { groups: [], batchCount: 0, batchTimings: [], mergeRan: false, mergeElapsedMs: null, preliminaryGroupCount: 0 };
+  }
 
   const evidenceBatches: EvidenceItem[][] = [];
   for (let i = 0; i < evidenceItems.length; i += EVIDENCE_BATCH_SIZE) {
     evidenceBatches.push(evidenceItems.slice(i, i + EVIDENCE_BATCH_SIZE));
   }
 
-  const groupBatch = async (batch: EvidenceItem[], batchIdx: number): Promise<EvidenceGroup[]> => {
+  const groupBatch = async (batch: EvidenceItem[], batchIdx: number): Promise<{ groups: EvidenceGroup[]; timing: BatchTiming }> => {
+    const start = Date.now();
     try {
       const batchResponse = await anthropic.messages.create({
         model: "claude-sonnet-4-6",
@@ -427,21 +446,28 @@ export async function runEvidenceGrouping(
 
       const rawBatch = batchResponse.content.find((b) => b.type === "text")?.text ?? "[]";
       const { groups } = parseEvidenceGroupsFromRaw(rawBatch);
-      return groups.map((g) => ({ ...g, groupId: "b" + batchIdx + "-" + (g.groupId ?? "g?") }));
+      const tagged = groups.map((g) => ({ ...g, groupId: "b" + batchIdx + "-" + (g.groupId ?? "g?") }));
+      return { groups: tagged, timing: { batchIndex: batchIdx, itemsIn: batch.length, groupsOut: tagged.length, elapsedMs: Date.now() - start } };
     } catch (err) {
       console.error("[capabilityPipeline][step2a][batch" + batchIdx + "] Sonnet error, skipping batch", err);
-      return [];
+      return { groups: [], timing: { batchIndex: batchIdx, itemsIn: batch.length, groupsOut: 0, elapsedMs: Date.now() - start } };
     }
   };
 
   const batchResults = await Promise.allSettled(evidenceBatches.map((batch, idx) => groupBatch(batch, idx)));
 
   const preliminaryGroups: EvidenceGroup[] = [];
+  const batchTimings: BatchTiming[] = [];
   batchResults.forEach((result) => {
-    if (result.status === "fulfilled") preliminaryGroups.push(...result.value);
+    if (result.status === "fulfilled") {
+      preliminaryGroups.push(...result.value.groups);
+      batchTimings.push(result.value.timing);
+    }
   });
+  batchTimings.sort((a, b) => a.batchIndex - b.batchIndex);
 
   if (preliminaryGroups.length > 1) {
+    const mergeStart = Date.now();
     try {
       const mergeResponse = await anthropic.messages.create({
         model: "claude-sonnet-4-6",
@@ -452,19 +478,20 @@ export async function runEvidenceGrouping(
 
       const rawMerge = mergeResponse.content.find((b) => b.type === "text")?.text ?? "[]";
       const { groups: mergedGroups } = parseEvidenceGroupsFromRaw(rawMerge);
+      const mergeElapsedMs = Date.now() - mergeStart;
 
       if (mergedGroups.length === 0) {
         console.error("[capabilityPipeline][step2b] MERGE FAILURE, falling back to unmerged preliminary groups");
-        return preliminaryGroups;
+        return { groups: preliminaryGroups, batchCount: evidenceBatches.length, batchTimings, mergeRan: true, mergeElapsedMs, preliminaryGroupCount: preliminaryGroups.length };
       }
-      return mergedGroups;
+      return { groups: mergedGroups, batchCount: evidenceBatches.length, batchTimings, mergeRan: true, mergeElapsedMs, preliminaryGroupCount: preliminaryGroups.length };
     } catch (err) {
       console.error("[capabilityPipeline][step2b] Sonnet error, falling back to unmerged preliminary groups", err);
-      return preliminaryGroups;
+      return { groups: preliminaryGroups, batchCount: evidenceBatches.length, batchTimings, mergeRan: true, mergeElapsedMs: Date.now() - mergeStart, preliminaryGroupCount: preliminaryGroups.length };
     }
   }
 
-  return preliminaryGroups;
+  return { groups: preliminaryGroups, batchCount: evidenceBatches.length, batchTimings, mergeRan: false, mergeElapsedMs: null, preliminaryGroupCount: preliminaryGroups.length };
 }
 
 // ---------- Step 3: civilian-language naming pass ----------
