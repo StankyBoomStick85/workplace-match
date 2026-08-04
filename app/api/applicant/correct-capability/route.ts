@@ -7,15 +7,12 @@ import {
   buildStep3Prompt,
   buildStep4Prompt,
   buildEmployerSummaryUserPrompt,
-  buildSelfReportedEvidenceItems,
-  extractEvidenceFromDocuments,
-  runEvidenceGrouping,
   parseStep3Response,
   extractSection,
   EMPLOYER_SUMMARY_SYSTEM_PROMPT,
   type EvidenceGroup,
   type StoredDoc,
-  type CapabilityEntry
+  type Step3Result
 } from "@/lib/capabilityPipeline";
 
 export const dynamic = "force-dynamic";
@@ -97,11 +94,17 @@ export async function POST(request: Request) {
   console.log("[correct-capability][timing] after profile query t1=" + t1 + " delta=" + (t1 - t0) + "ms savedGroupCount=" + savedGroups.length);
 
   // --- Tier 1: naming-only re-run against the retained EvidenceGroup[] ---
-  let finalGroups: EvidenceGroup[] = savedGroups;
-  let capabilitySummary = "";
-  let capabilityEntries: CapabilityEntry[] = [];
-  let usedTier: "naming-only" | "full-regeneration" = "naming-only";
-
+  // This is the only tier this route runs inline. It is one Sonnet call and never
+  // approaches the 300s ceiling. If it can't satisfy the correction (sentinel or an
+  // unparseable response) - or the call itself fails - Tier 2 requires re-running
+  // extraction and grouping, which does NOT fit in this same request alongside
+  // naming/Step 4/employer summary. Instead of running it inline, this route hands
+  // off to the client with tier: "escalation_required", and the client chains into
+  // generate-capability (extraction+grouping, correction-aware) followed by the
+  // unmodified generate-capability-finalize (naming/Step 4/employer summary) - the
+  // exact same two-request split the main "Generate" button already uses to avoid
+  // this timeout.
+  let tier1Result: Step3Result;
   try {
     const tier1Response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
@@ -109,83 +112,24 @@ export async function POST(request: Request) {
       temperature: 0.2,
       messages: [{ role: "user", content: buildStep3Prompt(savedGroups, correctionMessage) }],
     });
-
     const rawTier1 = tier1Response.content.find((b) => b.type === "text")?.text ?? "";
-    const tier1Result = parseStep3Response(rawTier1, savedGroups, storedDocs);
-
-    if (tier1Result.kind === "entries") {
-      capabilitySummary = tier1Result.capabilitySummary;
-      capabilityEntries = tier1Result.capabilityEntries;
-      console.log("[correct-capability][tier1] naming-only correction applied, entryCount=" + capabilityEntries.length);
-    } else {
-      console.log("[correct-capability][tier1] escalating to full regeneration (sentinel or unparseable Step 3 output)");
-    }
+    tier1Result = parseStep3Response(rawTier1, savedGroups, storedDocs);
   } catch (err) {
-    console.error("[correct-capability][tier1] Sonnet error, escalating to full regeneration", err);
+    console.error("[correct-capability][tier1] Sonnet error, escalation required", err);
+    return NextResponse.json({ success: true, tier: "escalation_required" });
   }
 
-  // --- Tier 2: full re-extraction + re-grouping, with the correction injected upstream ---
-  if (capabilityEntries.length === 0) {
-    usedTier = "full-regeneration";
-    const t2 = Date.now();
-    console.log("[correct-capability][tier2] START t=" + t2);
-
-    const { items: extractedItems, unreadableDocLabels, evidenceExtractionFailures } =
-      await extractEvidenceFromDocuments(storedDocs, adminClient, anthropic, correctionMessage);
-
-    const allEvidenceItems = [
-      ...extractedItems,
-      ...buildSelfReportedEvidenceItems({
-        summary: profile.summary,
-        capabilityTags: Array.isArray(profile.capability_tags) ? (profile.capability_tags as string[]) : null
-      })
-    ];
-
-    console.log("[correct-capability][tier2] re-extraction complete, evidenceCount=" + allEvidenceItems.length + " unreadable=" + unreadableDocLabels.length + " extractionFailures=" + evidenceExtractionFailures.length);
-
-    const regroupedGroups = await runEvidenceGrouping(allEvidenceItems, anthropic, correctionMessage);
-    console.log("[correct-capability][tier2] re-grouping complete, groupCount=" + regroupedGroups.length);
-
-    if (regroupedGroups.length === 0) {
-      return NextResponse.json({ error: "Could not regenerate a capability profile from your documents. Please try again." }, { status: 500 });
-    }
-
-    // Naming pass runs plain here (no correction instruction) - the correction was
-    // already applied at extraction/grouping, so there is nothing left for naming to
-    // decide about it, and it means the sentinel can never come back at this stage.
-    try {
-      const tier2Response = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 4096,
-        temperature: 0.2,
-        messages: [{ role: "user", content: buildStep3Prompt(regroupedGroups) }],
-      });
-
-      const rawTier2 = tier2Response.content.find((b) => b.type === "text")?.text ?? "";
-      const tier2Result = parseStep3Response(rawTier2, regroupedGroups, storedDocs);
-
-      if (tier2Result.kind === "escalate") {
-        // No further tier to fall back to - fail loudly rather than save partial output.
-        console.error("[correct-capability][tier2] Step 3 output was not fully parseable after full regeneration");
-        return NextResponse.json({ error: "Failed to regenerate your capability profile. Please try again." }, { status: 500 });
-      }
-
-      finalGroups = regroupedGroups;
-      capabilitySummary = tier2Result.capabilitySummary;
-      capabilityEntries = tier2Result.capabilityEntries;
-    } catch (err) {
-      console.error("[correct-capability][tier2] Step 3 Sonnet error", err);
-      const message = err instanceof Error ? err.message : String(err);
-      return NextResponse.json({ error: `AI generation failed: ${message}` }, { status: 500 });
-    }
-
-    const tEnd2 = Date.now();
-    console.log("[correct-capability][tier2] complete delta=" + (tEnd2 - t2) + "ms entryCount=" + capabilityEntries.length);
+  if (tier1Result.kind !== "entries") {
+    console.log("[correct-capability][tier1] escalation required (sentinel or unparseable Step 3 output)");
+    return NextResponse.json({ success: true, tier: "escalation_required" });
   }
 
-  // --- Steps 4 + employer summary always re-run, so recommended_position/entry_point/
+  const { capabilitySummary, capabilityEntries } = tier1Result;
+
+  // --- Steps 4 + employer summary re-run so recommended_position/entry_point/
   // future_positions/employer_summary can never go stale relative to the capability
-  // summary that was just (re)written above, on either tier. ---
+  // summary that was just rewritten above. A failure here is a real error, not a
+  // reason to escalate - Tier 1's naming result was valid. ---
   const desiredRole = Array.isArray(profile.job_types) && profile.job_types.length > 0
     ? profile.job_types.join(", ")
     : "Not specified";
@@ -241,27 +185,20 @@ export async function POST(request: Request) {
     employerSummary = "";
   }
 
-  const updatePayload: Record<string, unknown> = {
-    capability_summary: capabilitySummary,
-    capability_entries: capabilityEntries,
-    recommended_position: recommendedPosition,
-    entry_point: entryPoint,
-    future_positions: futurePositions,
-    employer_summary: employerSummary,
-    is_approved: false,
-    correction_notes: correctionMessage,
-  };
-
-  // Only overwrite the retained evidence groups if Tier 2 actually produced new ones -
-  // a Tier 1 (naming-only) correction never changes grouping, so the saved groups stay
-  // exactly as they were for the next correction to reuse.
-  if (usedTier === "full-regeneration") {
-    updatePayload.pending_evidence_groups = finalGroups;
-  }
-
+  // Tier 1 never changes grouping, so pending_evidence_groups is left exactly as it
+  // was for the next correction to reuse.
   const { error: updateError } = await adminClient
     .from("candidate_profiles")
-    .update(updatePayload)
+    .update({
+      capability_summary: capabilitySummary,
+      capability_entries: capabilityEntries,
+      recommended_position: recommendedPosition,
+      entry_point: entryPoint,
+      future_positions: futurePositions,
+      employer_summary: employerSummary,
+      is_approved: false,
+      correction_notes: correctionMessage,
+    })
     .eq("user_id", user.id);
 
   if (updateError) {
@@ -270,11 +207,11 @@ export async function POST(request: Request) {
   }
 
   const tEnd = Date.now();
-  console.log("[correct-capability][timing] complete totalDelta=" + (tEnd - t0) + "ms tier=" + usedTier + " entryCount=" + capabilityEntries.length);
+  console.log("[correct-capability][timing] tier1 complete totalDelta=" + (tEnd - t0) + "ms entryCount=" + capabilityEntries.length);
 
   return NextResponse.json({
     success: true,
-    tier: usedTier,
+    tier: "naming-only",
     capabilitySummary,
     capabilityEntries,
     recommendedPosition,

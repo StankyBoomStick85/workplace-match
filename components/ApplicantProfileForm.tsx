@@ -709,6 +709,32 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
     setIsApproving(false);
   }
 
+  // Tier 2 escalation: the naming-only pass on the retained groups couldn't satisfy
+  // the correction (needs re-grouping or re-extraction), so chain into the same two
+  // requests the main "Generate" button uses - generate-capability (correction-aware)
+  // then generate-capability-finalize (unchanged) - rather than running both in one
+  // request, which is what was timing out.
+  async function runEscalatedCorrection(message: string): Promise<boolean> {
+    const genRes = await fetch("/api/applicant/generate-capability", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ correctionMessage: message }),
+    });
+    const genResult = await genRes.json().catch(() => null);
+    if (!genRes.ok) {
+      setRegenerateError(genResult?.error ?? "Regeneration failed. Please try again.");
+      return false;
+    }
+    const finalizeOk = await runFinalize();
+    if (!finalizeOk) {
+      // runFinalize() records its own error into generateError, which isn't rendered
+      // inside this correction modal - set a message here too so the still-open modal
+      // (not the page behind it) shows the user why nothing changed.
+      setRegenerateError("Finishing your correction failed. Please try again.");
+    }
+    return finalizeOk;
+  }
+
   async function handleRegenerate() {
     if (!correctionMessage.trim()) return;
     setIsRegenerating(true);
@@ -728,17 +754,24 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
         return;
       }
       const result = JSON.parse(rawText);
-      setProfile((prev) => prev ? {
-        ...prev,
-        capabilityProfile: result.capabilitySummary ?? "",
-        capabilityEntries: Array.isArray(result.capabilityEntries) ? result.capabilityEntries : [],
-        recommendedPosition: result.recommendedPosition ?? "",
-        entryPoint: result.entryPoint ?? "",
-        futurePositions: result.futurePositions ?? "",
-        employerSummary: result.employerSummary ?? "",
-        isApproved: false,
-      } : prev);
-      setIsApproved(false);
+
+      if (result.tier === "escalation_required") {
+        const succeeded = await runEscalatedCorrection(correctionMessage);
+        if (!succeeded) return;
+      } else {
+        setProfile((prev) => prev ? {
+          ...prev,
+          capabilityProfile: result.capabilitySummary ?? "",
+          capabilityEntries: Array.isArray(result.capabilityEntries) ? result.capabilityEntries : [],
+          recommendedPosition: result.recommendedPosition ?? "",
+          entryPoint: result.entryPoint ?? "",
+          futurePositions: result.futurePositions ?? "",
+          employerSummary: result.employerSummary ?? "",
+          isApproved: false,
+        } : prev);
+        setIsApproved(false);
+      }
+
       setIsCorrectionModalOpen(false);
       setCorrectionMessage("");
     } catch (err) {

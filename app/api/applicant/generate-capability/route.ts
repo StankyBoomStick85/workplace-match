@@ -8,9 +8,17 @@ import { extractEvidenceFromDocuments, runEvidenceGrouping, buildSelfReportedEvi
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-export async function POST() {
+export async function POST(request: Request) {
   const t0 = Date.now();
   console.log("[generate-capability][timing] START t0=" + t0);
+
+  // Optional: present only when this run is the first half of a correction's Tier 2
+  // escalation (see correct-capability/route.ts). Absent for a normal "Generate My
+  // Capability Profile" run, which behaves exactly as before.
+  const body = await request.json().catch(() => null);
+  const correctionMessage = typeof body?.correctionMessage === "string" && body.correctionMessage.trim()
+    ? body.correctionMessage.trim()
+    : undefined;
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -72,7 +80,7 @@ export async function POST() {
 
   // --- Step 1: per-document evidence extraction ---
   const { items: extractedItems, unreadableDocLabels, evidenceExtractionFailures } =
-    await extractEvidenceFromDocuments(storedDocs, adminClient, anthropic);
+    await extractEvidenceFromDocuments(storedDocs, adminClient, anthropic, correctionMessage);
 
   const allEvidenceItems: EvidenceItem[] = [...extractedItems];
 
@@ -89,17 +97,27 @@ export async function POST() {
 
   // --- Step 2: cross-document grouping pass (chunked + merge) ---
   const t5 = Date.now();
-  const evidenceGroups = await runEvidenceGrouping(allEvidenceItems, anthropic);
+  const evidenceGroups = await runEvidenceGrouping(allEvidenceItems, anthropic, correctionMessage);
   const t5b = Date.now();
   console.log("[generate-capability][timing] step2 complete delta=" + (t5b - t5) + "ms groupCount=" + evidenceGroups.length);
 
   // --- Phase 1 handoff: save grouped evidence for Phase 2 (and later corrections) to pick up ---
+  // A correction invalidates any prior approval and is recorded on the profile here,
+  // since this is the one write both the normal flow and a correction's Tier 2
+  // escalation always pass through. The normal (no-correction) flow's is_approved
+  // handling is unchanged - this only fires when correctionMessage is present.
+  const updatePayload: Record<string, unknown> = {
+    pending_evidence_groups: evidenceGroups,
+    capability_generation_status: "groups_ready"
+  };
+  if (correctionMessage) {
+    updatePayload.correction_notes = correctionMessage;
+    updatePayload.is_approved = false;
+  }
+
   const { error: updateError } = await adminClient
     .from("candidate_profiles")
-    .update({
-      pending_evidence_groups: evidenceGroups,
-      capability_generation_status: "groups_ready"
-    })
+    .update(updatePayload)
     .eq("user_id", user.id);
 
   if (updateError) {
