@@ -96,7 +96,8 @@ type ApplicantMatchSummary = {
   position: Coordinates;
   locationLabel: string;
   jobMatches: ApplicantJobMatch[];
-  bestMatchPercent: number;
+  bestMatchPercent: number | null;
+  hasMatchData: boolean;
 };
 
 type ApplicantLocationGroup = {
@@ -104,8 +105,10 @@ type ApplicantLocationGroup = {
   position: Coordinates;
   locationLabel: string;
   applicants: ApplicantMatchSummary[];
-  bestMatchPercent: number;
+  bestMatchPercent: number | null;
 };
+
+type FindApplicantsViewMode = "list" | "map";
 
 type EmployerInterest = {
   employerId: string;
@@ -181,7 +184,8 @@ export function EmployerFindApplicants() {
   const [account, setAccount] = useState<EmployerAccount | null>(null);
   const [jobs, setJobs] = useState<JobListing[]>([]);
   const [selectedJobId, setSelectedJobId] = useState("");
-  const [applicantProfile, setApplicantProfile] = useState<applicantProfile | null>(null);
+  const [applicantProfiles, setApplicantProfiles] = useState<applicantProfile[]>([]);
+  const [viewMode, setViewMode] = useState<FindApplicantsViewMode>("list");
   const [searchMiles, setSearchMiles] = useState<number | null>(null);
   const [customMiles, setCustomMiles] = useState("");
   const [isDrawingCustomArea, setIsDrawingCustomArea] = useState(false);
@@ -203,7 +207,7 @@ export function EmployerFindApplicants() {
         return;
       }
 
-      const [employerJobs, applicantProfiles, employerInterestRows, applicantInterestRows, mutualMatchRows] =
+      const [employerJobs, fetchedApplicantProfiles, employerInterestRows, applicantInterestRows, mutualMatchRows] =
         await Promise.all([
           getEmployerJobs(user.id),
           getAllApplicantProfiles(),
@@ -215,7 +219,7 @@ export function EmployerFindApplicants() {
       setAccount({ id: user.id, email: user.email });
       setJobs(employerJobs as JobListing[]);
       setSelectedJobId(employerJobs[0]?.id ?? "");
-      setApplicantProfile((applicantProfiles[0] as applicantProfile | undefined) ?? null);
+      setApplicantProfiles(fetchedApplicantProfiles as applicantProfile[]);
       setInterests(employerInterestRows as EmployerInterest[]);
       setApplicantInterests(applicantInterestRows as ApplicantInterest[]);
       setMutualMatches(mutualMatchRows as MutualMatch[]);
@@ -248,45 +252,51 @@ export function EmployerFindApplicants() {
         setCustomAreaPoints([]);
         setIsDrawingCustomArea(false);
         setFocusedApplicantId(candidateId);
+        setViewMode("map");
       }
     }
   }, [account, jobs, mutualMatches]);
 
   const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? null;
-  const applicantGroups = useMemo(() => {
-    if (!account || !applicantProfile) {
+  const applicantSummaries = useMemo(() => {
+    if (!account) {
       return [];
     }
 
-    const position = getZipMapPosition(applicantProfile.zipCode);
-    if (!position) {
-      return [];
-    }
+    return applicantProfiles.reduce<ApplicantMatchSummary[]>((summaries, profile) => {
+      const position = getZipMapPosition(profile.zipCode);
+      if (!position) {
+        return summaries;
+      }
 
-    const applicantRecordId = getApplicantInterestId(applicantProfile);
-    const jobMatches = jobs
-      .map((job) => ({
-        job,
-        match: calculateSkillMatch(job.requiredSkills, getApplicantMatchSignals(applicantProfile), job.title),
-        interestState: getApplicantInterestState(applicantRecordId, job.id)
-      }))
-      .sort((first, second) => second.match.percentage - first.match.percentage);
+      const applicantRecordId = getApplicantInterestId(profile);
+      const jobMatches = jobs
+        .map((job) => ({
+          job,
+          match: calculateSkillMatch(job.requiredSkills, getApplicantMatchSignals(profile), job.title),
+          interestState: getApplicantInterestState(applicantRecordId, job.id)
+        }))
+        .sort((first, second) => second.match.percentage - first.match.percentage);
+      const hasMatchData = jobMatches.length > 0;
 
-    if (jobMatches.length === 0) {
-      return [];
-    }
+      summaries.push({
+        id: applicantRecordId,
+        profile,
+        position,
+        locationLabel: formatApplicantLocation(profile),
+        jobMatches,
+        bestMatchPercent: hasMatchData ? jobMatches[0].match.percentage : null,
+        hasMatchData
+      });
 
-    const applicant: ApplicantMatchSummary = {
-      id: applicantRecordId,
-      profile: applicantProfile,
-      position,
-      locationLabel: formatApplicantLocation(applicantProfile),
-      jobMatches,
-      bestMatchPercent: jobMatches[0]?.match.percentage ?? 0
-    };
+      return summaries;
+    }, []);
+  }, [account, applicantProfiles, jobs, interests, applicantInterests, mutualMatches]);
 
-    return groupApplicantsByLocation([applicant]);
-  }, [account, applicantProfile, jobs, interests, applicantInterests, mutualMatches]);
+  const applicantGroups = useMemo(
+    () => groupApplicantsByLocation(applicantSummaries),
+    [applicantSummaries]
+  );
 
   function getApplicantInterestState(candidateId: string, jobId: string): ApplicantInterestState {
     if (!account || !candidateId || !jobId) {
@@ -478,137 +488,145 @@ export function EmployerFindApplicants() {
 
   return (
     <section className={`fixed inset-x-0 bottom-0 z-40 w-screen overflow-hidden bg-[#eef3ef] ${headerOffsetClass}`}>
-      <MapSurface
-        job={selectedJob}
-        applicantGroups={applicantGroups}
-        focusedApplicantId={focusedApplicantId}
-        searchMiles={searchMiles}
-        isDrawingCustomArea={isDrawingCustomArea}
-        customAreaPoints={customAreaPoints}
-        onDrawingCustomAreaChange={setIsDrawingCustomArea}
-        onCustomAreaPointsChange={setCustomAreaPoints}
-        onEmployerInterestForJob={toggleEmployerInterestForJob}
-      />
+      {viewMode === "map" ? (
+        <>
+          <MapSurface
+            job={selectedJob}
+            applicantGroups={applicantGroups}
+            focusedApplicantId={focusedApplicantId}
+            searchMiles={searchMiles}
+            isDrawingCustomArea={isDrawingCustomArea}
+            customAreaPoints={customAreaPoints}
+            onDrawingCustomAreaChange={setIsDrawingCustomArea}
+            onCustomAreaPointsChange={setCustomAreaPoints}
+            onEmployerInterestForJob={toggleEmployerInterestForJob}
+          />
 
-      <div className="absolute left-4 top-4 z-[900] max-h-[calc(100%-2rem)] w-[min(24rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border border-gray-200 bg-white/95 p-4 shadow-soft">
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-800">
-          Find applicants
-        </p>
-        <div className="mt-3 space-y-2">
-          <label htmlFor="jobSelector" className="label">
-            Job listing
-          </label>
-          {jobs.length > 0 ? (
-            <select
-              id="jobSelector"
-              value={selectedJobId}
-              onChange={(event) => setSelectedJobId(event.target.value)}
-              className="field"
-            >
-              {jobs.map((job) => (
-                <option key={job.id} value={job.id}>
-                  {job.title} - {formatJobLocation(job)}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <p className="rounded-md border border-dashed border-gray-300 bg-gray-50 p-3 text-sm text-zinc-600">
-              No job listings yet.
+          <div className="absolute left-4 top-4 z-[900] max-h-[calc(100%-2rem)] w-[min(24rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border border-gray-200 bg-white/95 p-4 shadow-soft">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-800">
+              Find applicants
             </p>
-          )}
-        </div>
-        <div className="mt-4 space-y-3 border-t border-gray-200 pt-3">
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-            Search area
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            {commuteOptions.map((option) => (
-              <button
-                key={option.label}
-                type="button"
-                onClick={() => {
-                  setSearchMiles(option.miles);
-                  setCustomMiles("");
-                }}
-                className={`rounded-md px-3 py-2 text-sm font-semibold transition ${
-                  searchMiles === option.miles && !customMiles
-                    ? "bg-red-900 text-white hover:bg-red-950"
-                    : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
-                }`}
-              >
-                {option.label}
-              </button>
-            ))}
+            <div className="mt-3">
+              <FindApplicantsViewToggle viewMode={viewMode} onChange={setViewMode} />
+            </div>
+            <div className="mt-3">
+              <JobListingSelector jobs={jobs} selectedJobId={selectedJobId} onChange={setSelectedJobId} />
+            </div>
+            <div className="mt-4 space-y-3 border-t border-gray-200 pt-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
+                Search area
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {commuteOptions.map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    onClick={() => {
+                      setSearchMiles(option.miles);
+                      setCustomMiles("");
+                    }}
+                    className={`rounded-md px-3 py-2 text-sm font-semibold transition ${
+                      searchMiles === option.miles && !customMiles
+                        ? "bg-red-900 text-white hover:bg-red-950"
+                        : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <label className="block space-y-2">
+                <span className="label">Custom distance in miles</span>
+                <input
+                  type="number"
+                  min="1"
+                  value={customMiles}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    const miles = Number(value);
+                    setCustomMiles(value);
+                    setSearchMiles(Number.isFinite(miles) && miles > 0 ? miles : null);
+                  }}
+                  className="field"
+                  placeholder="Example: 25"
+                />
+              </label>
+              {searchMiles ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchMiles(null);
+                    setCustomMiles("");
+                  }}
+                  className="inline-flex items-center justify-center rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
+                >
+                  Clear search area
+                </button>
+              ) : null}
+              <div className="space-y-2 border-t border-gray-200 pt-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomAreaPoints([]);
+                    setIsDrawingCustomArea(true);
+                  }}
+                  className={`inline-flex w-full items-center justify-center rounded-md px-3 py-2 text-sm font-semibold transition ${
+                    isDrawingCustomArea ? "bg-red-900 text-white hover:bg-red-950" : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
+                  }`}
+                >
+                  {isDrawingCustomArea ? "Drawing custom area..." : "Draw custom area"}
+                </button>
+                {isDrawingCustomArea ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsDrawingCustomArea(false)}
+                    className="inline-flex w-full items-center justify-center rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
+                  >
+                    Finish area
+                  </button>
+                ) : null}
+                {customAreaPoints.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCustomAreaPoints([]);
+                      setIsDrawingCustomArea(false);
+                    }}
+                    className="inline-flex w-full items-center justify-center rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
+                  >
+                    Clear custom area
+                  </button>
+                ) : null}
+              </div>
+            </div>
           </div>
-          <label className="block space-y-2">
-            <span className="label">Custom distance in miles</span>
-            <input
-              type="number"
-              min="1"
-              value={customMiles}
-              onChange={(event) => {
-                const value = event.target.value;
-                const miles = Number(value);
-                setCustomMiles(value);
-                setSearchMiles(Number.isFinite(miles) && miles > 0 ? miles : null);
-              }}
-              className="field"
-              placeholder="Example: 25"
-            />
-          </label>
-          {searchMiles ? (
-            <button
-              type="button"
-              onClick={() => {
-                setSearchMiles(null);
-                setCustomMiles("");
-              }}
-              className="inline-flex items-center justify-center rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
-            >
-              Clear search area
-            </button>
-          ) : null}
-          <div className="space-y-2 border-t border-gray-200 pt-3">
-            <button
-              type="button"
-              onClick={() => {
-                setCustomAreaPoints([]);
-                setIsDrawingCustomArea(true);
-              }}
-              className={`inline-flex w-full items-center justify-center rounded-md px-3 py-2 text-sm font-semibold transition ${
-                isDrawingCustomArea ? "bg-red-900 text-white hover:bg-red-950" : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
-              }`}
-            >
-              {isDrawingCustomArea ? "Drawing custom area..." : "Draw custom area"}
-            </button>
-            {isDrawingCustomArea ? (
-              <button
-                type="button"
-                onClick={() => setIsDrawingCustomArea(false)}
-                className="inline-flex w-full items-center justify-center rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
-              >
-                Finish area
-              </button>
-            ) : null}
-            {customAreaPoints.length > 0 ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setCustomAreaPoints([]);
-                  setIsDrawingCustomArea(false);
-                }}
-                className="inline-flex w-full items-center justify-center rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
-              >
-                Clear custom area
-              </button>
-            ) : null}
-          </div>
-        </div>
-      </div>
 
-      <p className="absolute bottom-4 left-4 z-[900] max-w-sm rounded bg-white/80 px-3 py-2 text-xs font-semibold text-zinc-600 shadow-soft">
-        Privacy safe: candidate markers show match percentage only and use generalized ZIP-area placement.
-      </p>
+          <p className="absolute bottom-4 left-4 z-[900] max-w-sm rounded bg-white/80 px-3 py-2 text-xs font-semibold text-zinc-600 shadow-soft">
+            Privacy safe: candidate markers show match percentage only and use generalized ZIP-area placement.
+          </p>
+        </>
+      ) : (
+        <div className="absolute inset-0 overflow-y-auto">
+          <div className="sticky top-0 z-10 border-b border-gray-200 bg-white/95 p-4 shadow-soft">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-800">
+              Find applicants
+            </p>
+            <div className="mt-3 max-w-md">
+              <FindApplicantsViewToggle viewMode={viewMode} onChange={setViewMode} />
+            </div>
+            <div className="mt-3 max-w-md">
+              <JobListingSelector jobs={jobs} selectedJobId={selectedJobId} onChange={setSelectedJobId} />
+            </div>
+          </div>
+          <div className="mx-auto max-w-3xl px-4 py-6 pb-24">
+            <ApplicantListView
+              applicantSummaries={applicantSummaries}
+              selectedJobId={selectedJobId}
+              onEmployerInterestForJob={toggleEmployerInterestForJob}
+            />
+          </div>
+        </div>
+      )}
 
       {showMatchPopup ? <MatchPopup onClose={() => setShowMatchPopup(false)} /> : null}
       {pendingRemoveInterest ? (
@@ -656,6 +674,156 @@ function MatchPopup({ onClose }: { onClose: () => void }) {
   );
 }
 
+function JobListingSelector({
+  jobs,
+  selectedJobId,
+  onChange
+}: {
+  jobs: JobListing[];
+  selectedJobId: string;
+  onChange: (jobId: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <label htmlFor="jobSelector" className="label">
+        Job listing
+      </label>
+      {jobs.length > 0 ? (
+        <select
+          id="jobSelector"
+          value={selectedJobId}
+          onChange={(event) => onChange(event.target.value)}
+          className="field"
+        >
+          {jobs.map((job) => (
+            <option key={job.id} value={job.id}>
+              {job.title} - {formatJobLocation(job)}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <p className="rounded-md border border-dashed border-gray-300 bg-gray-50 p-3 text-sm text-zinc-600">
+          No job listings yet.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function FindApplicantsViewToggle({
+  viewMode,
+  onChange
+}: {
+  viewMode: FindApplicantsViewMode;
+  onChange: (mode: FindApplicantsViewMode) => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <button
+        type="button"
+        onClick={() => onChange("list")}
+        className={`rounded-md px-3 py-2 text-sm font-semibold transition ${
+          viewMode === "list"
+            ? "bg-red-900 text-white hover:bg-red-950"
+            : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
+        }`}
+      >
+        List view
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("map")}
+        className={`rounded-md px-3 py-2 text-sm font-semibold transition ${
+          viewMode === "map"
+            ? "bg-red-900 text-white hover:bg-red-950"
+            : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
+        }`}
+      >
+        Map view
+      </button>
+    </div>
+  );
+}
+
+function ApplicantListView({
+  applicantSummaries,
+  selectedJobId,
+  onEmployerInterestForJob
+}: {
+  applicantSummaries: ApplicantMatchSummary[];
+  selectedJobId: string;
+  onEmployerInterestForJob: (job: JobListing, profile: applicantProfile, matchPercent: number) => void;
+}) {
+  const [expandedApplicantId, setExpandedApplicantId] = useState("");
+  const sortedApplicants = useMemo(
+    () =>
+      [...applicantSummaries].sort(
+        (first, second) => (second.bestMatchPercent ?? -1) - (first.bestMatchPercent ?? -1)
+      ),
+    [applicantSummaries]
+  );
+
+  if (sortedApplicants.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-gray-300 bg-white p-6 text-center">
+        <p className="text-sm text-zinc-600">No candidates are visible to your employer account yet.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {sortedApplicants.map((applicant) => {
+        const isExpanded = expandedApplicantId === applicant.id;
+        const interestState = getApplicantSummaryInterestState(applicant);
+
+        return (
+          <div key={applicant.id} className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-soft">
+            <button
+              type="button"
+              onClick={() => setExpandedApplicantId(isExpanded ? "" : applicant.id)}
+              className="flex w-full items-center justify-between gap-3 p-4 text-left transition hover:bg-zinc-50"
+            >
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-zinc-950">Applicant match</span>
+                <span className="mt-1 block truncate text-xs text-zinc-600">{applicant.locationLabel}</span>
+              </span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                {interestState === "employer_interested" || interestState === "mutual_match" ? (
+                  <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-800">
+                    &hearts;
+                  </span>
+                ) : null}
+                {interestState === "mutual_match" ? (
+                  <span className="rounded-full bg-red-900 px-2.5 py-0.5 text-xs font-bold text-white">
+                    MATCH
+                  </span>
+                ) : null}
+                {applicant.bestMatchPercent !== null ? (
+                  <span className="rounded-full bg-red-900 px-2.5 py-1 text-sm font-bold text-white">
+                    {applicant.bestMatchPercent}%
+                  </span>
+                ) : null}
+              </span>
+            </button>
+            {isExpanded ? (
+              <div className="border-t border-gray-200 p-4">
+                <ApplicantMatchPopup
+                  applicant={applicant}
+                  focusedJobId={selectedJobId}
+                  onEmployerInterestForJob={onEmployerInterestForJob}
+                  variant="panel"
+                  hideHeader
+                />
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function MapSurface({
   job,
   applicantGroups,
@@ -690,7 +858,10 @@ function MapSurface({
       return {
         ...group,
         applicants: visibleApplicants,
-        bestMatchPercent: Math.max(...visibleApplicants.map((applicant) => applicant.bestMatchPercent), 0)
+        bestMatchPercent: visibleApplicants.reduce<number | null>(
+          (best, applicant) => combineBestMatchPercent(best, applicant.bestMatchPercent),
+          null
+        )
       };
     })
     .filter((group) => group.applicants.length > 0);
@@ -911,9 +1082,11 @@ function ApplicantLocationGroupPopup({
                     MATCH
                   </span>
                 ) : null}
-                <span className="rounded-full bg-red-900 px-2.5 py-1 text-sm font-bold text-white">
-                  {applicant.bestMatchPercent}%
-                </span>
+                {applicant.bestMatchPercent !== null ? (
+                  <span className="rounded-full bg-red-900 px-2.5 py-1 text-sm font-bold text-white">
+                    {applicant.bestMatchPercent}%
+                  </span>
+                ) : null}
               </span>
             </button>
           );
@@ -926,11 +1099,15 @@ function ApplicantLocationGroupPopup({
 function ApplicantMatchPopup({
   applicant,
   focusedJobId = "",
-  onEmployerInterestForJob
+  onEmployerInterestForJob,
+  variant = "popup",
+  hideHeader = false
 }: {
   applicant: ApplicantMatchSummary;
   focusedJobId?: string;
   onEmployerInterestForJob: (job: JobListing, profile: applicantProfile, matchPercent: number) => void;
+  variant?: "popup" | "panel";
+  hideHeader?: boolean;
 }) {
   const [dismissedMutualActionJobIds, setDismissedMutualActionJobIds] = useState<string[]>([]);
   const employerAccount = readEmployerAccount();
@@ -946,13 +1123,21 @@ function ApplicantMatchPopup({
         return second.match.percentage - first.match.percentage;
       })
     : applicant.jobMatches;
+  const widthClass = variant === "panel" ? "w-full" : "w-80";
 
   return (
-    <div className="w-80 space-y-3">
-      <div>
-        <p className="text-sm font-semibold text-zinc-950">Applicant match</p>
-        <p className="mt-1 text-xs text-zinc-600">{applicant.locationLabel}</p>
-      </div>
+    <div className={`${widthClass} space-y-3`}>
+      {hideHeader ? null : (
+        <div>
+          <p className="text-sm font-semibold text-zinc-950">Applicant match</p>
+          <p className="mt-1 text-xs text-zinc-600">{applicant.locationLabel}</p>
+        </div>
+      )}
+      {orderedJobMatches.length === 0 ? (
+        <p className="rounded-md border border-dashed border-gray-300 bg-gray-50 p-3 text-sm text-zinc-600">
+          No active job listings to match against yet. This candidate's basic info is still shown.
+        </p>
+      ) : (
       <div className="space-y-2">
         {orderedJobMatches.map(({ job, match, interestState }) => (
           <div key={job.id} className="rounded-md border border-gray-200 bg-white p-3">
@@ -1009,6 +1194,7 @@ function ApplicantMatchPopup({
           </div>
         ))}
       </div>
+      )}
     </div>
   );
 }
@@ -1738,6 +1924,16 @@ function getApplicantZipAreaLabel(zipCode: string) {
   return knownZipLabels[zipCode] ?? "";
 }
 
+function combineBestMatchPercent(first: number | null, second: number | null) {
+  if (first === null) {
+    return second;
+  }
+  if (second === null) {
+    return first;
+  }
+  return Math.max(first, second);
+}
+
 function groupApplicantsByLocation(applicants: ApplicantMatchSummary[]) {
   const groups = new Map<string, ApplicantLocationGroup>();
 
@@ -1747,7 +1943,7 @@ function groupApplicantsByLocation(applicants: ApplicantMatchSummary[]) {
 
     if (existingGroup) {
       existingGroup.applicants.push(applicant);
-      existingGroup.bestMatchPercent = Math.max(existingGroup.bestMatchPercent, applicant.bestMatchPercent);
+      existingGroup.bestMatchPercent = combineBestMatchPercent(existingGroup.bestMatchPercent, applicant.bestMatchPercent);
       return;
     }
 
@@ -1762,7 +1958,9 @@ function groupApplicantsByLocation(applicants: ApplicantMatchSummary[]) {
 
   return Array.from(groups.values()).map((group) => ({
     ...group,
-    applicants: group.applicants.sort((first, second) => second.bestMatchPercent - first.bestMatchPercent)
+    applicants: group.applicants.sort(
+      (first, second) => (second.bestMatchPercent ?? -1) - (first.bestMatchPercent ?? -1)
+    )
   }));
 }
 
@@ -1894,7 +2092,7 @@ function getPinColor(percentage: number) {
   return "#b91c1c";
 }
 
-function createMatchIcon(percentage: number, interestState: ApplicantInterestState) {
+function createMatchIcon(percentage: number | null, interestState: ApplicantInterestState) {
   const interestBadge =
     interestState === "employer_interested" || interestState === "mutual_match"
       ? '<span style="position:absolute;top:-9px;right:-9px;display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:9999px;border:2px solid white;background:#991b1b;color:white;font-size:14px;font-weight:900;box-shadow:0 6px 14px rgba(0,0,0,0.2);">&hearts;</span>'
@@ -1903,10 +2101,14 @@ function createMatchIcon(percentage: number, interestState: ApplicantInterestSta
     interestState === "mutual_match"
       ? '<span style="position:absolute;top:-13px;right:-18px;display:flex;align-items:center;justify-content:center;height:22px;padding:0 8px;border-radius:9999px;border:2px solid white;background:#991b1b;color:white;font-size:10px;font-weight:900;letter-spacing:0.04em;box-shadow:0 6px 14px rgba(0,0,0,0.2);">MATCH</span>'
       : "";
+  // No job listing to score against yet - show a plain marker instead of a
+  // percentage, per the "omit the match % badge entirely" rule.
+  const scoreLabel = percentage === null ? "View" : `${percentage}%`;
+  const background = percentage === null ? "#52525b" : "#dc2626";
 
   return L.divIcon({
     className: "",
-    html: `<div style="position:relative;display:inline-flex;align-items:center;justify-content:center;min-width:56px;height:44px;padding:0 12px;border-radius:9999px;border:3px solid white;background:#dc2626;color:white;font-size:14px;font-weight:900;box-shadow:0 10px 24px rgba(0,0,0,0.25);">${percentage}%${interestBadge}${matchBadge}</div>`,
+    html: `<div style="position:relative;display:inline-flex;align-items:center;justify-content:center;min-width:56px;height:44px;padding:0 12px;border-radius:9999px;border:3px solid white;background:${background};color:white;font-size:14px;font-weight:900;box-shadow:0 10px 24px rgba(0,0,0,0.25);">${scoreLabel}${interestBadge}${matchBadge}</div>`,
     iconSize: [58, 44],
     iconAnchor: [29, 22],
     popupAnchor: [0, -20]
