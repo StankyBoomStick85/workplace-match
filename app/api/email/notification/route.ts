@@ -45,19 +45,27 @@ export async function POST(request: Request) {
 
 async function getUserEmail(userId: string) {
   const supabase = createEmailRouteClient();
-  const { data } = await supabase.from("users").select("email").eq("id", userId).maybeSingle();
+  const { data, error } = await supabase.from("users").select("email").eq("id", userId).maybeSingle();
+  if (error) {
+    console.error("[api/email/notification] Failed to look up recipient email", { userId, error: error.message });
+    return "";
+  }
   return typeof data?.email === "string" ? data.email : "";
 }
 
 async function getJobTitle(jobId: string) {
   const supabase = createEmailRouteClient();
-  const { data } = await supabase.from("job_posts").select("title").eq("id", jobId).maybeSingle();
+  const { data, error } = await supabase.from("job_posts").select("title").eq("id", jobId).maybeSingle();
+  if (error) {
+    console.error("[api/email/notification] Failed to look up job title", { jobId, error: error.message });
+    return "";
+  }
   return typeof data?.title === "string" ? data.title : "";
 }
 
 function createEmailRouteClient() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 }
