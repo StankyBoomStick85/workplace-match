@@ -180,6 +180,12 @@ export function EmployerJobForm() {
   });
   const [payType, setPayType] = useState<PayRangeDraft["payType"]>("per-hour");
   const [payRangeValue, setPayRangeValue] = useState("");
+  const [title, setTitle] = useState("");
+  const [jobType, setJobType] = useState("");
+  const [schedule, setSchedule] = useState("");
+  const [requiredSkillsText, setRequiredSkillsText] = useState("");
+  const [preferredSkillsText, setPreferredSkillsText] = useState("");
+  const [description, setDescription] = useState("");
   const [pendingSave, setPendingSave] = useState<{ payload: Record<string, unknown>; message: string } | null>(null);
   const [saveError, setSaveError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -236,6 +242,12 @@ export function EmployerJobForm() {
             state: mappedJob.locationState,
             zip: mappedJob.locationZip ?? ""
           });
+          setTitle(mappedJob.title);
+          setJobType(mappedJob.jobType);
+          setSchedule(mappedJob.schedule);
+          setRequiredSkillsText(joinSkills(mappedJob.requiredSkills));
+          setPreferredSkillsText(joinSkills(mappedJob.preferredSkills));
+          setDescription(mappedJob.description);
         }
       }
     }
@@ -288,18 +300,17 @@ export function EmployerJobForm() {
       return;
     }
 
-    const formData = new FormData(event.currentTarget);
     const jobData = {
-      title: String(formData.get("title") ?? "").trim(),
+      title: title.trim(),
       locationStreet: workLocation.street.trim(),
       locationCity: workLocation.city.trim(),
       locationState: workLocation.state.trim(),
       locationZip: workLocation.zip.trim(),
-      jobType: String(formData.get("jobType") ?? "").trim(),
-      schedule: String(formData.get("schedule") ?? "").trim(),
-      requiredSkills: splitSkills(String(formData.get("requiredSkills") ?? "")),
-      preferredSkills: splitSkills(String(formData.get("preferredSkills") ?? "")),
-      description: String(formData.get("description") ?? "").trim()
+      jobType: jobType.trim(),
+      schedule: schedule.trim(),
+      requiredSkills: splitSkills(requiredSkillsText),
+      preferredSkills: splitSkills(preferredSkillsText),
+      description: description.trim()
     };
 
     // Re-run the same expansion here rather than trusting that blur already
@@ -457,7 +468,13 @@ export function EmployerJobForm() {
 
         <form onSubmit={saveJob} className="mt-6 grid gap-5 md:grid-cols-2">
           <Field label="Job title" id="title">
-            <input id="title" name="title" required defaultValue={editingJob?.title ?? ""} className={jobFieldClassName} />
+            <input
+              id="title"
+              required
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              className={jobFieldClassName}
+            />
           </Field>
           <div className="space-y-2 md:col-span-2">
             <label
@@ -560,7 +577,13 @@ export function EmployerJobForm() {
             </div>
           </div>
           <Field label="Job type" id="jobType">
-            <select id="jobType" name="jobType" required defaultValue={editingJob?.jobType ?? ""} className={jobFieldClassName}>
+            <select
+              id="jobType"
+              required
+              value={jobType}
+              onChange={(event) => setJobType(event.target.value)}
+              className={jobFieldClassName}
+            >
               <option value="" disabled>Select type</option>
               <option>Full-time</option>
               <option>Part-time</option>
@@ -569,7 +592,13 @@ export function EmployerJobForm() {
             </select>
           </Field>
           <Field label="Schedule" id="schedule">
-            <select id="schedule" name="schedule" required defaultValue={editingJob?.schedule ?? ""} className={jobFieldClassName}>
+            <select
+              id="schedule"
+              required
+              value={schedule}
+              onChange={(event) => setSchedule(event.target.value)}
+              className={jobFieldClassName}
+            >
               <option value="" disabled>Select schedule</option>
               <option>Onsite</option>
               <option>Hybrid</option>
@@ -580,37 +609,37 @@ export function EmployerJobForm() {
           <Field label="Required capabilities" id="requiredSkills" fullWidth>
             <textarea
               id="requiredSkills"
-              name="requiredSkills"
               rows={4}
               required
               placeholder={`Enter one skill per line:
 Kitchen leadership
 Food safety
 Inventory management`}
-              defaultValue={editingJob ? joinSkills(editingJob.requiredSkills) : ""}
+              value={requiredSkillsText}
+              onChange={(event) => setRequiredSkillsText(event.target.value)}
               className={jobFieldClassName}
             />
           </Field>
           <Field label="Preferred capabilities" id="preferredSkills" fullWidth>
             <textarea
               id="preferredSkills"
-              name="preferredSkills"
               rows={4}
               placeholder={`Optional - enter one skill per line:
 Bilingual
 Forklift certified
 POS system experience`}
-              defaultValue={editingJob ? joinSkills(editingJob.preferredSkills) : ""}
+              value={preferredSkillsText}
+              onChange={(event) => setPreferredSkillsText(event.target.value)}
               className={jobFieldClassName}
             />
           </Field>
           <Field label="Short job description" id="description" fullWidth>
             <textarea
               id="description"
-              name="description"
               rows={5}
               required
-              defaultValue={editingJob?.description ?? ""}
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
               className={jobFieldClassName}
             />
           </Field>
