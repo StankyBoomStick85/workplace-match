@@ -1,5 +1,18 @@
-import { redirect } from "next/navigation";
+"use client";
 
-export default function EmployerDashboardPage() {
-  redirect("/employer/my-jobs");
+import { useEffect } from "react";
+import { supabase } from "@/lib/supabase";
+
+export default function EmployerDashboardRedirectPage() {
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      window.location.href = user ? `/employer/company/${user.id}?section=dashboard` : "/employer/login";
+    });
+  }, []);
+
+  return (
+    <section className="mx-auto max-w-3xl px-4 py-14">
+      <p className="text-sm text-zinc-600">Redirecting…</p>
+    </section>
+  );
 }

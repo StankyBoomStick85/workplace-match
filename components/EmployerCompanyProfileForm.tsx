@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 
@@ -23,6 +25,8 @@ type JobListing = {
   description: string;
 };
 
+type OwnerSection = "profile" | "dashboard" | "reports" | "market-analysis" | "comparative-data";
+
 const emptyProfile: CompanyProfile = {
   companyName: "",
   industry: "",
@@ -41,7 +45,19 @@ const companySizeOptions = [
   "500+ employees"
 ];
 
+// Left-menu sections are owner-only workspace views. "profile" also doubles as
+// the public slice - everyone else only ever sees that one, regardless of URL.
+const ownerSections: { key: OwnerSection; label: string }[] = [
+  { key: "profile", label: "Company Profile" },
+  { key: "dashboard", label: "Dashboard" },
+  { key: "reports", label: "Reports" },
+  { key: "market-analysis", label: "Market Analysis" },
+  { key: "comparative-data", label: "Comparative Data" }
+];
+const ownerSectionKeys = ownerSections.map((section) => section.key);
+
 export function EmployerCompanyProfile({ employerId }: { employerId: string }) {
+  const searchParams = useSearchParams();
   const [profile, setProfile] = useState<CompanyProfile>(emptyProfile);
   const [jobs, setJobs] = useState<JobListing[]>([]);
   const [isOwner, setIsOwner] = useState(false);
@@ -118,14 +134,22 @@ export function EmployerCompanyProfile({ employerId }: { employerId: string }) {
 
   if (!hasLoaded) {
     return (
-      <section className="mx-auto max-w-4xl px-4 py-14">
+      <section className="mx-auto max-w-5xl px-4 py-14">
         <p className="text-sm text-zinc-600">Loading company profile...</p>
       </section>
     );
   }
 
-  return (
-    <section className="mx-auto max-w-4xl px-4 py-12">
+  // Auth gating: a non-owner (including logged-out visitors) can never see the
+  // workspace shell or an owner-only section, no matter what ?section= says.
+  const requestedSection = searchParams.get("section") ?? "profile";
+  const activeSection: OwnerSection =
+    isOwner && ownerSectionKeys.includes(requestedSection as OwnerSection)
+      ? (requestedSection as OwnerSection)
+      : "profile";
+
+  const publicSlice = (
+    <>
       <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -278,7 +302,56 @@ export function EmployerCompanyProfile({ employerId }: { employerId: string }) {
           )}
         </div>
       </div>
+    </>
+  );
+
+  // Non-owners (including logged-out visitors) get the public slice only, full
+  // width, with no workspace chrome and no way to reach an owner section.
+  if (!isOwner) {
+    return <section className="mx-auto max-w-4xl px-4 py-12">{publicSlice}</section>;
+  }
+
+  return (
+    <section className="mx-auto max-w-6xl px-4 py-12">
+      <div className="grid gap-6 md:grid-cols-[14rem_minmax(0,1fr)]">
+        <nav className="h-fit rounded-lg border border-gray-200 bg-white p-2 shadow-soft md:sticky md:top-24">
+          {ownerSections.map((section) => (
+            <Link
+              key={section.key}
+              href={
+                section.key === "profile"
+                  ? `/employer/company/${employerId}`
+                  : `/employer/company/${employerId}?section=${section.key}`
+              }
+              className={`block rounded-md px-3 py-2 text-sm font-semibold transition ${
+                activeSection === section.key
+                  ? "bg-red-50 text-red-800"
+                  : "text-zinc-700 hover:bg-gray-50"
+              }`}
+            >
+              {section.label}
+            </Link>
+          ))}
+        </nav>
+
+        <div>
+          {activeSection === "profile" ? (
+            publicSlice
+          ) : (
+            <ScaffoldedSection label={ownerSections.find((section) => section.key === activeSection)?.label ?? ""} />
+          )}
+        </div>
+      </div>
     </section>
+  );
+}
+
+function ScaffoldedSection({ label }: { label: string }) {
+  return (
+    <div className="rounded-lg border border-dashed border-gray-300 bg-white p-8 text-center">
+      <p className="text-sm font-semibold uppercase tracking-[0.16em] text-red-800">{label}</p>
+      <p className="mt-2 text-sm text-zinc-600">This section is coming soon.</p>
+    </div>
   );
 }
 
