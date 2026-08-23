@@ -67,6 +67,23 @@ html.dark .text-zinc-950,
 html.dark .text-zinc-900 {
   color: #f9fafb !important;
 }
+
+/* Wordmark "Match" — color must follow the literal surface it renders on, not the
+   global dark-mode theme class. Each surface below is judged independently:
+   .wordmark-match-adaptive is for surfaces that themselves invert to a dark
+   background in dark mode (e.g. header's bg-white → #1c1c1c), so white text stays
+   legible. .wordmark-match-fixed is for surfaces that stay light in dark mode
+   (e.g. bg-white/80 cards, which .bg-white's override does not match), so the
+   text must stay dark or it becomes white-on-white. */
+.wordmark-match-adaptive {
+  color: #18181b;
+}
+html.dark .wordmark-match-adaptive {
+  color: #f9fafb;
+}
+.wordmark-match-fixed {
+  color: #18181b;
+}
 html.dark .text-zinc-700,
 html.dark .text-zinc-600 {
   color: #d1d5db !important;

@@ -44,7 +44,7 @@ export default function LandingPage() {
           />
           <span className="whitespace-nowrap text-3xl sm:text-4xl">
             <span className="font-bold text-red-700">Workplace</span>{" "}
-            <span className="font-bold text-zinc-900">Match</span>
+            <span className="wordmark-match-fixed font-bold">Match</span>
           </span>
         </div>
 

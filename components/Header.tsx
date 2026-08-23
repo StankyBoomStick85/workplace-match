@@ -68,9 +68,9 @@ export function Header() {
     <header className="sticky top-0 z-[1000] border-b border-gray-200 bg-white">
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-5 px-4 py-2 sm:py-3.5">
         <Link
-          href="/"
+          href={activeRole ? "/about" : "/"}
           className="flex shrink-0 items-center gap-2 sm:gap-3"
-          aria-label="Workplace Match home"
+          aria-label={activeRole ? "Learn more about Workplace Match" : "Workplace Match home"}
         >
           <Image
             src="/wp-icon.svg"
@@ -82,7 +82,7 @@ export function Header() {
           />
           <span className="whitespace-nowrap text-base tracking-normal sm:text-2xl">
             <span className="font-bold text-red-700">Workplace</span>{" "}
-            <span className="font-bold text-zinc-900">Match</span>
+            <span className="wordmark-match-adaptive font-bold">Match</span>
           </span>
         </Link>
 

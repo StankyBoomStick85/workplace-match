@@ -30,6 +30,7 @@ import {
   removeInterest as removeSupabaseInterest
 } from "../lib/supabaseMvpData";
 import { RemoveInterestConfirmationModal } from "./RemoveInterestConfirmationModal";
+import { HeartToggleButton } from "./HeartToggleButton";
 
 type EmployerAccount = {
   id?: string;
@@ -1239,17 +1240,11 @@ function ApplicantMatchPopup({
                   </span>
                 ) : null}
               </div>
-              <button
-                type="button"
+              <HeartToggleButton
+                interested={interestState !== "none"}
                 onClick={() => onEmployerInterestForJob(job, applicant.profile, match.percentage)}
-                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
-                  interestState === "none"
-                    ? "bg-red-900 text-white hover:bg-red-950"
-                    : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
-                }`}
-              >
-                {interestState === "none" ? "Interested" : "Remove interest"}
-              </button>
+                size="sm"
+              />
             </div>
             {interestState === "mutual_match" && !dismissedMutualActionJobIds.includes(job.id) ? (
               <EmployerMutualMatchActions

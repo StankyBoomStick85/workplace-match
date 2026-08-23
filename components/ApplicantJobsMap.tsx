@@ -33,6 +33,7 @@ import {
 } from "../lib/supabaseMvpData";
 import { supabase } from "../lib/supabase";
 import { RemoveInterestConfirmationModal } from "./RemoveInterestConfirmationModal";
+import { HeartToggleButton } from "./HeartToggleButton";
 
 type ApplicantAccount = {
   id?: string;
@@ -1437,13 +1438,12 @@ export function ApplicantJobsMap() {
           />
         )
       ) : (
-        <button
-          type="button"
-          onClick={() => toggleApplicantInterest(job, matchPercent)}
-          className="w-full rounded-md bg-red-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
-        >
-          {interestState === "candidate_interested" ? "Remove interest" : "Interested"}
-        </button>
+        <div className="flex w-full items-center justify-center">
+          <HeartToggleButton
+            interested={interestState === "candidate_interested"}
+            onClick={() => toggleApplicantInterest(job, matchPercent)}
+          />
+        </div>
       );
     const detailContent = (
       <>
