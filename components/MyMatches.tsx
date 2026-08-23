@@ -3,9 +3,11 @@
 import { useEffect, useState } from "react";
 import { attemptPreferredContact } from "../lib/contactPreferences";
 import { logAdminEvent } from "../lib/adminEvents";
+import { calculateSkillMatch, getApplicantMatchSignals } from "../lib/skillMatch";
 import {
   getAllApplicantProfiles,
   getAllJobs,
+  getApplicantInterests,
   getCurrentMvpUser,
   getEmployerProfile,
   getMutualMatches,
@@ -24,11 +26,28 @@ type MatchRecord = {
   candidateProfile?: MvpApplicantProfile;
 };
 
+// Employer-only: a candidate who has expressed interest in one of this
+// employer's jobs, but there's no mutual match yet. Privacy: only fields
+// already visible pre-mutual-match on Find Applicants are read here -
+// zipCode, topSkills, experienceLevel, a computed match % - fullName and
+// candidateEmail are deliberately never read into this record at all, so
+// there's nothing to accidentally render.
+type PendingInterestRecord = {
+  key: string;
+  job: MvpJobListing;
+  zipCode: string;
+  topSkills: string[];
+  experienceLevel: string;
+  matchPercent: number;
+};
+
 export function MyMatches({ role }: { role: Role }) {
   const [userId, setUserId] = useState("");
   const [accountEmail, setAccountEmail] = useState("");
   const [matches, setMatches] = useState<MatchRecord[]>([]);
+  const [pendingInterests, setPendingInterests] = useState<PendingInterestRecord[]>([]);
   const [expandedMatchKey, setExpandedMatchKey] = useState("");
+  const [expandedPendingKey, setExpandedPendingKey] = useState("");
   const [pendingRemoveInterest, setPendingRemoveInterest] = useState<MatchRecord | null>(null);
   const [privateNotes, setPrivateNotes] = useState<Record<string, string>>({});
 
@@ -42,10 +61,11 @@ export function MyMatches({ role }: { role: Role }) {
         return;
       }
 
-      const [jobs, mutualMatches, candidateProfiles] = await Promise.all([
+      const [jobs, mutualMatches, candidateProfiles, applicantInterests] = await Promise.all([
         getAllJobs(),
         getMutualMatches(),
-        getAllApplicantProfiles()
+        getAllApplicantProfiles(),
+        role === "employer" ? getApplicantInterests() : Promise.resolve([])
       ]);
       const scopedMatches = mutualMatches.filter((match) =>
         role === "employer" ? match.employerId === user.id : match.candidateId === user.id
@@ -70,6 +90,38 @@ export function MyMatches({ role }: { role: Role }) {
           })
           .filter(Boolean) as MatchRecord[]
       );
+
+      if (role === "employer") {
+        const mutualPairKeys = new Set(scopedMatches.map((match) => `${match.jobId}:${match.candidateId}`));
+
+        setPendingInterests(
+          applicantInterests
+            .filter((interest) => interest.employerId === user.id && !mutualPairKeys.has(`${interest.jobId}:${interest.candidateId}`))
+            .map((interest) => {
+              const job = jobs.find((storedJob) => storedJob.id === interest.jobId);
+              const candidateProfile = candidateProfiles.find((profile) => profile.userId === interest.candidateId);
+              if (!job) {
+                return null;
+              }
+
+              const matchPercent = calculateSkillMatch(
+                job.requiredSkills,
+                getApplicantMatchSignals(candidateProfile ?? null),
+                job.title
+              ).percentage;
+
+              return {
+                key: `${interest.employerId}:${interest.jobId}:${interest.candidateId}`,
+                job,
+                zipCode: candidateProfile?.zipCode || "",
+                topSkills: candidateProfile?.topSkills ?? [],
+                experienceLevel: candidateProfile?.experienceLevel || "",
+                matchPercent
+              };
+            })
+            .filter(Boolean) as PendingInterestRecord[]
+        );
+      }
     }
   }, [role]);
 
@@ -170,6 +222,73 @@ export function MyMatches({ role }: { role: Role }) {
           </div>
         </div>
       </section>
+
+      {role === "employer" ? (
+        <section className="mx-auto max-w-5xl px-4 pb-12">
+          <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.16em] text-red-800">Worth a look</p>
+              <h2 className="mt-2 text-2xl font-bold text-zinc-950">Candidates interested in you</h2>
+              <p className="mt-2 text-sm leading-6 text-zinc-600">
+                These candidates expressed interest in one of your listings, but it&apos;s not mutual yet - mark
+                interest back on Find Applicants to unlock full profile details.
+              </p>
+            </div>
+
+            <div className="mt-6 space-y-3">
+              {pendingInterests.length > 0 ? (
+                pendingInterests.map((record) => {
+                  const isExpanded = expandedPendingKey === record.key;
+                  return (
+                    <article key={record.key} className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
+                      <button
+                        type="button"
+                        onClick={() => setExpandedPendingKey(isExpanded ? "" : record.key)}
+                        className="flex w-full items-center justify-between gap-3 bg-white p-4 text-left transition hover:bg-gray-50"
+                      >
+                        <span className="font-bold text-zinc-950">{record.job.title}</span>
+                        <span className="flex items-center gap-2">
+                          <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-800">&hearts; Interested</span>
+                          <span className="rounded-full bg-zinc-800 px-3 py-1 text-xs font-bold text-white">{record.matchPercent}%</span>
+                        </span>
+                      </button>
+                      {isExpanded ? (
+                        <div className="space-y-3 p-4">
+                          <div className="grid gap-3 text-sm md:grid-cols-2">
+                            <Detail label="Applicant area" value={record.zipCode || "Generalized ZIP area"} />
+                            <Detail label="Experience level" value={record.experienceLevel || "Not listed"} />
+                          </div>
+                          {record.topSkills.length > 0 ? (
+                            <div>
+                              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Skills</p>
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {record.topSkills.map((skill) => (
+                                  <span key={skill} className="rounded-full border border-gray-200 bg-white px-3 py-1 text-xs font-semibold text-zinc-700">
+                                    {skill}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                          <p className="text-xs text-zinc-500">
+                            Full profile details (name, exact location, AI summary) unlock once you mark interest
+                            back on Find Applicants and it becomes a mutual match.
+                          </p>
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                })
+              ) : (
+                <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-5">
+                  <p className="text-sm font-semibold text-zinc-950">No one-sided interest yet</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+      ) : null}
+
       {pendingRemoveInterest ? (
         <RemoveInterestConfirmationModal
           onCancel={() => setPendingRemoveInterest(null)}

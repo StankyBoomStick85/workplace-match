@@ -112,23 +112,27 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
       metadata: { notificationType: notification.type }
     });
 
-    if (notification.type !== "new_match") {
+    if (notification.type !== "new_match" && notification.type !== "interest_received") {
       return;
     }
 
     const params = new URLSearchParams();
     params.set("matchJobId", notification.jobId);
-    if (notification.candidateId) {
+    // Only a confirmed mutual match carries a candidateId worth deep-linking to
+    // a specific pin - a one-sided interest_received notification never does,
+    // so this never auto-focuses (and so never risks pointing at) one specific
+    // candidate before there's a mutual match to justify it.
+    if (notification.type === "new_match" && notification.candidateId) {
       params.set("candidateId", notification.candidateId);
     }
-    if (notification.employerId) {
+    if (notification.type === "new_match" && notification.employerId) {
       params.set("employerId", notification.employerId);
     }
 
     const nextPath =
       activeRole === "employer"
         ? `/employer/find-applicants?${params.toString()}`
-        : `/jobs?${params.toString()}`;
+        : `/applicant/job-map?${params.toString()}`;
 
     if (window.location.pathname === nextPath.split("?")[0]) {
       window.history.replaceState(null, "", nextPath);

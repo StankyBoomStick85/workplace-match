@@ -4,6 +4,7 @@ import L from "leaflet";
 import { useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { Circle, MapContainer, Marker, Polygon, Popup, TileLayer, ZoomControl, useMap } from "react-leaflet";
 import {
+  addInterestReceivedNotification,
   addNewMessageNotification,
   addNewMatchNotification,
   addScheduleRequestNotification,
@@ -61,6 +62,7 @@ type JobListing = {
 };
 
 type applicantProfile = {
+  userId?: string;
   candidateEmail?: string;
   fullName?: string;
   zipCode?: string;
@@ -382,6 +384,18 @@ export function EmployerFindApplicants() {
         employerId: nextInterest.employerId,
         dedupeKey: `employer-interest:${nextInterest.employerId}:${nextInterest.jobId}:${nextInterest.candidateId}`
       });
+      // First-sided interest notification (mutual match, below, sends its own
+      // separate stronger notification). Company/job are already public to the
+      // candidate, so naming them here is fine.
+      if (profile.userId) {
+        addInterestReceivedNotification({
+          recipientUserId: profile.userId,
+          jobId: job.id,
+          jobTitle: job.title,
+          title: "An employer is interested",
+          message: `An employer is interested in you for ${job.title}. Take a look and see if you'd like to express interest back.`
+        });
+      }
       return updated;
     });
 

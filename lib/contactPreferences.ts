@@ -1,6 +1,7 @@
 import type { LocalAccount } from "./localAccounts";
 import {
   addNotification,
+  addNotificationByUserId,
   markNotificationsReadForEmail,
   readNotificationsForEmail
 } from "./supabaseMvpData";
@@ -9,7 +10,7 @@ export type ContactMethod = "email" | "text" | "call";
 
 export type ContactNotification = {
   id: string;
-  type: "new_match" | "new_message" | "schedule_request" | "missed_contact";
+  type: "new_match" | "new_message" | "schedule_request" | "missed_contact" | "interest_received";
   recipientEmail: string;
   senderEmail: string;
   jobId: string;
@@ -119,6 +120,35 @@ export function addScheduleRequestNotification(notification: Omit<ContactNotific
     ...notification,
     type: "schedule_request",
     title: "Schedule Request"
+  });
+}
+
+// Fires on a FIRST-SIDED interest (not just mutual match), so the recipient
+// learns someone is interested and can look and reciprocate. Delivered by the
+// recipient's real user id, not email - see addNotificationByUserId() for why.
+// The message text is the only place identity/privacy is controlled: callers
+// on the employer side must never put a candidate's name in it, only what's
+// already visible pre-mutual-match (ZIP-area, skills, match %).
+export function addInterestReceivedNotification({
+  recipientUserId,
+  jobId,
+  jobTitle,
+  title,
+  message
+}: {
+  recipientUserId: string;
+  jobId: string;
+  jobTitle: string;
+  title: string;
+  message: string;
+}) {
+  void addNotificationByUserId({
+    recipientUserId,
+    type: "interest_received",
+    title,
+    message,
+    jobId,
+    jobTitle
   });
 }
 

@@ -83,7 +83,7 @@ export type MvpMatch = {
 
 export type MvpNotification = {
   id: string;
-  type: "new_match" | "new_message" | "schedule_request" | "missed_contact";
+  type: "new_match" | "new_message" | "schedule_request" | "missed_contact" | "interest_received";
   recipientEmail: string;
   senderEmail: string;
   jobId: string;
@@ -309,6 +309,36 @@ export async function addNotification(notification: Omit<MvpNotification, "id" |
   });
 
   return nextNotification;
+}
+
+// addNotification() above resolves recipientEmail -> user_id via
+// getUserByEmail(), which silently fails for candidates: the candidate-profiles
+// read never joins users, so a candidate's email is never available to
+// employer-side code. This writes directly by the real users.id instead
+// (candidate_profiles.user_id / job_posts.employer_id are both already real
+// user ids, no join needed), so one-sided interest notifications can actually
+// reach the recipient regardless of that gap.
+export async function addNotificationByUserId(notification: {
+  recipientUserId: string;
+  type: string;
+  title: string;
+  message: string;
+  jobId?: string;
+  jobTitle?: string;
+}) {
+  const payload = JSON.stringify({
+    message: notification.message,
+    title: notification.title,
+    jobId: notification.jobId,
+    jobTitle: notification.jobTitle
+  });
+
+  await supabase.from("notifications").insert({
+    user_id: notification.recipientUserId,
+    type: notification.type,
+    message: payload,
+    read: false
+  });
 }
 
 export async function markNotificationsReadForEmail(email: string) {

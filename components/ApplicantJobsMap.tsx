@@ -4,6 +4,7 @@ import L from "leaflet";
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { Circle, MapContainer, Marker, Polygon, Popup, TileLayer, ZoomControl, useMap } from "react-leaflet";
 import {
+  addInterestReceivedNotification,
   addNewMessageNotification,
   addNewMatchNotification,
   addScheduleRequestNotification,
@@ -1025,6 +1026,22 @@ export function ApplicantJobsMap() {
         employerId: nextInterest.employerId,
         dedupeKey: `candidate-interest:${nextInterest.employerId}:${nextInterest.jobId}:${nextInterest.candidateId}`
       });
+      // First-sided interest notification (mutual match, below, sends its own
+      // separate stronger notification). Privacy: only what's already visible
+      // pre-mutual-match on this employer's Find Applicants view - ZIP-area,
+      // skills, match % - never name, exact address, or AI narrative summary.
+      if (job.employerId) {
+        const skillsPreview = (profile?.topSkills ?? []).slice(0, 5).join(", ");
+        addInterestReceivedNotification({
+          recipientUserId: job.employerId,
+          jobId: job.id,
+          jobTitle: job.title,
+          title: "A candidate is interested",
+          message: `A candidate near ${profile?.zipCode || "your area"} is interested in your ${job.title} listing (${matchPercent}% match).${
+            skillsPreview ? ` Skills: ${skillsPreview}.` : ""
+          }`
+        });
+      }
       return updated;
     });
 

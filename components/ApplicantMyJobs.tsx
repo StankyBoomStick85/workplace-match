@@ -10,12 +10,12 @@ import {
   type MvpMatch
 } from "../lib/supabaseMvpData";
 
-type JobEntry =
-  | { kind: "matched"; job: MvpJobListing; match: MvpMatch }
-  | { kind: "interested"; job: MvpJobListing };
+type MatchedEntry = { job: MvpJobListing; match: MvpMatch };
+type InterestedEntry = { job: MvpJobListing };
 
 export function ApplicantMyJobs() {
-  const [entries, setEntries] = useState<JobEntry[]>([]);
+  const [matchedEntries, setMatchedEntries] = useState<MatchedEntry[]>([]);
+  const [interestedEntries, setInterestedEntries] = useState<InterestedEntry[]>([]);
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
@@ -35,16 +35,19 @@ export function ApplicantMyJobs() {
       const userMatches = matches.filter((m) => m.candidateId === user.id);
       const matchedJobIds = new Set(userMatches.map((m) => m.jobId));
 
-      const matchedEntries: JobEntry[] = userMatches
-        .map((match) => ({ kind: "matched" as const, match, job: jobs.find((j) => j.id === match.jobId) }))
-        .filter((r): r is { kind: "matched"; job: MvpJobListing; match: MvpMatch } => Boolean(r.job));
+      const nextMatchedEntries: MatchedEntry[] = userMatches
+        .map((match) => ({ match, job: jobs.find((j) => j.id === match.jobId) }))
+        .filter((r): r is MatchedEntry => Boolean(r.job));
 
-      const interestedEntries: JobEntry[] = interests
+      // One-sided interest only - a job that's already mutual belongs in the
+      // Mutual Matches section above, not duplicated down here.
+      const nextInterestedEntries: InterestedEntry[] = interests
         .filter((i) => i.candidateId === user.id && !matchedJobIds.has(i.jobId))
-        .map((i) => ({ kind: "interested" as const, job: jobs.find((j) => j.id === i.jobId) }))
-        .filter((r): r is { kind: "interested"; job: MvpJobListing } => Boolean(r.job));
+        .map((i) => ({ job: jobs.find((j) => j.id === i.jobId) }))
+        .filter((r): r is InterestedEntry => Boolean(r.job));
 
-      setEntries([...matchedEntries, ...interestedEntries]);
+      setMatchedEntries(nextMatchedEntries);
+      setInterestedEntries(nextInterestedEntries);
       setIsReady(true);
     }
     load();
@@ -58,63 +61,118 @@ export function ApplicantMyJobs() {
     );
   }
 
+  const hasAnyEntries = matchedEntries.length > 0 || interestedEntries.length > 0;
+
   return (
     <section className="mx-auto max-w-5xl px-4 py-12">
       <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
         <h1 className="text-3xl font-bold text-zinc-950">My Jobs</h1>
-        {entries.length === 0 ? (
+        {!hasAnyEntries ? (
           <p className="mt-6 text-sm text-zinc-600">
             Nothing here yet. Start exploring the Job Map and click interest on roles that fit.
           </p>
         ) : (
-          <div className="mt-6 space-y-4">
-            {entries.map((entry) => (
-              <article
-                key={entry.job.id}
-                className="rounded-lg border border-gray-200 bg-white p-5"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h3 className="text-lg font-bold text-zinc-950">{entry.job.title}</h3>
-                    <p className="mt-1 text-sm text-zinc-600">
-                      {[entry.job.locationCity, entry.job.locationState, entry.job.locationZip]
-                        .filter(Boolean)
-                        .join(", ")}
-                    </p>
-                  </div>
-                  {entry.kind === "matched" ? (
-                    <span className="rounded-full bg-red-900 px-3 py-1 text-xs font-bold text-white">
-                      {entry.match.matchPercent}%
-                    </span>
-                  ) : (
-                    <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs font-bold text-zinc-600">
-                      Interested
-                    </span>
-                  )}
+          <div className="mt-6 space-y-8">
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-red-800">Mutual Matches</h2>
+                <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-800">
+                  Both sides are interested
+                </span>
+              </div>
+              {matchedEntries.length > 0 ? (
+                <div className="mt-4 space-y-4">
+                  {matchedEntries.map((entry) => (
+                    <JobCard key={entry.job.id} job={entry.job} badge={<MatchBadge percent={entry.match.matchPercent} />} isMutual />
+                  ))}
                 </div>
-                <div className="mt-4 grid gap-3 text-sm md:grid-cols-3">
-                  <InfoCard label="Pay range" value={entry.job.payRange || "Not listed"} />
-                  <InfoCard label="Job type" value={entry.job.jobType || "Not listed"} />
-                  <InfoCard label="Schedule" value={entry.job.schedule || "Not listed"} />
+              ) : (
+                <p className="mt-3 text-sm text-zinc-600">
+                  No mutual matches yet - these appear once an employer you&apos;re interested in is interested back.
+                </p>
+              )}
+            </div>
+
+            <div>
+              <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-zinc-500">Jobs You&apos;re Interested In</h2>
+              {interestedEntries.length > 0 ? (
+                <div className="mt-4 space-y-4">
+                  {interestedEntries.map((entry) => (
+                    <JobCard key={entry.job.id} job={entry.job} badge={<InterestedBadge />} />
+                  ))}
                 </div>
-                <p className="mt-4 text-sm leading-6 text-zinc-700">{entry.job.description}</p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <button type="button" className="rounded-md bg-green-700 px-3 py-2 text-sm font-semibold text-white">
-                    Reach Out
-                  </button>
-                  <button type="button" className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">
-                    Message
-                  </button>
-                  <button type="button" className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">
-                    Schedule Conversation
-                  </button>
-                </div>
-              </article>
-            ))}
+              ) : (
+                <p className="mt-3 text-sm text-zinc-600">
+                  Nothing here yet. Jobs you mark interest in show up here until the employer reciprocates.
+                </p>
+              )}
+            </div>
           </div>
         )}
       </div>
     </section>
+  );
+}
+
+function MatchBadge({ percent }: { percent: number }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="rounded-full bg-red-900 px-2.5 py-0.5 text-xs font-bold text-white">MATCH</span>
+      <span className="rounded-full bg-red-900 px-3 py-1 text-xs font-bold text-white">{percent}%</span>
+    </span>
+  );
+}
+
+function InterestedBadge() {
+  return (
+    <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs font-bold text-zinc-600">Interested</span>
+  );
+}
+
+function JobCard({
+  job,
+  badge,
+  isMutual = false
+}: {
+  job: MvpJobListing;
+  badge: React.ReactNode;
+  isMutual?: boolean;
+}) {
+  return (
+    <article
+      className={`rounded-lg border p-5 ${
+        isMutual ? "border-red-200 bg-red-50/40" : "border-gray-200 bg-white"
+      }`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-bold text-zinc-950">{job.title}</h3>
+          <p className="mt-1 text-sm text-zinc-600">
+            {[job.locationCity, job.locationState, job.locationZip].filter(Boolean).join(", ")}
+          </p>
+        </div>
+        {badge}
+      </div>
+      <div className="mt-4 grid gap-3 text-sm md:grid-cols-3">
+        <InfoCard label="Pay range" value={job.payRange || "Not listed"} />
+        <InfoCard label="Job type" value={job.jobType || "Not listed"} />
+        <InfoCard label="Schedule" value={job.schedule || "Not listed"} />
+      </div>
+      <p className="mt-4 text-sm leading-6 text-zinc-700">{job.description}</p>
+      {isMutual ? (
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button type="button" className="rounded-md bg-green-700 px-3 py-2 text-sm font-semibold text-white">
+            Reach Out
+          </button>
+          <button type="button" className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">
+            Message
+          </button>
+          <button type="button" className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">
+            Schedule Conversation
+          </button>
+        </div>
+      ) : null}
+    </article>
   );
 }
 
