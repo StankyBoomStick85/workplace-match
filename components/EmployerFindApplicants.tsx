@@ -229,6 +229,23 @@ export function EmployerFindApplicants() {
       setInterests(employerInterestRows as EmployerInterest[]);
       setApplicantInterests(applicantInterestRows as ApplicantInterest[]);
       setMutualMatches(mutualMatchRows as MutualMatch[]);
+
+      // Backfill: heals pairs that became reciprocal while the old
+      // stale-state detection bug was live (both interests already existed
+      // in the DB, but no matches row was ever written). New interest
+      // actions detect mutuality live now (see addInterest), but this
+      // catches the pairs that got stuck before that fix existed.
+      const healedMatches = await healMissingMutualMatches({
+        userId: user.id,
+        jobs: employerJobs as JobListing[],
+        profiles: fetchedApplicantProfiles as applicantProfile[],
+        employerInterests: employerInterestRows as EmployerInterest[],
+        applicantInterests: applicantInterestRows as ApplicantInterest[],
+        existingMatches: mutualMatchRows as MutualMatch[]
+      });
+      if (healedMatches.length > 0) {
+        setMutualMatches((current) => [...healedMatches, ...current]);
+      }
     }
   }, []);
 
@@ -390,13 +407,11 @@ export function EmployerFindApplicants() {
       return;
     }
 
-    // applicantInterests employerId is the real DB user id, not an email - see
-    // the matching note in getApplicantInterestState().
-    const hasCandidateInterest = applicantInterests.some((interest) =>
-      isCandidateInterestForPair(interest, employerUserId, nextInterest.jobId, nextInterest.candidateId)
-    );
-
-    const { error: interestWriteError } = await addSupabaseInterest({
+    // hasCandidateInterest comes back from a live reciprocal DB lookup inside
+    // addSupabaseInterest - not from the applicantInterests array loaded at
+    // page mount, which would miss a candidate interest written after this
+    // page loaded and silently fail to detect the mutual match.
+    const { error: interestWriteError, mutual: hasCandidateInterest } = await addSupabaseInterest({
       fromUserId: employerUserId,
       toUserId: candidateUserId,
       jobId: nextInterest.jobId
@@ -558,6 +573,7 @@ export function EmployerFindApplicants() {
             onDrawingCustomAreaChange={setIsDrawingCustomArea}
             onCustomAreaPointsChange={setCustomAreaPoints}
             onEmployerInterestForJob={toggleEmployerInterestForJob}
+            employerAccount={account}
           />
 
           <div className="absolute left-4 top-4 z-[900] max-h-[calc(100%-2rem)] w-[min(24rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border border-gray-200 bg-white/95 p-4 shadow-soft">
@@ -681,6 +697,7 @@ export function EmployerFindApplicants() {
               applicantSummaries={applicantSummaries}
               selectedJobId={selectedJobId}
               onEmployerInterestForJob={toggleEmployerInterestForJob}
+              employerAccount={account}
             />
           </div>
         </div>
@@ -822,11 +839,13 @@ function FindApplicantsViewToggle({
 function ApplicantListView({
   applicantSummaries,
   selectedJobId,
-  onEmployerInterestForJob
+  onEmployerInterestForJob,
+  employerAccount
 }: {
   applicantSummaries: ApplicantMatchSummary[];
   selectedJobId: string;
   onEmployerInterestForJob: (job: JobListing, profile: applicantProfile, matchPercent: number) => void;
+  employerAccount: EmployerAccount | null;
 }) {
   const [expandedApplicantId, setExpandedApplicantId] = useState("");
   const sortedApplicants = useMemo(
@@ -886,6 +905,7 @@ function ApplicantListView({
                   applicant={applicant}
                   focusedJobId={selectedJobId}
                   onEmployerInterestForJob={onEmployerInterestForJob}
+                  employerAccount={employerAccount}
                   variant="panel"
                   hideHeader
                 />
@@ -907,7 +927,8 @@ function MapSurface({
   customAreaPoints,
   onDrawingCustomAreaChange,
   onCustomAreaPointsChange,
-  onEmployerInterestForJob
+  onEmployerInterestForJob,
+  employerAccount
 }: {
   job: JobListing | null;
   applicantGroups: ApplicantLocationGroup[];
@@ -918,6 +939,7 @@ function MapSurface({
   onDrawingCustomAreaChange: (isDrawing: boolean) => void;
   onCustomAreaPointsChange: Dispatch<SetStateAction<Coordinates[]>>;
   onEmployerInterestForJob: (job: JobListing, profile: applicantProfile, matchPercent: number) => void;
+  employerAccount: EmployerAccount | null;
 }) {
   const jobPosition = job ? getJobMapPosition(job) : stLouisCenter;
   const mapCenter = jobPosition ?? stLouisCenter;
@@ -1012,12 +1034,14 @@ function MapSurface({
                 focusedApplicantId={focusedApplicantId}
                 focusedJobId={job?.id ?? ""}
                 onEmployerInterestForJob={onEmployerInterestForJob}
+                employerAccount={employerAccount}
               />
             ) : (
               <ApplicantMatchPopup
                 applicant={group.applicants[0]}
                 focusedJobId={job?.id ?? ""}
                 onEmployerInterestForJob={onEmployerInterestForJob}
+                employerAccount={employerAccount}
               />
             )}
           </Popup>
@@ -1089,12 +1113,14 @@ function ApplicantLocationGroupPopup({
   group,
   focusedApplicantId,
   focusedJobId,
-  onEmployerInterestForJob
+  onEmployerInterestForJob,
+  employerAccount
 }: {
   group: ApplicantLocationGroup;
   focusedApplicantId: string;
   focusedJobId: string;
   onEmployerInterestForJob: (job: JobListing, profile: applicantProfile, matchPercent: number) => void;
+  employerAccount: EmployerAccount | null;
 }) {
   const [selectedApplicantId, setSelectedApplicantId] = useState<string | null>(focusedApplicantId || null);
   const selectedApplicant = group.applicants.find((applicant) => applicant.id === selectedApplicantId) ?? null;
@@ -1119,6 +1145,7 @@ function ApplicantLocationGroupPopup({
           applicant={selectedApplicant}
           focusedJobId={focusedJobId}
           onEmployerInterestForJob={onEmployerInterestForJob}
+          employerAccount={employerAccount}
         />
       </div>
     );
@@ -1174,17 +1201,18 @@ function ApplicantMatchPopup({
   applicant,
   focusedJobId = "",
   onEmployerInterestForJob,
+  employerAccount,
   variant = "popup",
   hideHeader = false
 }: {
   applicant: ApplicantMatchSummary;
   focusedJobId?: string;
   onEmployerInterestForJob: (job: JobListing, profile: applicantProfile, matchPercent: number) => void;
+  employerAccount: EmployerAccount | null;
   variant?: "popup" | "panel";
   hideHeader?: boolean;
 }) {
   const [dismissedMutualActionJobIds, setDismissedMutualActionJobIds] = useState<string[]>([]);
-  const employerAccount = readEmployerAccount();
   const ApplicantAccount = findCandidateAccount(applicant.profile);
   const orderedJobMatches = focusedJobId
     ? [...applicant.jobMatches].sort((first, second) => {
@@ -1250,6 +1278,7 @@ function ApplicantMatchPopup({
               <EmployerMutualMatchActions
                 job={job}
                 applicantId={applicant.id}
+                profile={applicant.profile}
                 employerAccount={employerAccount}
                 ApplicantAccount={ApplicantAccount}
                 onDismiss={() =>
@@ -1270,12 +1299,14 @@ function ApplicantMatchPopup({
 function EmployerMutualMatchActions({
   job,
   applicantId,
+  profile,
   employerAccount,
   ApplicantAccount,
   onDismiss
 }: {
   job: JobListing;
   applicantId: string;
+  profile: applicantProfile;
   employerAccount: EmployerAccount | null;
   ApplicantAccount: ApplicantAccount | null;
   onDismiss: () => void;
@@ -1285,9 +1316,11 @@ function EmployerMutualMatchActions({
   const [messages, setMessages] = useState<MatchMessage[]>([]);
   const [messageText, setMessageText] = useState("");
   const [selectedTime, setSelectedTime] = useState(employerAccount?.availabilityWindows?.[0] ?? "");
+  // match_messages.employer_id is a uuid FK - must be the real auth user id,
+  // never an email (job.employerEmail is a display string, not a uuid).
   const thread: MatchThreadContext = {
     applicantId,
-    employerId: employerAccount?.email ?? job.employerEmail,
+    employerId: employerAccount?.id ?? job.employerId ?? "",
     jobId: job.id
   };
 
@@ -1400,6 +1433,25 @@ function EmployerMutualMatchActions({
 
   return (
     <div className="mt-3 space-y-2 border-t border-gray-100 pt-3">
+      {/* Mutual-match-only unlock: name and AI narrative summary never render
+          pre-match - only zip-area/skills/match % are shown before this. */}
+      <div className="space-y-1.5 rounded-md border border-red-100 bg-red-50 p-3">
+        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-red-800">Mutual match unlocked</p>
+        <p className="text-sm font-bold text-zinc-950">{profile.fullName || "Name not provided"}</p>
+        {profile.experienceLevel ? <p className="text-xs text-zinc-600">{profile.experienceLevel}</p> : null}
+        {profile.topSkills?.length ? (
+          <div className="flex flex-wrap gap-1.5">
+            {profile.topSkills.map((skill) => (
+              <span key={skill} className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-zinc-700">
+                {skill}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {profile.capabilitySummary ? (
+          <p className="text-sm leading-6 text-zinc-700">{profile.capabilitySummary}</p>
+        ) : null}
+      </div>
       <div className="grid grid-cols-2 gap-2">
         <button
           type="button"
@@ -1593,10 +1645,6 @@ function readEmployerInterests() {
   return [] as EmployerInterest[];
 }
 
-function readEmployerAccount() {
-  return null;
-}
-
 function findCandidateAccount(profile: applicantProfile) {
   return profile.candidateEmail ? { email: profile.candidateEmail } : null;
 }
@@ -1643,6 +1691,78 @@ function createMutualMatchRecord(interest: EmployerInterest): MutualMatch {
       candidateExternal: "pending"
     }
   };
+}
+
+async function healMissingMutualMatches({
+  userId,
+  jobs,
+  profiles,
+  employerInterests,
+  applicantInterests,
+  existingMatches
+}: {
+  userId: string;
+  jobs: JobListing[];
+  profiles: applicantProfile[];
+  employerInterests: EmployerInterest[];
+  applicantInterests: ApplicantInterest[];
+  existingMatches: MutualMatch[];
+}): Promise<MutualMatch[]> {
+  const existingMatchKeys = new Set(existingMatches.map((match) => `${match.employerId}:${match.jobId}:${match.candidateId}`));
+  const reciprocalPairs = employerInterests.filter(
+    (employerInterest) =>
+      employerInterest.employerId === userId &&
+      !existingMatchKeys.has(`${employerInterest.employerId}:${employerInterest.jobId}:${employerInterest.candidateId}`) &&
+      applicantInterests.some((applicantInterest) =>
+        isCandidateInterestForPair(applicantInterest, employerInterest.employerId, employerInterest.jobId, employerInterest.candidateId)
+      )
+  );
+
+  const healed: MutualMatch[] = [];
+  for (const pair of reciprocalPairs) {
+    const job = jobs.find((candidateJob) => candidateJob.id === pair.jobId);
+    if (!job) {
+      continue;
+    }
+    const profile = profiles.find((candidateProfile) => candidateProfile.userId === pair.candidateId);
+    const matchPercent = calculateSkillMatch(job.requiredSkills, getApplicantMatchSignals(profile ?? null), job.title).percentage;
+
+    const { error: matchWriteError } = await addSupabaseMutualMatch({
+      candidateId: pair.candidateId,
+      employerId: userId,
+      jobId: pair.jobId,
+      matchPercent
+    });
+    if (matchWriteError) {
+      console.error("[healMissingMutualMatches] Failed to write healed match", { pair, error: matchWriteError });
+      continue;
+    }
+
+    const [candidateNotifyResult, employerNotifyResult] = await Promise.all([
+      addMatchFoundNotification({ recipientUserId: pair.candidateId, jobId: pair.jobId, jobTitle: job.title, candidateId: pair.candidateId, employerId: userId }),
+      addMatchFoundNotification({ recipientUserId: userId, jobId: pair.jobId, jobTitle: job.title, candidateId: pair.candidateId, employerId: userId })
+    ]);
+    if (candidateNotifyResult.error || employerNotifyResult.error) {
+      console.error("[healMissingMutualMatches] Match healed but a notification failed to send", { pair });
+    }
+
+    healed.push({
+      employerId: userId,
+      jobId: pair.jobId,
+      candidateId: pair.candidateId,
+      matchPercent,
+      createdAt: new Date().toISOString(),
+      status: "mutual_match",
+      notificationStatus: {
+        employerInternal: "pending",
+        candidateInternal: "pending",
+        employerExternal: "pending",
+        candidateExternal: "pending"
+      }
+    });
+  }
+
+  return healed;
 }
 
 function getZipMapPosition(zipCode?: string): Coordinates | null {

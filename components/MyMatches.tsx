@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { attemptPreferredContact } from "../lib/contactPreferences";
 import { logAdminEvent } from "../lib/adminEvents";
+import { addMatchThreadMessage, refreshMatchThreadMessages, type MatchMessage, type MatchThreadContext } from "../lib/matchMessages";
 import { calculateSkillMatch, getApplicantMatchSignals } from "../lib/skillMatch";
 import {
   getAllApplicantProfiles,
@@ -52,6 +53,9 @@ export function MyMatches({ role }: { role: Role }) {
   const [expandedPendingKey, setExpandedPendingKey] = useState("");
   const [pendingRemoveInterest, setPendingRemoveInterest] = useState<MatchRecord | null>(null);
   const [privateNotes, setPrivateNotes] = useState<Record<string, string>>({});
+  const [openMessageKey, setOpenMessageKey] = useState("");
+  const [threadMessages, setThreadMessages] = useState<Record<string, MatchMessage[]>>({});
+  const [messageDrafts, setMessageDrafts] = useState<Record<string, string>>({});
 
   // Notification click-through: land directly on the relevant record rather
   // than a bare list. Checks the mutual list first, then the one-sided
@@ -175,6 +179,46 @@ export function MyMatches({ role }: { role: Role }) {
     });
   }
 
+  function getThread(record: MatchRecord): MatchThreadContext {
+    return {
+      applicantId: record.match.candidateId,
+      employerId: record.match.employerId,
+      jobId: record.job.id
+    };
+  }
+
+  async function toggleMessaging(record: MatchRecord) {
+    if (openMessageKey === record.key) {
+      setOpenMessageKey("");
+      return;
+    }
+
+    setOpenMessageKey(record.key);
+    const messages = await refreshMatchThreadMessages(getThread(record));
+    setThreadMessages((current) => ({ ...current, [record.key]: messages }));
+  }
+
+  function sendMatchMessage(record: MatchRecord) {
+    const text = (messageDrafts[record.key] ?? "").trim();
+    if (!text) {
+      return;
+    }
+
+    const message = addMatchThreadMessage({
+      ...getThread(record),
+      senderRole: role === "employer" ? "employer" : "applicant",
+      senderEmail: accountEmail,
+      text
+    });
+
+    if (!message) {
+      return;
+    }
+
+    setThreadMessages((current) => ({ ...current, [record.key]: [...(current[record.key] ?? []), message] }));
+    setMessageDrafts((current) => ({ ...current, [record.key]: "" }));
+  }
+
   async function removeMatchInterest(record: MatchRecord) {
     const toUserId = role === "employer" ? record.match.candidateId : record.match.employerId;
     await removeInterest({ fromUserId: userId, toUserId, jobId: record.job.id });
@@ -217,24 +261,37 @@ export function MyMatches({ role }: { role: Role }) {
                     {isExpanded ? (
                       <div className="space-y-4 p-4">
                         {role === "employer" ? (
-                          <div className="grid gap-3 sm:grid-cols-2">
-                            <div className="rounded-md border border-gray-200 bg-white p-3">
-                              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Applicant area</p>
-                              <p className="mt-1 font-semibold text-zinc-950">{record.candidateProfile?.zipCode || "Generalized ZIP area"}</p>
+                          <div className="space-y-3">
+                            {/* Mutual-match-only unlock: name and AI narrative summary never
+                                render pre-match - see PendingInterestRecord above. */}
+                            <div className="rounded-md border border-red-100 bg-red-50 p-3">
+                              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-red-800">Mutual match unlocked</p>
+                              <p className="mt-1 text-sm font-bold text-zinc-950">
+                                {record.candidateProfile?.fullName || "Name not provided"}
+                              </p>
+                              {record.candidateProfile?.capabilitySummary ? (
+                                <p className="mt-1 text-sm leading-6 text-zinc-700">{record.candidateProfile.capabilitySummary}</p>
+                              ) : null}
                             </div>
-                            <div className="rounded-md border border-gray-200 bg-white p-3">
-                              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Skills</p>
-                              {record.candidateProfile?.topSkills?.length ? (
-                                <div className="mt-1 flex flex-wrap gap-1.5">
-                                  {record.candidateProfile.topSkills.map((skill) => (
-                                    <span key={skill} className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-zinc-700">
-                                      {skill}
-                                    </span>
-                                  ))}
-                                </div>
-                              ) : (
-                                <p className="mt-1 text-sm text-zinc-600">Not listed</p>
-                              )}
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <div className="rounded-md border border-gray-200 bg-white p-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Applicant area</p>
+                                <p className="mt-1 font-semibold text-zinc-950">{record.candidateProfile?.zipCode || "Generalized ZIP area"}</p>
+                              </div>
+                              <div className="rounded-md border border-gray-200 bg-white p-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Skills</p>
+                                {record.candidateProfile?.topSkills?.length ? (
+                                  <div className="mt-1 flex flex-wrap gap-1.5">
+                                    {record.candidateProfile.topSkills.map((skill) => (
+                                      <span key={skill} className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-zinc-700">
+                                        {skill}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="mt-1 text-sm text-zinc-600">Not listed</p>
+                                )}
+                              </div>
                             </div>
                           </div>
                         ) : null}
@@ -256,10 +313,42 @@ export function MyMatches({ role }: { role: Role }) {
                         </div>
                         <div className="flex flex-wrap gap-2">
                           <button type="button" onClick={() => reachOut(record)} className="rounded-md bg-green-700 px-3 py-2 text-sm font-semibold text-white">Reach Out</button>
-                          <button type="button" className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">Message</button>
+                          <button type="button" onClick={() => toggleMessaging(record)} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">Message</button>
                           <button type="button" className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">Schedule Conversation</button>
                           <button type="button" onClick={() => setPendingRemoveInterest(record)} className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">Remove Interest</button>
                         </div>
+                        {openMessageKey === record.key ? (
+                          <div className="space-y-2 rounded-md border border-gray-200 bg-gray-50 p-3">
+                            <div className="max-h-40 space-y-1 overflow-y-auto text-sm text-zinc-700">
+                              {(threadMessages[record.key] ?? []).length > 0 ? (
+                                (threadMessages[record.key] ?? []).map((message) => (
+                                  <p key={message.id} className="rounded bg-white px-2 py-1">
+                                    <span className="font-semibold">
+                                      {(message.senderRole === "employer") === (role === "employer") ? "You" : "Them"}:
+                                    </span>{" "}
+                                    {message.text}
+                                  </p>
+                                ))
+                              ) : (
+                                <p>No messages yet.</p>
+                              )}
+                            </div>
+                            <textarea
+                              value={messageDrafts[record.key] ?? ""}
+                              onChange={(event) => setMessageDrafts((current) => ({ ...current, [record.key]: event.target.value }))}
+                              rows={2}
+                              className="field"
+                              placeholder="Write a message..."
+                            />
+                            <button
+                              type="button"
+                              onClick={() => sendMatchMessage(record)}
+                              className="w-full rounded-md bg-red-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
+                            >
+                              Send message
+                            </button>
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                   </article>

@@ -447,11 +447,29 @@ export function ApplicantJobsMap() {
         setMatchScoresByMode(initial);
       }
 
-      setJobs(getEmployerCreatedJobs(savedJobs as JobListing[]));
+      const scopedJobs = getEmployerCreatedJobs(savedJobs as JobListing[]);
+      setJobs(scopedJobs);
       setCompanyProfile(null);
       setApplicantInterests(savedApplicantInterests as ApplicantInterest[]);
       setEmployerInterests(savedEmployerInterests as EmployerInterest[]);
       setMutualMatches(savedMutualMatches as MutualMatch[]);
+
+      // Backfill: heals pairs that became reciprocal while the old
+      // stale-state detection bug was live (both interests already existed
+      // in the DB, but no matches row was ever written). New interest
+      // actions detect mutuality live now (see addInterest), but this
+      // catches the pairs that got stuck before that fix existed.
+      const healedMatches = await healMissingMutualMatches({
+        candidateId: user.id,
+        profile: savedProfile ?? null,
+        jobs: scopedJobs,
+        applicantInterests: savedApplicantInterests as ApplicantInterest[],
+        employerInterests: savedEmployerInterests as EmployerInterest[],
+        existingMatches: savedMutualMatches as MutualMatch[]
+      });
+      if (healedMatches.length > 0) {
+        setMutualMatches((current) => [...healedMatches, ...current]);
+      }
     }
   }, []);
 
@@ -1029,16 +1047,11 @@ export function ApplicantJobsMap() {
       return;
     }
 
-    // employerInterests employerId is the real DB user id, not the job's
-    // display email - job.employerId is what actually matches it.
-    const hasEmployerInterest = employerInterests.some(
-      (interest) =>
-        interest.employerId === employerUserId &&
-        interest.jobId === nextInterest.jobId &&
-        interest.candidateId === nextInterest.candidateId
-    );
-
-    const { error: interestWriteError } = await addSupabaseInterest({
+    // hasEmployerInterest comes back from a live reciprocal DB lookup inside
+    // addSupabaseInterest - not from the employerInterests array loaded at
+    // page mount, which would miss an employer interest written after this
+    // page loaded and silently fail to detect the mutual match.
+    const { error: interestWriteError, mutual: hasEmployerInterest } = await addSupabaseInterest({
       fromUserId: candidateId,
       toUserId: employerUserId,
       jobId: nextInterest.jobId
@@ -1314,9 +1327,11 @@ export function ApplicantJobsMap() {
   }
 
   function getMatchThread(job: JobListing): MatchThreadContext {
+    // match_messages.employer_id is a uuid FK - must be the real auth user id,
+    // never an email (job.employerEmail is a display string, not a uuid).
     return {
       applicantId: candidateId,
-      employerId: job.employerEmail,
+      employerId: job.employerId ?? "",
       jobId: job.id
     };
   }
@@ -3359,6 +3374,80 @@ function findEmployerAccount(email: string) {
 
 function getEmployerCreatedJobs(jobs: JobListing[]) {
   return jobs.filter((job) => job.id && job.employerEmail && !isSeedJob(job));
+}
+
+async function healMissingMutualMatches({
+  candidateId,
+  profile,
+  jobs,
+  applicantInterests,
+  employerInterests,
+  existingMatches
+}: {
+  candidateId: string;
+  profile: ApplicantProfile | null;
+  jobs: JobListing[];
+  applicantInterests: ApplicantInterest[];
+  employerInterests: EmployerInterest[];
+  existingMatches: MutualMatch[];
+}): Promise<MutualMatch[]> {
+  const existingMatchKeys = new Set(existingMatches.map((match) => `${match.employerId}:${match.jobId}:${match.candidateId}`));
+  const reciprocalPairs = applicantInterests.filter(
+    (applicantInterest) =>
+      applicantInterest.candidateId === candidateId &&
+      !existingMatchKeys.has(`${applicantInterest.employerId}:${applicantInterest.jobId}:${applicantInterest.candidateId}`) &&
+      employerInterests.some(
+        (employerInterest) =>
+          employerInterest.employerId === applicantInterest.employerId &&
+          employerInterest.jobId === applicantInterest.jobId &&
+          employerInterest.candidateId === applicantInterest.candidateId
+      )
+  );
+
+  const healed: MutualMatch[] = [];
+  for (const pair of reciprocalPairs) {
+    const job = jobs.find((candidateJob) => candidateJob.id === pair.jobId);
+    if (!job) {
+      continue;
+    }
+    const matchPercent = calculateSkillMatch(job.requiredSkills, getApplicantMatchSignals(profile), job.title).percentage;
+
+    const { error: matchWriteError } = await addSupabaseMutualMatch({
+      candidateId,
+      employerId: pair.employerId,
+      jobId: pair.jobId,
+      matchPercent
+    });
+    if (matchWriteError) {
+      console.error("[healMissingMutualMatches] Failed to write healed match", { pair, error: matchWriteError });
+      continue;
+    }
+
+    const [candidateNotifyResult, employerNotifyResult] = await Promise.all([
+      addMatchFoundNotification({ recipientUserId: candidateId, jobId: pair.jobId, jobTitle: job.title, candidateId, employerId: pair.employerId }),
+      addMatchFoundNotification({ recipientUserId: pair.employerId, jobId: pair.jobId, jobTitle: job.title, candidateId, employerId: pair.employerId })
+    ]);
+    if (candidateNotifyResult.error || employerNotifyResult.error) {
+      console.error("[healMissingMutualMatches] Match healed but a notification failed to send", { pair });
+    }
+
+    healed.push({
+      employerId: pair.employerId,
+      jobId: pair.jobId,
+      candidateId,
+      matchPercent,
+      createdAt: new Date().toISOString(),
+      status: "mutual_match",
+      notificationStatus: {
+        employerInternal: "pending",
+        candidateInternal: "pending",
+        employerExternal: "pending",
+        candidateExternal: "pending"
+      }
+    });
+  }
+
+  return healed;
 }
 
 function isSeedJob(job: JobListing) {

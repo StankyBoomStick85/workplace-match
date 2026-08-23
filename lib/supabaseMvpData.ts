@@ -178,7 +178,7 @@ export async function addInterest({
   fromUserId: string;
   toUserId: string;
   jobId: string;
-}): Promise<{ error: string | null }> {
+}): Promise<{ error: string | null; mutual: boolean }> {
   const { error } = await supabase.from("interests").upsert(
     {
       from_user_id: fromUserId,
@@ -191,7 +191,7 @@ export async function addInterest({
 
   if (error) {
     console.error("[addInterest] Failed to write interest", { fromUserId, toUserId, jobId, error: error.message });
-    return { error: error.message };
+    return { error: error.message, mutual: false };
   }
 
   triggerTransactionalEmail({
@@ -199,7 +199,49 @@ export async function addInterest({
     recipientUserId: toUserId,
     jobId
   });
-  return { error: null };
+
+  // Reciprocal check runs as a live DB read here rather than relying on the
+  // caller's client-side interest arrays (loaded once at page mount) - if the
+  // other party's interest was written after this session's page load, a
+  // stale in-memory check would silently never detect the pair, and the
+  // matches row would never get created. This is the single source of truth
+  // for whether the two directions currently form a mutual pair.
+  const mutual = await checkReciprocalInterest({ fromUserId: toUserId, toUserId: fromUserId, jobId });
+  return { error: null, mutual };
+}
+
+export async function checkReciprocalInterest({
+  fromUserId,
+  toUserId,
+  jobId
+}: {
+  fromUserId: string;
+  toUserId: string;
+  jobId: string;
+}): Promise<boolean> {
+  try {
+    const existing = await fetchMvpData<{ id: string } | null>("reciprocal-interest", {
+      fromUserId,
+      toUserId,
+      jobId
+    });
+    console.log("[checkReciprocalInterest] Reciprocal lookup", {
+      searchedFor: { fromUserId, toUserId, jobId },
+      found: existing ? existing.id : null
+    });
+    return Boolean(existing);
+  } catch (error) {
+    // The interest row this check follows has already been written
+    // successfully by this point - a failure here must not be thrown back up
+    // and treated as the interest write itself failing. It just means we
+    // can't confirm mutuality right now; log it so it's visible instead of a
+    // swallowed unhandled rejection, and let a later reload/action re-check.
+    console.error("[checkReciprocalInterest] Reciprocal lookup failed", {
+      searchedFor: { fromUserId, toUserId, jobId },
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return false;
+  }
 }
 
 export async function removeInterest({

@@ -54,7 +54,16 @@ export function addMatchThreadMessage(message: Omit<MatchMessage, "id" | "create
     sender_role: message.senderRole,
     sender_email: message.senderEmail,
     text: trimmedText
-  }).then(() => {
+  }).then(({ error }) => {
+    if (error) {
+      console.error("[addMatchThreadMessage] Failed to write message", {
+        applicantId: message.applicantId,
+        employerId: message.employerId,
+        jobId: message.jobId,
+        error: error.message
+      });
+      return;
+    }
     window.dispatchEvent(new Event("workplace-match-messages-updated"));
   });
   logAdminEvent({

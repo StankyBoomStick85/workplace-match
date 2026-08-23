@@ -175,6 +175,23 @@ export async function GET(request: Request) {
       return NextResponse.json({ data: data ?? [] });
     }
 
+    if (resource === "reciprocal-interest") {
+      const fromUserId = requestUrl.searchParams.get("fromUserId") ?? "";
+      const toUserId = requestUrl.searchParams.get("toUserId") ?? "";
+      const jobId = requestUrl.searchParams.get("jobId") ?? "";
+      if (!fromUserId || !toUserId || !jobId) return NextResponse.json({ data: null });
+      const { data, error } = await adminClient
+        .from("interests")
+        .select("id,from_user_id,to_user_id,job_id,status")
+        .eq("from_user_id", fromUserId)
+        .eq("to_user_id", toUserId)
+        .eq("job_id", jobId)
+        .eq("status", "pending")
+        .maybeSingle();
+      if (error) throw error;
+      return NextResponse.json({ data });
+    }
+
     if (resource === "match-exists") {
       const candidateId = requestUrl.searchParams.get("candidateId") ?? "";
       const employerId = requestUrl.searchParams.get("employerId") ?? "";
