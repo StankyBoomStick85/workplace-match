@@ -5,8 +5,8 @@ import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateActio
 import { Circle, MapContainer, Marker, Polygon, Popup, TileLayer, ZoomControl, useMap } from "react-leaflet";
 import {
   addInterestReceivedNotification,
+  addMatchFoundNotification,
   addNewMessageNotification,
-  addNewMatchNotification,
   addScheduleRequestNotification,
   attemptPreferredContact,
   type ContactMethod
@@ -335,6 +335,7 @@ export function ApplicantJobsMap() {
   const [showMatchPopup, setShowMatchPopup] = useState(false);
   const [matchPopupJob, setMatchPopupJob] = useState<JobListing | null>(null);
   const [pendingRemoveInterestJob, setPendingRemoveInterestJob] = useState<JobListing | null>(null);
+  const [interestError, setInterestError] = useState("");
   const [selectedGroupedJobId, setSelectedGroupedJobId] = useState("");
   const [selectedJobSource, setSelectedJobSource] = useState<SelectedJobSource>(null);
   const [clusterToReopenKey, setClusterToReopenKey] = useState("");
@@ -461,7 +462,10 @@ export function ApplicantJobsMap() {
     };
   }, []);
 
-  const candidateId = profile ? getApplicantInterestId(profile) : "candidate-profile:local-mvp";
+  // Must be the real signed-in auth id - interests/matches are uuid foreign
+  // keys, and this candidate IS the logged-in user, so there's no need to
+  // derive an id from their profile at all.
+  const candidateId = account?.id ?? "";
   const applicantLocationResolution = useMemo(
     () => getApplicantSelfMapResolution(account, profile),
     [account, profile]
@@ -956,9 +960,12 @@ export function ApplicantJobsMap() {
   }, [clusterToReopenKey, selectedGroupedJobId, visibleJobGroups]);
 
   function getJobInterestState(job: JobListing): InterestState {
+    // mutualMatches/applicantInterests come from the DB and their employerId
+    // fields are the real employer user id - job.employerEmail is a string
+    // display value, not a uuid, so job.employerId is what actually matches.
     const hasMutualMatch = mutualMatches.some(
       (match) =>
-        match.employerId === job.employerEmail &&
+        match.employerId === job.employerId &&
         match.jobId === job.id &&
         match.candidateId === candidateId
     );
@@ -969,7 +976,7 @@ export function ApplicantJobsMap() {
 
     const hasApplicantInterest = applicantInterests.some(
       (interest) =>
-        interest.employerId === job.employerEmail &&
+        interest.employerId === job.employerId &&
         interest.jobId === job.id &&
         interest.candidateId === candidateId
     );
@@ -977,7 +984,7 @@ export function ApplicantJobsMap() {
     return hasApplicantInterest ? "candidate_interested" : "none";
   }
 
-  function toggleApplicantInterest(job: JobListing, matchPercent: number) {
+  async function toggleApplicantInterest(job: JobListing, matchPercent: number) {
     const interestState = getJobInterestState(job);
 
     if (interestState !== "none") {
@@ -985,140 +992,174 @@ export function ApplicantJobsMap() {
       return;
     }
 
+    if (!candidateId) {
+      setInterestError("Can't record interest - your account id is missing.");
+      return;
+    }
+
+    if (!job.employerId) {
+      setInterestError("Can't record interest - this listing is missing its employer id.");
+      return;
+    }
+
+    const employerUserId = job.employerId;
+    setInterestError("");
+
+    // employerId here must match what getApplicantInterests() puts in this
+    // same state array (the real employer user id) - using job.employerEmail
+    // would make a freshly-added local entry silently unmatchable against
+    // itself and against mutualMatches/employerInterests going forward.
     const nextInterest: ApplicantInterest = {
       candidateId,
-      employerId: job.employerEmail,
+      employerId: employerUserId,
       jobId: job.id,
       matchPercent,
       createdAt: new Date().toISOString(),
       status: "candidate_interested"
     };
-    const hasEmployerInterest = employerInterests.some(
+
+    const alreadyExistsLocally = applicantInterests.some(
       (interest) =>
         interest.employerId === nextInterest.employerId &&
         interest.jobId === nextInterest.jobId &&
         interest.candidateId === nextInterest.candidateId
     );
+    if (alreadyExistsLocally) {
+      return;
+    }
 
-    setApplicantInterests((current) => {
-      const alreadyExists = current.some(
-        (interest) =>
-          interest.employerId === nextInterest.employerId &&
-          interest.jobId === nextInterest.jobId &&
-          interest.candidateId === nextInterest.candidateId
-      );
+    // employerInterests employerId is the real DB user id, not the job's
+    // display email - job.employerId is what actually matches it.
+    const hasEmployerInterest = employerInterests.some(
+      (interest) =>
+        interest.employerId === employerUserId &&
+        interest.jobId === nextInterest.jobId &&
+        interest.candidateId === nextInterest.candidateId
+    );
 
-      if (alreadyExists) {
-        return current;
-      }
-
-      const updated = [nextInterest, ...current];
-      addSupabaseInterest({
-        fromUserId: nextInterest.candidateId,
-        toUserId: job.employerId ?? nextInterest.employerId,
-        jobId: nextInterest.jobId
-      });
-      logAdminEvent({
-        type: "interest_selected",
-        userRole: "candidate",
-        jobId: nextInterest.jobId,
-        applicantId: nextInterest.candidateId,
-        employerId: nextInterest.employerId,
-        dedupeKey: `candidate-interest:${nextInterest.employerId}:${nextInterest.jobId}:${nextInterest.candidateId}`
-      });
-      // First-sided interest notification (mutual match, below, sends its own
-      // separate stronger notification). Privacy: only what's already visible
-      // pre-mutual-match on this employer's Find Applicants view - ZIP-area,
-      // skills, match % - never name, exact address, or AI narrative summary.
-      if (job.employerId) {
-        const skillsPreview = (profile?.topSkills ?? []).slice(0, 5).join(", ");
-        addInterestReceivedNotification({
-          recipientUserId: job.employerId,
-          jobId: job.id,
-          jobTitle: job.title,
-          title: "A candidate is interested",
-          message: `A candidate near ${profile?.zipCode || "your area"} is interested in your ${job.title} listing (${matchPercent}% match).${
-            skillsPreview ? ` Skills: ${skillsPreview}.` : ""
-          }`
-        });
-      }
-      return updated;
+    const { error: interestWriteError } = await addSupabaseInterest({
+      fromUserId: candidateId,
+      toUserId: employerUserId,
+      jobId: nextInterest.jobId
     });
 
-    if (hasEmployerInterest) {
-      const nextMutualMatch = createMutualMatchRecord(nextInterest);
-      setShowMatchPopup(true);
-      setMatchPopupJob(job);
+    if (interestWriteError) {
+      setInterestError(`Couldn't record interest: ${interestWriteError}`);
+      return;
+    }
 
-      setMutualMatches((current) => {
-        const alreadyExists = current.some(
-          (match) =>
-            match.employerId === nextMutualMatch.employerId &&
-            match.jobId === nextMutualMatch.jobId &&
-            match.candidateId === nextMutualMatch.candidateId
-        );
+    setApplicantInterests((current) => [nextInterest, ...current]);
+    logAdminEvent({
+      type: "interest_selected",
+      userRole: "candidate",
+      jobId: nextInterest.jobId,
+      applicantId: nextInterest.candidateId,
+      employerId: nextInterest.employerId,
+      dedupeKey: `candidate-interest:${nextInterest.employerId}:${nextInterest.jobId}:${nextInterest.candidateId}`
+    });
 
-        if (alreadyExists) {
-          return current;
-        }
+    // First-sided interest notification (mutual match, below, sends its own
+    // separate stronger notification). Privacy: only what's already visible
+    // pre-mutual-match on this employer's Find Applicants view - ZIP-area,
+    // skills, match % - never name, exact address, or AI narrative summary.
+    const skillsPreview = (profile?.topSkills ?? []).slice(0, 5).join(", ");
+    const { error: interestNotifyError } = await addInterestReceivedNotification({
+      recipientUserId: employerUserId,
+      jobId: job.id,
+      jobTitle: job.title,
+      title: "A candidate is interested",
+      message: `A candidate near ${profile?.zipCode || "your area"} is interested in your ${job.title} listing (${matchPercent}% match).${
+        skillsPreview ? ` Skills: ${skillsPreview}.` : ""
+      }`
+    });
+    if (interestNotifyError) {
+      setInterestError(`Interest recorded, but the notification to the employer failed to send: ${interestNotifyError}`);
+    }
 
-        const updated = [nextMutualMatch, ...current];
-        addSupabaseMutualMatch({
-          candidateId: nextMutualMatch.candidateId,
-          employerId: job.employerId ?? nextMutualMatch.employerId,
-          jobId: nextMutualMatch.jobId,
-          matchPercent: nextMutualMatch.matchPercent
-        });
-        logAdminEvent({
-          type: "mutual_match_created",
-          userRole: "candidate",
-          jobId: nextMutualMatch.jobId,
-          applicantId: nextMutualMatch.candidateId,
-          employerId: nextMutualMatch.employerId,
-          dedupeKey: `mutual-match:${nextMutualMatch.employerId}:${nextMutualMatch.jobId}:${nextMutualMatch.candidateId}`
-        });
-        addNewMatchNotification({
-          recipientEmail: nextInterest.employerId,
-          senderEmail: account?.email ?? "",
-          jobId: nextMutualMatch.jobId,
-          jobTitle: job.title,
-          candidateId: nextMutualMatch.candidateId,
-          employerId: nextInterest.employerId,
-          dedupeKey: `new-match:${nextInterest.employerId}:${nextMutualMatch.jobId}:${nextMutualMatch.candidateId}`
-        });
-        if (account?.email) {
-          addNewMatchNotification({
-            recipientEmail: account.email,
-            senderEmail: nextInterest.employerId,
-            jobId: nextMutualMatch.jobId,
-            jobTitle: job.title,
-            candidateId: nextMutualMatch.candidateId,
-            employerId: nextInterest.employerId,
-            dedupeKey: `new-match:${account.email}:${nextMutualMatch.jobId}:${nextMutualMatch.candidateId}`
-          });
-        }
-        return updated;
-      });
+    if (!hasEmployerInterest) {
+      return;
+    }
+
+    const nextMutualMatch = createMutualMatchRecord(nextInterest);
+    const alreadyMatchedLocally = mutualMatches.some(
+      (match) =>
+        match.employerId === nextMutualMatch.employerId &&
+        match.jobId === nextMutualMatch.jobId &&
+        match.candidateId === nextMutualMatch.candidateId
+    );
+    if (alreadyMatchedLocally) {
+      return;
+    }
+
+    const { error: matchWriteError } = await addSupabaseMutualMatch({
+      candidateId: nextMutualMatch.candidateId,
+      employerId: employerUserId,
+      jobId: nextMutualMatch.jobId,
+      matchPercent: nextMutualMatch.matchPercent
+    });
+
+    if (matchWriteError) {
+      setInterestError(`Couldn't record the mutual match: ${matchWriteError}`);
+      return;
+    }
+
+    setShowMatchPopup(true);
+    setMatchPopupJob(job);
+    setMutualMatches((current) => [nextMutualMatch, ...current]);
+    logAdminEvent({
+      type: "mutual_match_created",
+      userRole: "candidate",
+      jobId: nextMutualMatch.jobId,
+      applicantId: nextMutualMatch.candidateId,
+      employerId: nextMutualMatch.employerId,
+      dedupeKey: `mutual-match:${nextMutualMatch.employerId}:${nextMutualMatch.jobId}:${nextMutualMatch.candidateId}`
+    });
+
+    const [candidateNotifyResult, employerNotifyResult] = await Promise.all([
+      addMatchFoundNotification({
+        recipientUserId: candidateId,
+        jobId: nextMutualMatch.jobId,
+        jobTitle: job.title,
+        candidateId,
+        employerId: employerUserId
+      }),
+      addMatchFoundNotification({
+        recipientUserId: employerUserId,
+        jobId: nextMutualMatch.jobId,
+        jobTitle: job.title,
+        candidateId,
+        employerId: employerUserId
+      })
+    ]);
+    if (candidateNotifyResult.error || employerNotifyResult.error) {
+      setInterestError("Mutual match recorded, but a match notification failed to send.");
     }
   }
 
-  function removeCandidateInterest(job: JobListing) {
+  async function removeCandidateInterest(job: JobListing) {
     setShowMatchPopup(false);
+
+    if (candidateId) {
+      const { error } = await removeSupabaseInterest({
+        fromUserId: candidateId,
+        toUserId: job.employerId ?? job.employerEmail,
+        jobId: job.id
+      });
+      if (error) {
+        setInterestError(`Couldn't remove interest: ${error}`);
+        return;
+      }
+    }
 
     setApplicantInterests((current) => {
       const updated = current.filter(
         (interest) =>
           !(
-            interest.employerId === job.employerEmail &&
+            interest.employerId === job.employerId &&
             interest.jobId === job.id &&
             interest.candidateId === candidateId
           )
       );
-      removeSupabaseInterest({
-        fromUserId: candidateId,
-        toUserId: job.employerId ?? job.employerEmail,
-        jobId: job.id
-      });
       if (updated.length !== current.length) {
         logAdminEvent({
           type: "interest_removed",
@@ -1131,17 +1172,16 @@ export function ApplicantJobsMap() {
       return updated;
     });
 
-    setMutualMatches((current) => {
-      const updated = current.filter(
+    setMutualMatches((current) =>
+      current.filter(
         (match) =>
           !(
-            match.employerId === job.employerEmail &&
+            match.employerId === job.employerId &&
             match.jobId === job.id &&
             match.candidateId === candidateId
           )
-      );
-      return updated;
-    });
+      )
+    );
   }
 
   function getJobPopupData(job: JobListing) {
@@ -2917,6 +2957,22 @@ export function ApplicantJobsMap() {
         </div>
       </div>
 
+      {interestError ? (
+        <div className="fixed bottom-4 right-4 z-[1300] max-w-sm rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800 shadow-soft">
+          <div className="flex items-start justify-between gap-3">
+            <span>{interestError}</span>
+            <button
+              type="button"
+              onClick={() => setInterestError("")}
+              aria-label="Dismiss"
+              className="shrink-0 text-red-500 hover:text-red-800"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {showMatchPopup ? (
         <MatchPopup
           onClose={() => setShowMatchPopup(false)}
@@ -3307,10 +3363,6 @@ function getEmployerCreatedJobs(jobs: JobListing[]) {
 
 function isSeedJob(job: JobListing) {
   return job.id.startsWith("wm-test-") || job.employerEmail === "grouping-test-employer@workplacematch.local";
-}
-
-function getApplicantInterestId(profile: ApplicantProfile) {
-  return profile.updatedAt ? `candidate-profile:${profile.updatedAt}` : "candidate-profile:local-mvp";
 }
 
 function getApplicantMapProfileFromAccount(account: ApplicantAccount): ApplicantProfile | null {

@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { attemptPreferredContact } from "../lib/contactPreferences";
 import { logAdminEvent } from "../lib/adminEvents";
@@ -42,6 +43,7 @@ type PendingInterestRecord = {
 };
 
 export function MyMatches({ role }: { role: Role }) {
+  const searchParams = useSearchParams();
   const [userId, setUserId] = useState("");
   const [accountEmail, setAccountEmail] = useState("");
   const [matches, setMatches] = useState<MatchRecord[]>([]);
@@ -50,6 +52,39 @@ export function MyMatches({ role }: { role: Role }) {
   const [expandedPendingKey, setExpandedPendingKey] = useState("");
   const [pendingRemoveInterest, setPendingRemoveInterest] = useState<MatchRecord | null>(null);
   const [privateNotes, setPrivateNotes] = useState<Record<string, string>>({});
+
+  // Notification click-through: land directly on the relevant record rather
+  // than a bare list. Checks the mutual list first, then the one-sided
+  // pending-interest list, since a matchJobId can be either depending on
+  // which notification was clicked.
+  useEffect(() => {
+    focusFromLocation();
+    window.addEventListener("workplace-match-focus-match", focusFromLocation);
+    return () => window.removeEventListener("workplace-match-focus-match", focusFromLocation);
+
+    function focusFromLocation() {
+      const params = new URLSearchParams(window.location.search);
+      const matchJobId = params.get("matchJobId");
+      const candidateIdParam = params.get("candidateId");
+      if (!matchJobId) {
+        return;
+      }
+
+      const matchedRecord = matches.find(
+        (record) => record.job.id === matchJobId && (!candidateIdParam || record.match.candidateId === candidateIdParam)
+      );
+      if (matchedRecord) {
+        setExpandedMatchKey(matchedRecord.key);
+        return;
+      }
+
+      const pendingRecord = pendingInterests.find((record) => record.job.id === matchJobId);
+      if (pendingRecord) {
+        setExpandedPendingKey(pendingRecord.key);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matches, pendingInterests, searchParams]);
 
   useEffect(() => {
     loadMatches();
@@ -182,9 +217,25 @@ export function MyMatches({ role }: { role: Role }) {
                     {isExpanded ? (
                       <div className="space-y-4 p-4">
                         {role === "employer" ? (
-                          <div className="rounded-md border border-gray-200 bg-white p-3">
-                            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Applicant area</p>
-                            <p className="mt-1 font-semibold text-zinc-950">{record.candidateProfile?.zipCode || "Generalized ZIP area"}</p>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <div className="rounded-md border border-gray-200 bg-white p-3">
+                              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Applicant area</p>
+                              <p className="mt-1 font-semibold text-zinc-950">{record.candidateProfile?.zipCode || "Generalized ZIP area"}</p>
+                            </div>
+                            <div className="rounded-md border border-gray-200 bg-white p-3">
+                              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Skills</p>
+                              {record.candidateProfile?.topSkills?.length ? (
+                                <div className="mt-1 flex flex-wrap gap-1.5">
+                                  {record.candidateProfile.topSkills.map((skill) => (
+                                    <span key={skill} className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-zinc-700">
+                                      {skill}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="mt-1 text-sm text-zinc-600">Not listed</p>
+                              )}
+                            </div>
                           </div>
                         ) : null}
                         <div className="grid gap-3 text-sm md:grid-cols-3">

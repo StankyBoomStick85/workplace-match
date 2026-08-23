@@ -142,13 +142,44 @@ export function addInterestReceivedNotification({
   title: string;
   message: string;
 }) {
-  void addNotificationByUserId({
+  return addNotificationByUserId({
     recipientUserId,
     type: "interest_received",
     title,
     message,
     jobId,
     jobTitle
+  });
+}
+
+// Reliable mutual-match notification, delivered by real user id like
+// addInterestReceivedNotification() above - addNewMatchNotification() (email
+// resolution) is left in place but no longer called for the employer<->
+// candidate loop, since that resolution path is proven unreliable for
+// candidates (candidate-profiles never joins users, so candidateEmail is
+// always undefined server-side).
+export function addMatchFoundNotification({
+  recipientUserId,
+  jobId,
+  jobTitle,
+  candidateId,
+  employerId
+}: {
+  recipientUserId: string;
+  jobId: string;
+  jobTitle: string;
+  candidateId: string;
+  employerId: string;
+}) {
+  return addNotificationByUserId({
+    recipientUserId,
+    type: "new_match",
+    title: "New Match",
+    message: "You have a new mutual match.",
+    jobId,
+    jobTitle,
+    candidateId,
+    employerId
   });
 }
 

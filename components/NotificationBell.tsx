@@ -119,9 +119,9 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
     const params = new URLSearchParams();
     params.set("matchJobId", notification.jobId);
     // Only a confirmed mutual match carries a candidateId worth deep-linking to
-    // a specific pin - a one-sided interest_received notification never does,
-    // so this never auto-focuses (and so never risks pointing at) one specific
-    // candidate before there's a mutual match to justify it.
+    // a specific candidate - a one-sided interest_received notification never
+    // does, so this never auto-focuses (and so never risks pointing at) one
+    // specific candidate before there's a mutual match to justify it.
     if (notification.type === "new_match" && notification.candidateId) {
       params.set("candidateId", notification.candidateId);
     }
@@ -129,9 +129,14 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
       params.set("employerId", notification.employerId);
     }
 
+    // Employer notifications land on Matches (mutual matches are the record
+    // that lives there; a one-sided interest_received still lands there too,
+    // where the employer Matches page shows it in the separate "candidates
+    // interested in you" section - never Find Applicants, which was the wrong
+    // destination for "go look at this specific match/interest").
     const nextPath =
       activeRole === "employer"
-        ? `/employer/find-applicants?${params.toString()}`
+        ? `/employer/matches?${params.toString()}`
         : `/applicant/job-map?${params.toString()}`;
 
     if (window.location.pathname === nextPath.split("?")[0]) {

@@ -178,8 +178,8 @@ export async function addInterest({
   fromUserId: string;
   toUserId: string;
   jobId: string;
-}) {
-  await supabase.from("interests").upsert(
+}): Promise<{ error: string | null }> {
+  const { error } = await supabase.from("interests").upsert(
     {
       from_user_id: fromUserId,
       to_user_id: toUserId,
@@ -188,11 +188,18 @@ export async function addInterest({
     },
     { onConflict: "from_user_id,to_user_id,job_id" }
   );
+
+  if (error) {
+    console.error("[addInterest] Failed to write interest", { fromUserId, toUserId, jobId, error: error.message });
+    return { error: error.message };
+  }
+
   triggerTransactionalEmail({
     type: "interest_notification",
     recipientUserId: toUserId,
     jobId
   });
+  return { error: null };
 }
 
 export async function removeInterest({
@@ -203,15 +210,19 @@ export async function removeInterest({
   fromUserId: string;
   toUserId: string;
   jobId: string;
-}) {
-  await supabase
-    .from("interests")
-    .delete()
-    .eq("from_user_id", fromUserId)
-    .eq("to_user_id", toUserId)
-    .eq("job_id", jobId);
-  await supabase.from("matches").delete().eq("candidate_id", toUserId).eq("employer_id", fromUserId).eq("job_id", jobId);
-  await supabase.from("matches").delete().eq("candidate_id", fromUserId).eq("employer_id", toUserId).eq("job_id", jobId);
+}): Promise<{ error: string | null }> {
+  const results = await Promise.all([
+    supabase.from("interests").delete().eq("from_user_id", fromUserId).eq("to_user_id", toUserId).eq("job_id", jobId),
+    supabase.from("matches").delete().eq("candidate_id", toUserId).eq("employer_id", fromUserId).eq("job_id", jobId),
+    supabase.from("matches").delete().eq("candidate_id", fromUserId).eq("employer_id", toUserId).eq("job_id", jobId)
+  ]);
+
+  const failed = results.find((result) => result.error);
+  if (failed?.error) {
+    console.error("[removeInterest] Failed to remove interest/match", { fromUserId, toUserId, jobId, error: failed.error.message });
+    return { error: failed.error.message };
+  }
+  return { error: null };
 }
 
 export async function getMutualMatches() {
@@ -224,14 +235,14 @@ export async function addMutualMatch(match: {
   employerId: string;
   jobId: string;
   matchPercent: number;
-}) {
+}): Promise<{ error: string | null }> {
   const existingMatch = await fetchMvpData<{ id: string } | null>("match-exists", {
     candidateId: match.candidateId,
     employerId: match.employerId,
     jobId: match.jobId
   });
 
-  await supabase.from("matches").upsert(
+  const { error } = await supabase.from("matches").upsert(
     {
       candidate_id: match.candidateId,
       employer_id: match.employerId,
@@ -242,6 +253,11 @@ export async function addMutualMatch(match: {
     },
     { onConflict: "candidate_id,employer_id,job_id" }
   );
+
+  if (error) {
+    console.error("[addMutualMatch] Failed to write mutual match", { match, error: error.message });
+    return { error: error.message };
+  }
 
   if (!existingMatch) {
     triggerTransactionalEmail({
@@ -255,6 +271,7 @@ export async function addMutualMatch(match: {
       jobId: match.jobId
     });
   }
+  return { error: null };
 }
 
 export async function readNotificationsForEmail(email: string) {
@@ -325,20 +342,34 @@ export async function addNotificationByUserId(notification: {
   message: string;
   jobId?: string;
   jobTitle?: string;
-}) {
+  candidateId?: string;
+  employerId?: string;
+}): Promise<{ error: string | null }> {
   const payload = JSON.stringify({
     message: notification.message,
     title: notification.title,
     jobId: notification.jobId,
-    jobTitle: notification.jobTitle
+    jobTitle: notification.jobTitle,
+    candidateId: notification.candidateId,
+    employerId: notification.employerId
   });
 
-  await supabase.from("notifications").insert({
+  const { error } = await supabase.from("notifications").insert({
     user_id: notification.recipientUserId,
     type: notification.type,
     message: payload,
     read: false
   });
+
+  if (error) {
+    console.error("[addNotificationByUserId] Failed to write notification", {
+      recipientUserId: notification.recipientUserId,
+      type: notification.type,
+      error: error.message
+    });
+    return { error: error.message };
+  }
+  return { error: null };
 }
 
 export async function markNotificationsReadForEmail(email: string) {

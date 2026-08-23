@@ -5,6 +5,7 @@ import {
   getAllJobs,
   getApplicantInterests,
   getCurrentMvpUser,
+  getEmployerInterests,
   getMutualMatches,
   type MvpJobListing,
   type MvpMatch
@@ -16,6 +17,7 @@ type InterestedEntry = { job: MvpJobListing };
 export function ApplicantMyJobs() {
   const [matchedEntries, setMatchedEntries] = useState<MatchedEntry[]>([]);
   const [interestedEntries, setInterestedEntries] = useState<InterestedEntry[]>([]);
+  const [employerInterestedEntries, setEmployerInterestedEntries] = useState<InterestedEntry[]>([]);
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
@@ -26,10 +28,11 @@ export function ApplicantMyJobs() {
         return;
       }
 
-      const [jobs, matches, interests] = await Promise.all([
+      const [jobs, matches, interests, employerInterests] = await Promise.all([
         getAllJobs(),
         getMutualMatches(),
-        getApplicantInterests()
+        getApplicantInterests(),
+        getEmployerInterests()
       ]);
 
       const userMatches = matches.filter((m) => m.candidateId === user.id);
@@ -46,8 +49,18 @@ export function ApplicantMyJobs() {
         .map((i) => ({ job: jobs.find((j) => j.id === i.jobId) }))
         .filter((r): r is InterestedEntry => Boolean(r.job));
 
+      // Employer-initiated one-sided interest - an employer marked interest in
+      // this candidate for one of their jobs, but the candidate hasn't
+      // reciprocated yet. This is the reciprocal half of the interest loop:
+      // without this section a candidate has no way to ever learn about it.
+      const nextEmployerInterestedEntries: InterestedEntry[] = employerInterests
+        .filter((i) => i.candidateId === user.id && !matchedJobIds.has(i.jobId))
+        .map((i) => ({ job: jobs.find((j) => j.id === i.jobId) }))
+        .filter((r): r is InterestedEntry => Boolean(r.job));
+
       setMatchedEntries(nextMatchedEntries);
       setInterestedEntries(nextInterestedEntries);
+      setEmployerInterestedEntries(nextEmployerInterestedEntries);
       setIsReady(true);
     }
     load();
@@ -61,7 +74,8 @@ export function ApplicantMyJobs() {
     );
   }
 
-  const hasAnyEntries = matchedEntries.length > 0 || interestedEntries.length > 0;
+  const hasAnyEntries =
+    matchedEntries.length > 0 || interestedEntries.length > 0 || employerInterestedEntries.length > 0;
 
   return (
     <section className="mx-auto max-w-5xl px-4 py-12">
@@ -89,6 +103,24 @@ export function ApplicantMyJobs() {
               ) : (
                 <p className="mt-3 text-sm text-zinc-600">
                   No mutual matches yet - these appear once an employer you&apos;re interested in is interested back.
+                </p>
+              )}
+            </div>
+
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-zinc-700">An Employer Is Interested In You</h2>
+                <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-bold text-zinc-600">Reciprocate to unlock</span>
+              </div>
+              {employerInterestedEntries.length > 0 ? (
+                <div className="mt-4 space-y-4">
+                  {employerInterestedEntries.map((entry) => (
+                    <JobCard key={entry.job.id} job={entry.job} badge={<EmployerInterestedBadge />} />
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-3 text-sm text-zinc-600">
+                  No employer has marked interest in you yet - this shows up here the moment one does.
                 </p>
               )}
             </div>
@@ -126,6 +158,12 @@ function MatchBadge({ percent }: { percent: number }) {
 function InterestedBadge() {
   return (
     <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs font-bold text-zinc-600">Interested</span>
+  );
+}
+
+function EmployerInterestedBadge() {
+  return (
+    <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-bold text-red-800">&hearts; Employer interested</span>
   );
 }
 
