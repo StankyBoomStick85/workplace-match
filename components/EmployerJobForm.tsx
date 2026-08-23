@@ -266,9 +266,15 @@ export function EmployerJobForm() {
       description: String(formData.get("description") ?? "").trim()
     };
 
-    // Blur normalization already expanded annual shorthand in the field itself,
-    // so this reads whatever is currently displayed - exactly what will save.
-    const payValues = parseRawPayNumbers(payRangeValue);
+    // Re-run the same expansion here rather than trusting that blur already
+    // normalized payRangeValue - submitting via Enter while still focused in
+    // the pay field fires no blur event at all, which previously let a raw,
+    // un-expanded shorthand value (e.g. pay_min=120) reach the database.
+    const normalizedPayRangeValue = normalizePayFieldOnBlur(payRangeValue, payType);
+    if (normalizedPayRangeValue !== payRangeValue) {
+      setPayRangeValue(normalizedPayRangeValue);
+    }
+    const payValues = parseRawPayNumbers(normalizedPayRangeValue);
 
     if (payValues.min === null) {
       setSaveError("Enter a pay range before saving.");

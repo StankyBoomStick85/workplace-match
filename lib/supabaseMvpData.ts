@@ -1,3 +1,4 @@
+import { formatStoredPayRange } from "./payFormatting";
 import { supabase } from "./supabase";
 
 export type MvpRole = "candidate" | "employer" | "admin";
@@ -363,7 +364,7 @@ function mapJob(data: any): MvpJobListing {
     locationCity: "",
     locationState: "",
     locationZip: zip,
-    payRange: formatPay(data.pay_min, data.pay_max, data.pay_type),
+    payRange: formatStoredPayRange(data.pay_min, data.pay_max, data.pay_type),
     payMin: data.pay_min ?? null,
     payMax: data.pay_max ?? null,
     payType: data.pay_type ?? null,
@@ -417,17 +418,6 @@ function mapNotification(data: any, recipientEmail: string): MvpNotification {
     createdAt: data.created_at,
     status: data.read ? "read" : "unread"
   };
-}
-
-function formatPay(payMin?: number | null, payMax?: number | null, payType?: string | null) {
-  const suffix = payType === "annual" ? "/year" : "/hr";
-  if (payMin && payMax && payMax !== payMin) {
-    return `$${payMin}-$${payMax}${suffix}`;
-  }
-  if (payMin) {
-    return `$${payMin}${suffix}`;
-  }
-  return "";
 }
 
 function stableRelatedId(value: string) {
