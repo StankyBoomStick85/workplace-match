@@ -1,5 +1,5 @@
-import { EmployerJobsBoard } from "@/components/EmployerJobsBoard";
+import { redirect } from "next/navigation";
 
 export default function EmployerJobsPage() {
-  return <EmployerJobsBoard />;
+  redirect("/employer/my-jobs");
 }

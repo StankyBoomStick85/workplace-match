@@ -60,17 +60,9 @@ export function Header() {
       if (!isMounted) return;
       setActiveRole(role);
       setActiveEmail(role ? user.email ?? "" : "");
-      setNavItems(role ? getRoleAwareNav(role, label, avatarUrl) : getLoggedOutNav());
+      setNavItems(role ? getRoleAwareNav(role, label, avatarUrl, user.id) : getLoggedOutNav());
     }
   }, [pathname]);
-
-  async function signOut() {
-    await supabase.auth.signOut();
-    setActiveRole(null);
-    setActiveEmail("");
-    setNavItems(getLoggedOutNav());
-    window.location.href = "/";
-  }
 
   return (
     <header className="sticky top-0 z-[1000] border-b border-gray-200 bg-white">
@@ -108,14 +100,7 @@ export function Header() {
           {activeRole ? (
             <>
               {activeEmail ? <NotificationBell recipientEmail={activeEmail} /> : null}
-              {activeRole === "candidate" ? <SettingsModal /> : null}
-              <button
-                type="button"
-                onClick={signOut}
-                className="border-b-2 border-transparent px-1 py-1 font-bold text-zinc-950 transition-colors duration-150 hover:text-red-700 sm:px-1.5 sm:py-2"
-              >
-                Sign out
-              </button>
+              <SettingsModal role={activeRole} />
             </>
           ) : null}
         </nav>
@@ -148,14 +133,7 @@ export function Header() {
             {activeRole ? (
               <div className="flex items-center gap-2 py-3">
                 {activeEmail ? <NotificationBell recipientEmail={activeEmail} /> : null}
-                {activeRole === "candidate" ? <SettingsModal /> : null}
-                <button
-                  type="button"
-                  onClick={() => { setMenuOpen(false); signOut(); }}
-                  className="ml-auto font-bold text-zinc-950 transition-colors hover:text-red-700"
-                >
-                  Sign out
-                </button>
+                <SettingsModal role={activeRole} />
               </div>
             ) : null}
           </div>
@@ -165,13 +143,13 @@ export function Header() {
   );
 }
 
-function getRoleAwareNav(role: Role, label: string, avatarUrl = ""): NavItem[] {
+function getRoleAwareNav(role: Role, label: string, avatarUrl = "", userId = ""): NavItem[] {
   if (role === "employer") {
     return [
-      { href: "/employer/dashboard", label: label || "Dashboard" },
-      { href: "/employer/find-applicants", label: "Find applicants" },
-      { href: "/employer/matches", label: "Dashboard" },
-      { href: "/account/settings?role=employer", label: "Account" }
+      { href: `/employer/company/${userId}`, label: "Company Profile" },
+      { href: "/employer/my-jobs", label: "My Job Listings" },
+      { href: "/employer/find-applicants", label: "Find Applicants" },
+      { href: "/employer/matches", label: "Matches" }
     ];
   }
 

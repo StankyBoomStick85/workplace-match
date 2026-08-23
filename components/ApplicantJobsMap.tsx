@@ -1391,7 +1391,16 @@ export function ApplicantJobsMap() {
             Job opportunity
           </p>
           <h2 className="mt-1 text-base font-bold text-zinc-950">{job.title}</h2>
-          <p className="mt-1 text-sm text-zinc-600">{companyName}</p>
+          {job.employerId ? (
+            <a
+              href={`/employer/company/${job.employerId}`}
+              className="mt-1 inline-block text-sm font-semibold text-red-800 hover:underline"
+            >
+              {companyName}
+            </a>
+          ) : (
+            <p className="mt-1 text-sm text-zinc-600">{companyName}</p>
+          )}
           <p className="mt-1 text-sm text-zinc-600">{formatJobLocation(job)}</p>
           <p className="mt-1 text-sm font-semibold text-zinc-700">
             {commuteEstimate

@@ -17,7 +17,7 @@ const ADMIN_PIN = "1019";
 
 type Tab = "dark-mode" | "account" | "plan" | "support" | "admin";
 
-export function SettingsModal() {
+export function SettingsModal({ role }: { role: "candidate" | "employer" }) {
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("dark-mode");
   const [isDark, setIsDark] = useState(false);
@@ -67,6 +67,11 @@ export function SettingsModal() {
     setPinInput("");
     setPinError(false);
     setIsOpen(true);
+  }
+
+  async function handleSignOut() {
+    await supabase.auth.signOut();
+    window.location.href = "/";
   }
 
   function handleDarkModeToggle(checked: boolean) {
@@ -194,7 +199,7 @@ export function SettingsModal() {
                   </div>
                 </div>
               ) : activeTab === "account" ? (
-                <AccountSettings role="candidate" inModal />
+                <AccountSettings role={role} inModal />
               ) : activeTab === "plan" ? (
                 <div className="px-6 py-6">
                   <h3 className="text-sm font-bold text-zinc-900">Your Plan</h3>
@@ -249,6 +254,17 @@ export function SettingsModal() {
                   </div>
                 )
               ) : null}
+            </div>
+
+            {/* Modal footer */}
+            <div className="flex items-center justify-end border-t border-gray-200 px-6 py-3">
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="text-sm font-semibold text-zinc-600 transition-colors hover:text-red-700"
+              >
+                Sign out
+              </button>
             </div>
           </div>
         </div>

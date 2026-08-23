@@ -6,6 +6,7 @@ import { getCityStateForZip } from "../lib/addressHelpers";
 import { supabase } from "../lib/supabase";
 
 type EmployerAccount = {
+  id: string;
   email: string;
 };
 
@@ -29,6 +30,7 @@ type JobListing = {
 export function EmployerJobsBoard() {
   const [account, setAccount] = useState<EmployerAccount | null>(null);
   const [jobs, setJobs] = useState<JobListing[]>([]);
+  const [jobIdPendingDeactivate, setJobIdPendingDeactivate] = useState("");
 
   useEffect(() => {
     loadJobs();
@@ -47,12 +49,22 @@ export function EmployerJobsBoard() {
         return;
       }
 
-      setAccount({ email: user.email ?? "" });
+      setAccount({ id: user.id, email: user.email ?? "" });
       const jobsResponse = await fetch(`/api/mvp/read?resource=employer-jobs&employerId=${encodeURIComponent(user.id)}`);
       const { data } = await jobsResponse.json();
       setJobs((data ?? []).map((job: any) => mapSupabaseJob(job, user.email ?? "")));
     }
   }, []);
+
+  async function deactivateJob(jobId: string) {
+    if (!account) {
+      return;
+    }
+
+    await supabase.from("job_posts").update({ active: false }).eq("id", jobId).eq("employer_id", account.id);
+    setJobs((current) => current.filter((job) => job.id !== jobId));
+    setJobIdPendingDeactivate("");
+  }
 
   if (!account) {
     return (
@@ -121,19 +133,53 @@ export function EmployerJobsBoard() {
                 </div>
 
                 <p className="mt-4 text-sm leading-6 text-zinc-700">{job.description}</p>
-                <div className="mt-4">
+                <div className="mt-4 flex gap-2">
                   <Link
                     href={`/employer/jobs/new?edit=${encodeURIComponent(job.id)}`}
                     className="inline-flex items-center justify-center rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
                   >
                     Edit
                   </Link>
+                  <button
+                    type="button"
+                    onClick={() => setJobIdPendingDeactivate(job.id)}
+                    className="inline-flex items-center justify-center rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-100"
+                  >
+                    Deactivate
+                  </button>
                 </div>
               </article>
             ))}
           </div>
         )}
       </div>
+
+      {jobIdPendingDeactivate ? (
+        <div className="fixed inset-0 z-[1500] flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-sm rounded-lg bg-white p-6 shadow-soft">
+            <p className="text-lg font-bold text-zinc-950">Deactivate this listing?</p>
+            <p className="mt-2 text-sm text-zinc-600">
+              It will stop appearing to candidates. This can&apos;t be undone from here.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => deactivateJob(jobIdPendingDeactivate)}
+                className="rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white"
+              >
+                Deactivate
+              </button>
+              <button
+                type="button"
+                onClick={() => setJobIdPendingDeactivate("")}
+                className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

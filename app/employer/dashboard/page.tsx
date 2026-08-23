@@ -1,5 +1,5 @@
-import { EmployerDashboard } from "@/components/EmployerDashboard";
+import { redirect } from "next/navigation";
 
 export default function EmployerDashboardPage() {
-  return <EmployerDashboard />;
+  redirect("/employer/my-jobs");
 }
