@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { formatStoredPayRange } from "../lib/payFormatting";
 import { supabase } from "../lib/supabase";
 
 type CompanyProfile = {
@@ -18,10 +19,12 @@ type CompanyProfile = {
 type JobListing = {
   id: string;
   title: string;
+  locationZip?: string;
   payRange: string;
   jobType: string;
   schedule: string;
   requiredSkills: string[];
+  preferredSkills: string[];
   description: string;
 };
 
@@ -66,6 +69,7 @@ export function EmployerCompanyProfile({ employerId }: { employerId: string }) {
   const [draft, setDraft] = useState<CompanyProfile>(emptyProfile);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [expandedJobId, setExpandedJobId] = useState("");
 
   useEffect(() => {
     loadProfile();
@@ -282,19 +286,72 @@ export function EmployerCompanyProfile({ employerId }: { employerId: string }) {
 
       <div className="mt-8">
         <p className="text-sm font-semibold uppercase tracking-[0.16em] text-red-800">Active job listings</p>
-        <div className="mt-4 grid gap-4">
+        <div className="mt-4 space-y-3">
           {jobs.length > 0 ? (
-            jobs.map((job) => (
-              <article key={job.id} className="rounded-lg border border-gray-200 bg-white p-5 shadow-soft">
-                <h2 className="text-lg font-bold text-zinc-950">{job.title}</h2>
-                <div className="mt-3 grid gap-3 text-sm md:grid-cols-3">
-                  <JobDetail label="Pay range" value={job.payRange || "Not listed"} />
-                  <JobDetail label="Job type" value={job.jobType || "Not listed"} />
-                  <JobDetail label="Schedule" value={job.schedule || "Not listed"} />
+            jobs.map((job) => {
+              const isJobExpanded = expandedJobId === job.id;
+
+              return (
+                <div key={job.id} className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-soft">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedJobId(isJobExpanded ? "" : job.id)}
+                    className="flex w-full items-center gap-3 px-5 py-4 text-left transition hover:bg-gray-50"
+                  >
+                    <span
+                      className={`inline-block shrink-0 transition-transform ${isJobExpanded ? "rotate-90" : ""}`}
+                      aria-hidden="true"
+                    >
+                      ▸
+                    </span>
+                    <span className="truncate text-lg font-bold text-zinc-950">{job.title}</span>
+                  </button>
+
+                  {isJobExpanded ? (
+                    <div className="border-t border-gray-200 p-5">
+                      <p className="text-sm text-zinc-600">{formatJobLocation(job)}</p>
+                      <div className="mt-3 grid gap-3 text-sm md:grid-cols-3">
+                        <JobDetail label="Pay range" value={job.payRange || "Not listed"} />
+                        <JobDetail label="Job type" value={job.jobType || "Not listed"} />
+                        <JobDetail label="Schedule" value={job.schedule || "Not listed"} />
+                      </div>
+
+                      {job.requiredSkills.length > 0 ? (
+                        <div className="mt-4">
+                          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
+                            Required capabilities
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {job.requiredSkills.map((skill) => (
+                              <span key={skill} className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-semibold text-zinc-700">
+                                {skill}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {job.preferredSkills.length > 0 ? (
+                        <div className="mt-4">
+                          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-400">
+                            Preferred capabilities
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {job.preferredSkills.map((skill) => (
+                              <span key={skill} className="rounded-full border border-dashed border-gray-200 bg-transparent px-3 py-1 text-xs font-medium text-zinc-500">
+                                {skill}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-zinc-700">{job.description}</p>
+                    </div>
+                  ) : null}
                 </div>
-                <p className="mt-4 text-sm leading-6 text-zinc-700">{job.description}</p>
-              </article>
-            ))
+              );
+            })
           ) : (
             <div className="rounded-lg border border-dashed border-gray-300 bg-white p-5">
               <p className="text-sm font-semibold text-zinc-950">No active job listings.</p>
@@ -359,23 +416,20 @@ function mapJobRow(job: any): JobListing {
   return {
     id: job.id,
     title: job.title ?? "",
-    payRange: formatStoredPay(job.pay_min, job.pay_max, job.pay_type),
+    locationZip: job.location_zip ?? "",
+    payRange: formatStoredPayRange(job.pay_min, job.pay_max, job.pay_type),
     jobType: job.job_type ?? "",
     schedule: job.shift ?? "",
     requiredSkills: job.required_capabilities ?? [],
+    preferredSkills: job.preferred_capabilities ?? [],
     description: job.summary ?? ""
   };
 }
 
-function formatStoredPay(payMin?: number | null, payMax?: number | null, payType?: string | null) {
-  const suffix = payType === "annual" ? "/year" : "/hr";
-  if (payMin && payMax && payMax !== payMin) {
-    return `$${payMin}-$${payMax}${suffix}`;
-  }
-  if (payMin) {
-    return `$${payMin}${suffix}`;
-  }
-  return "";
+function formatJobLocation(job: JobListing) {
+  // job_posts has no persisted city/state - only ZIP - so show what's actually
+  // stored rather than a ZIP-dictionary guess that can name the wrong town.
+  return job.locationZip ? `ZIP ${job.locationZip}` : "Location not set";
 }
 
 function normalizeUrl(url: string) {

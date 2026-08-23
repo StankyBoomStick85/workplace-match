@@ -116,6 +116,39 @@ export async function GET(request: Request) {
       return NextResponse.json({ data: data ?? [] });
     }
 
+    if (resource === "job-match-counts") {
+      // Reads match_scores as already computed by candidate-side scoring runs -
+      // never triggers new scoring. jobIds is a comma-separated list of job_posts
+      // ids. A job with zero qualifying rows is simply absent from the response,
+      // so the caller can distinguish "no data yet" from "zero matches".
+      const jobIdsParam = requestUrl.searchParams.get("jobIds") ?? "";
+      const jobIds = jobIdsParam.split(",").map((id) => id.trim()).filter(Boolean);
+      if (jobIds.length === 0) return NextResponse.json({ data: {} });
+
+      const { data, error } = await adminClient
+        .from("match_scores")
+        .select("job_id, candidate_id")
+        .eq("job_source", "wpm")
+        .in("job_id", jobIds)
+        .gte("score", 50)
+        .gt("expires_at", new Date().toISOString());
+      if (error) throw error;
+
+      const counts: Record<string, number> = {};
+      const seenPerJob = new Map<string, Set<string>>();
+      for (const row of data ?? []) {
+        const jobId = row.job_id as string;
+        const candidateId = row.candidate_id as string;
+        const seen = seenPerJob.get(jobId) ?? new Set<string>();
+        seen.add(candidateId);
+        seenPerJob.set(jobId, seen);
+      }
+      for (const [jobId, candidateSet] of seenPerJob.entries()) {
+        counts[jobId] = candidateSet.size;
+      }
+      return NextResponse.json({ data: counts });
+    }
+
     if (resource === "job") {
       const jobId = requestUrl.searchParams.get("jobId");
       const employerId = requestUrl.searchParams.get("employerId") || user?.id;

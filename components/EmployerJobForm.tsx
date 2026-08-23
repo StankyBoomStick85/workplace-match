@@ -3,6 +3,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { logAdminEvent } from "../lib/adminEvents";
 import { getCityStateForZip, normalizeStateValue, normalizeZipCode } from "../lib/addressHelpers";
+import { formatStoredPayRange } from "../lib/payFormatting";
 import { supabase } from "../lib/supabase";
 import { StateAbbreviationSelect } from "./StateAbbreviationSelect";
 
@@ -52,29 +53,10 @@ function splitSkills(value: string) {
     .filter(Boolean);
 }
 
-function formatPayRange(value: string, payType: string) {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-
-  const withoutUnit = trimmed
-    .replace(/\s*(\/\s*(hr|hour|year)|per hour|per year|annual|annually)\s*$/i, "")
-    .trim();
-  const payWithDollarSigns = withoutUnit
-    .split("-")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((part) => (part.startsWith("$") ? part : `$${part}`))
-    .join("-");
-
-  return payType === "annual" ? `${payWithDollarSigns}/year` : `${payWithDollarSigns}/hr`;
-}
-
 function parsePayRange(value?: string): PayRangeDraft {
   const payRange = value ?? "";
   const payType = payRange.toLowerCase().includes("/year") ? "annual" : "per-hour";
-  const draftValue = payRange.replace(/\/(hr|year)$/i, "");
+  const draftValue = payRange.replace(/\/(hr|hour|year)$/i, "");
 
   return {
     value: draftValue,
@@ -86,12 +68,46 @@ function joinSkills(skills: string[]) {
   return skills.join("\n");
 }
 
-function parsePayValues(value: string) {
+// Pulls up to two numbers out of whatever the employer typed, e.g. "$120,000
+// - $180,000", "120-180000", "22". Whole-dollar values only - pay ranges don't
+// need cents and stripping them keeps the shorthand-expansion rules simple.
+function parseRawPayNumbers(value: string) {
   const numbers = value.match(/\d[\d,]*/g)?.map((part) => Number(part.replace(/,/g, ""))) ?? [];
   return {
     min: numbers[0] ?? null,
     max: numbers[1] ?? numbers[0] ?? null
   };
+}
+
+// Blur-time shorthand expansion for ANNUAL pay only - "120" or "120-180000"
+// almost certainly means thousands, since nobody earns $120/year. Each side is
+// expanded independently, which also happens to be exactly what "mixed
+// magnitude ranges normalize to the larger" needs: in "120-180000", only the
+// 120 is under 1,000 so only it gets scaled, landing on 120000-180000.
+function expandAnnualShorthand(value: number) {
+  return value < 1000 ? value * 1000 : value;
+}
+
+// Rewrites the pay field to the value that will actually be saved, so the
+// employer sees the expansion before they submit - never a silent rewrite.
+function normalizePayFieldOnBlur(rawValue: string, payType: PayRangeDraft["payType"]) {
+  const { min, max } = parseRawPayNumbers(rawValue);
+  if (min === null) {
+    return rawValue;
+  }
+
+  if (payType !== "annual") {
+    // Hourly shorthand is left alone entirely - no thousands expansion.
+    return rawValue;
+  }
+
+  const expandedMin = expandAnnualShorthand(min);
+  const expandedMax = max === null ? expandedMin : expandAnnualShorthand(max);
+
+  if (expandedMax === expandedMin) {
+    return `$${expandedMin.toLocaleString("en-US")}`;
+  }
+  return `$${expandedMin.toLocaleString("en-US")}-$${expandedMax.toLocaleString("en-US")}`;
 }
 
 function mapSupabaseJob(job: any, employerEmail: string): JobListing {
@@ -104,7 +120,7 @@ function mapSupabaseJob(job: any, employerEmail: string): JobListing {
     locationCity: zipMatch?.city ?? "",
     locationState: zipMatch?.state ?? "",
     locationZip: job.location_zip ?? "",
-    payRange: formatStoredPay(job.pay_min, job.pay_max, job.pay_type),
+    payRange: formatStoredPayRange(job.pay_min, job.pay_max, job.pay_type),
     jobType: job.job_type ?? "",
     schedule: job.shift ?? "",
     requiredSkills: job.required_capabilities ?? [],
@@ -113,17 +129,6 @@ function mapSupabaseJob(job: any, employerEmail: string): JobListing {
     status: job.active ? "Active" : "Active",
     createdAt: job.created_at ?? ""
   };
-}
-
-function formatStoredPay(payMin?: number | null, payMax?: number | null, payType?: string | null) {
-  const suffix = payType === "annual" ? "/year" : "/hr";
-  if (payMin && payMax && payMax !== payMin) {
-    return `$${payMin}-$${payMax}${suffix}`;
-  }
-  if (payMin) {
-    return `$${payMin}${suffix}`;
-  }
-  return "";
 }
 
 export function EmployerJobForm() {
@@ -138,6 +143,8 @@ export function EmployerJobForm() {
     zip: ""
   });
   const [payType, setPayType] = useState<PayRangeDraft["payType"]>("per-hour");
+  const [payRangeValue, setPayRangeValue] = useState("");
+  const [pendingSave, setPendingSave] = useState<{ payload: Record<string, unknown>; message: string } | null>(null);
   const [saveError, setSaveError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const hasCompanyAddress = Boolean(
@@ -186,6 +193,7 @@ export function EmployerJobForm() {
           const parsedPayRange = parsePayRange(mappedJob.payRange);
           setEditingJob(mappedJob);
           setPayType(parsedPayRange.payType);
+          setPayRangeValue(parsedPayRange.value);
           setWorkLocation({
             street: mappedJob.locationStreet ?? "",
             city: mappedJob.locationCity,
@@ -240,7 +248,7 @@ export function EmployerJobForm() {
     event.preventDefault();
     setSaveError("");
 
-    if (!account) {
+    if (!account || !account.id) {
       return;
     }
 
@@ -251,10 +259,6 @@ export function EmployerJobForm() {
       locationCity: workLocation.city.trim(),
       locationState: workLocation.state.trim(),
       locationZip: workLocation.zip.trim(),
-      payRange: formatPayRange(
-        String(formData.get("payRange") ?? ""),
-        String(formData.get("payType") ?? "per-hour")
-      ),
       jobType: String(formData.get("jobType") ?? "").trim(),
       schedule: String(formData.get("schedule") ?? "").trim(),
       requiredSkills: splitSkills(String(formData.get("requiredSkills") ?? "")),
@@ -262,11 +266,20 @@ export function EmployerJobForm() {
       description: String(formData.get("description") ?? "").trim()
     };
 
-    if (!account.id) {
+    // Blur normalization already expanded annual shorthand in the field itself,
+    // so this reads whatever is currently displayed - exactly what will save.
+    const payValues = parseRawPayNumbers(payRangeValue);
+
+    if (payValues.min === null) {
+      setSaveError("Enter a pay range before saving.");
       return;
     }
 
-    const payValues = parsePayValues(jobData.payRange);
+    if (payValues.max !== null && payValues.min > payValues.max) {
+      setSaveError("Minimum pay is greater than maximum pay - please correct the pay range before saving.");
+      return;
+    }
+
     const payload = {
       employer_id: account.id,
       title: jobData.title,
@@ -283,6 +296,32 @@ export function EmployerJobForm() {
       summary: jobData.description,
       active: true
     };
+
+    // Genuine-mistake confirmation, not shorthand: hourly rates don't get
+    // auto-expanded, so a value over $200/hr is far more likely a typo or the
+    // wrong pay type than a real wage - confirm instead of silently rewriting.
+    if (payType === "per-hour" && payValues.max !== null && payValues.max > 200) {
+      const format = (value: number) => `$${value.toLocaleString("en-US")}`;
+      const entered =
+        payValues.max === payValues.min ? format(payValues.min) : `${format(payValues.min)}-${format(payValues.max)}`;
+      const suggested =
+        payValues.max === payValues.min
+          ? format(Math.round(payValues.min / 1000))
+          : `${format(Math.round(payValues.min / 1000))}-${format(Math.round(payValues.max / 1000))}`;
+      setPendingSave({
+        payload,
+        message: `You entered ${entered} per hour. Did you mean ${suggested} per hour, or is the pay type wrong?`
+      });
+      return;
+    }
+
+    await performSave(payload);
+  }
+
+  async function performSave(payload: Record<string, unknown>) {
+    if (!account || !account.id) {
+      return;
+    }
 
     setIsSaving(true);
 
@@ -433,10 +472,11 @@ export function EmployerJobForm() {
                 name="payRange"
                 placeholder="$22-$28"
                 required
-                defaultValue={parsePayRange(editingJob?.payRange).value}
+                value={payRangeValue}
+                onChange={(event) => setPayRangeValue(event.target.value)}
+                onBlur={(event) => setPayRangeValue(normalizePayFieldOnBlur(event.target.value, payType))}
                 className="w-36 rounded-md border border-line bg-white px-3.5 py-2.5 text-base outline-none transition focus:border-moss focus:ring-2 focus:ring-moss/20"
               />
-              <input type="hidden" name="payType" value={payType} />
               <button
                 type="button"
                 onClick={() => setPayType("per-hour")}
@@ -446,7 +486,7 @@ export function EmployerJobForm() {
                     : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
                 }`}
               >
-                HR
+                Hourly
               </button>
               <button
                 type="button"
@@ -543,6 +583,35 @@ POS system experience`}
           </div>
         </form>
       </div>
+
+      {pendingSave ? (
+        <div className="fixed inset-0 z-[1500] flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-sm rounded-lg bg-white p-6 shadow-soft">
+            <p className="text-lg font-bold text-zinc-950">Double-check this pay rate</p>
+            <p className="mt-2 text-sm text-zinc-600">{pendingSave.message}</p>
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const payload = pendingSave.payload;
+                  setPendingSave(null);
+                  void performSave(payload);
+                }}
+                className="rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white"
+              >
+                Save as entered
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingSave(null)}
+                className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700"
+              >
+                Go back and edit
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
