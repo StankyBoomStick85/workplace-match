@@ -44,7 +44,6 @@ type PayRangeDraft = {
 
 const jobFieldClassName =
   "w-full rounded-md border border-line bg-white px-3.5 py-2.5 text-base outline-none transition focus:border-moss focus:ring-2 focus:ring-moss/20";
-const lockedJobFieldClassName = `${jobFieldClassName} disabled:bg-gray-100 disabled:text-zinc-600`;
 
 function splitSkills(value: string) {
   return value
@@ -166,12 +165,11 @@ export function EmployerJobForm() {
       const profileResponse = await fetch(`/api/mvp/read?resource=employer-profile&userId=${encodeURIComponent(user.id)}`);
       const { data: profile } = await profileResponse.json();
       if (profile) {
-        const zipMatch = getCityStateForZip(profile.location_zip ?? "");
         setCompanyProfile({
           employerEmail: user.email ?? "",
-          streetAddress: "",
-          city: zipMatch?.city ?? "",
-          state: zipMatch?.state ?? "",
+          streetAddress: profile.street_address ?? "",
+          city: profile.city ?? "",
+          state: profile.state ?? "",
           zipCode: profile.location_zip ?? ""
         });
       }
@@ -198,6 +196,10 @@ export function EmployerJobForm() {
   }, []);
 
   function updateWorkLocation(field: keyof typeof workLocation, value: string) {
+    // A manual edit means the fields no longer necessarily match the saved
+    // company address, so the checkbox should stop claiming they do.
+    setUseCompanyAddress(false);
+
     setWorkLocation((current) => {
       if (field !== "zip") {
         return { ...current, [field]: field === "state" ? normalizeStateValue(value) : value };
@@ -321,18 +323,24 @@ export function EmployerJobForm() {
             <input id="title" name="title" required defaultValue={editingJob?.title ?? ""} className={jobFieldClassName} />
           </Field>
           <div className="space-y-2 md:col-span-2">
-            <label className="flex items-center gap-2 text-sm font-semibold text-zinc-800">
+            <label
+              className={`flex items-center gap-2 text-sm font-semibold ${
+                hasCompanyAddress ? "text-zinc-800" : "cursor-not-allowed text-zinc-400"
+              }`}
+            >
               <input
                 type="checkbox"
                 checked={useCompanyAddress}
+                disabled={!hasCompanyAddress}
                 onChange={(event) => toggleUseCompanyAddress(event.target.checked)}
-                className="h-4 w-4 rounded border-gray-300"
+                className="h-4 w-4 rounded border-gray-300 disabled:cursor-not-allowed"
               />
               Work location is same as company address
             </label>
             {!hasCompanyAddress ? (
               <p className="text-sm text-zinc-600">
-                Add a company address first, or enter a work location manually.
+                No company address on file yet - enter this job&apos;s work location manually below, or add a
+                company address to enable autofill here.
               </p>
             ) : null}
           </div>
@@ -342,8 +350,7 @@ export function EmployerJobForm() {
               name="locationStreet"
               value={workLocation.street}
               onChange={(event) => updateWorkLocation("street", event.target.value)}
-              disabled={useCompanyAddress}
-              className={lockedJobFieldClassName}
+              className={jobFieldClassName}
             />
           </Field>
           <Field label="City" id="locationCity">
@@ -353,8 +360,7 @@ export function EmployerJobForm() {
               required
               value={workLocation.city}
               onChange={(event) => updateWorkLocation("city", event.target.value)}
-              disabled={useCompanyAddress}
-              className={lockedJobFieldClassName}
+              className={jobFieldClassName}
             />
           </Field>
           <Field label="State" id="locationState">
@@ -364,8 +370,7 @@ export function EmployerJobForm() {
               required
               value={workLocation.state}
               onChange={(value) => updateWorkLocation("state", value)}
-              disabled={useCompanyAddress}
-              className={`${lockedJobFieldClassName} uppercase`}
+              className={`${jobFieldClassName} uppercase`}
             />
           </Field>
           <Field label="Work ZIP code" id="locationZip">
@@ -375,8 +380,7 @@ export function EmployerJobForm() {
               inputMode="numeric"
               value={workLocation.zip}
               onChange={(event) => updateWorkLocation("zip", event.target.value)}
-              disabled={useCompanyAddress}
-              className={lockedJobFieldClassName}
+              className={jobFieldClassName}
             />
           </Field>
           <div className="space-y-2">
