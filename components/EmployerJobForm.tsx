@@ -138,6 +138,8 @@ export function EmployerJobForm() {
     zip: ""
   });
   const [payType, setPayType] = useState<PayRangeDraft["payType"]>("per-hour");
+  const [saveError, setSaveError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
   const hasCompanyAddress = Boolean(
     companyProfile?.streetAddress && companyProfile.city && companyProfile.state && companyProfile.zipCode
   );
@@ -236,6 +238,7 @@ export function EmployerJobForm() {
 
   async function saveJob(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setSaveError("");
 
     if (!account) {
       return;
@@ -281,13 +284,50 @@ export function EmployerJobForm() {
       active: true
     };
 
+    setIsSaving(true);
+
     if (editingJob) {
-      await supabase.from("job_posts").update(payload).eq("id", editingJob.id).eq("employer_id", account.id);
+      // count: "exact" reports how many rows the UPDATE actually matched and
+      // wrote, independent of any SELECT policy - so a zero-row result (e.g.
+      // an RLS mismatch that only fails silently) is distinguishable here
+      // from a genuine write, instead of failing open like a bare .update().
+      const { error, count } = await supabase
+        .from("job_posts")
+        .update(payload, { count: "exact" })
+        .eq("id", editingJob.id)
+        .eq("employer_id", account.id);
+
+      setIsSaving(false);
+
+      if (error) {
+        setSaveError(`Couldn't save your changes: ${error.message}`);
+        return;
+      }
+
+      if (!count) {
+        setSaveError(
+          "Couldn't save your changes: no matching listing was updated. Your edits were not saved - please try again or contact support."
+        );
+        return;
+      }
+
       window.location.href = "/employer/jobs";
       return;
     }
 
-    await supabase.from("job_posts").insert(payload);
+    const { error, count } = await supabase.from("job_posts").insert(payload, { count: "exact" });
+
+    setIsSaving(false);
+
+    if (error) {
+      setSaveError(`Couldn't save this job listing: ${error.message}`);
+      return;
+    }
+
+    if (!count) {
+      setSaveError("Couldn't save this job listing - nothing was created. Please try again.");
+      return;
+    }
 
     logAdminEvent({
       type: "job_created",
@@ -477,9 +517,19 @@ POS system experience`}
             />
           </Field>
 
+          {saveError ? (
+            <p className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800 md:col-span-2">
+              {saveError}
+            </p>
+          ) : null}
+
           <div className="flex flex-wrap gap-3 md:col-span-2">
-            <button type="submit" className="inline-flex items-center justify-center rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950">
-              {editingJob ? "Save changes" : "Save job listing"}
+            <button
+              type="submit"
+              disabled={isSaving}
+              className="inline-flex items-center justify-center rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isSaving ? "Saving..." : editingJob ? "Save changes" : "Save job listing"}
             </button>
             <button
               type="button"
