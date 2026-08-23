@@ -37,9 +37,12 @@ export type MvpJobListing = {
   employerEmail: string;
   employerId: string;
   title: string;
+  locationStreet?: string;
   locationCity: string;
   locationState: string;
   locationZip?: string;
+  latitude?: number | null;
+  longitude?: number | null;
   payRange: string;
   payMin: number | null;
   payMax: number | null;
@@ -361,9 +364,12 @@ function mapJob(data: any): MvpJobListing {
     employerId: data.employer_id,
     employerEmail: data.users?.email ?? data.employer_id,
     title: data.title ?? "",
-    locationCity: "",
-    locationState: "",
+    locationStreet: data.street_address ?? "",
+    locationCity: data.city ?? "",
+    locationState: data.state ?? "",
     locationZip: zip,
+    latitude: data.latitude ?? null,
+    longitude: data.longitude ?? null,
     payRange: formatStoredPayRange(data.pay_min, data.pay_max, data.pay_type),
     payMin: data.pay_min ?? null,
     payMax: data.pay_max ?? null,

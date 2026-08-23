@@ -110,15 +110,51 @@ function normalizePayFieldOnBlur(rawValue: string, payType: PayRangeDraft["payTy
   return `$${expandedMin.toLocaleString("en-US")}-$${expandedMax.toLocaleString("en-US")}`;
 }
 
+// Forward-geocodes the full street address once, at save time - never on
+// render or per map view. Mirrors the same Nominatim call already used in
+// app/api/scoring/refresh-muse-cache/route.ts. Returns null on any failure
+// (no match, network error) so callers fall back to the ZIP centroid.
+async function geocodeJobAddress(street: string, city: string, state: string, zip: string) {
+  const query = [street, city, state, zip].map((part) => part.trim()).filter(Boolean).join(", ");
+  if (!query) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`,
+      { headers: { "Accept-Language": "en", "User-Agent": "WorkplaceMatch/1.0" } }
+    );
+    if (!response.ok) {
+      return null;
+    }
+
+    const results: Array<{ lat: string; lon: string }> = await response.json();
+    const first = results?.[0];
+    if (!first) {
+      return null;
+    }
+
+    const latitude = Number.parseFloat(first.lat);
+    const longitude = Number.parseFloat(first.lon);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      return null;
+    }
+
+    return { latitude, longitude };
+  } catch {
+    return null;
+  }
+}
+
 function mapSupabaseJob(job: any, employerEmail: string): JobListing {
-  const zipMatch = getCityStateForZip(job.location_zip ?? "");
   return {
     id: job.id,
     employerEmail,
     title: job.title ?? "",
-    locationStreet: "",
-    locationCity: zipMatch?.city ?? "",
-    locationState: zipMatch?.state ?? "",
+    locationStreet: job.street_address ?? "",
+    locationCity: job.city ?? "",
+    locationState: job.state ?? "",
     locationZip: job.location_zip ?? "",
     payRange: formatStoredPayRange(job.pay_min, job.pay_max, job.pay_type),
     jobType: job.job_type ?? "",
@@ -286,16 +322,32 @@ export function EmployerJobForm() {
       return;
     }
 
+    // Geocode once, here, at save time - never at render or per map view.
+    // Failure (no match, network error) leaves latitude/longitude null, and
+    // the map falls back to the ZIP centroid it already used before this.
+    setIsSaving(true);
+    const geocoded = await geocodeJobAddress(
+      jobData.locationStreet,
+      jobData.locationCity,
+      jobData.locationState,
+      jobData.locationZip
+    );
+    setIsSaving(false);
+
     const payload = {
       employer_id: account.id,
       title: jobData.title,
+      street_address: jobData.locationStreet,
+      city: jobData.locationCity,
+      state: jobData.locationState,
       location_zip: jobData.locationZip,
+      latitude: geocoded?.latitude ?? null,
+      longitude: geocoded?.longitude ?? null,
       pay_min: payValues.min,
       pay_max: payValues.max,
       pay_type: payType === "annual" ? "annual" : "per-hour",
       job_type: jobData.jobType,
       shift: jobData.schedule,
-      work_setting: [jobData.locationStreet, jobData.locationCity, jobData.locationState].filter(Boolean).join(", "),
       required_capabilities: jobData.requiredSkills,
       preferred_capabilities: jobData.preferredSkills,
       experience_level: "",

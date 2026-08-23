@@ -75,6 +75,8 @@ type JobListing = {
   locationCity: string;
   locationState: string;
   locationZip?: string;
+  latitude?: number | null;
+  longitude?: number | null;
   payRange: string;
   payMin?: number | null;
   payMax?: number | null;
@@ -3892,15 +3894,21 @@ function getApproximateJobMapPosition(job: JobListing) {
   return offsetCoordinates(basePosition, getApproximateJobPlacementSeed(job));
 }
 
-function getJobExactAddressMapPosition(job: JobListing) {
-  const normalizedAddress = getJobAddressKey(job);
-  const knownExactAddresses: Record<string, Coordinates> = {
-    "213 main st fenton mo 63026": [38.5137, -90.4374],
-    "1 main st valley park mo 63088": [38.5497, -90.4928],
-    "1 e main st washington mo 63090": [38.5588, -91.0114]
-  };
+// Exact coordinates are geocoded once at save time (EmployerJobForm.tsx) and
+// stored on the row - never re-geocoded here. A job without stored
+// coordinates (geocoding failed at save time, or predates this column) falls
+// through to the ZIP/city approximation below.
+function getJobExactAddressMapPosition(job: JobListing): Coordinates | null {
+  if (
+    typeof job.latitude === "number" &&
+    typeof job.longitude === "number" &&
+    Number.isFinite(job.latitude) &&
+    Number.isFinite(job.longitude)
+  ) {
+    return [job.latitude, job.longitude];
+  }
 
-  return knownExactAddresses[normalizedAddress] ?? null;
+  return null;
 }
 
 function getJobAddressKey(job: JobListing) {
