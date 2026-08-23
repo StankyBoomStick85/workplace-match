@@ -22,6 +22,7 @@ type JobListing = {
   jobType: string;
   schedule: string;
   requiredSkills: string[];
+  preferredSkills: string[];
   description: string;
   status: "Active";
   createdAt: string;
@@ -119,18 +120,35 @@ export function EmployerJobsBoard() {
                   <JobDetail label="Schedule" value={job.schedule} />
                 </div>
 
-                <div className="mt-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-                    Required skills
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {job.requiredSkills.map((skill) => (
-                      <span key={skill} className="rounded-full border border-gray-200 bg-white px-3 py-1 text-xs font-semibold text-zinc-700">
-                        {skill}
-                      </span>
-                    ))}
+                {job.requiredSkills.length > 0 ? (
+                  <div className="mt-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
+                      Required capabilities
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {job.requiredSkills.map((skill) => (
+                        <span key={skill} className="rounded-full border border-gray-200 bg-white px-3 py-1 text-xs font-semibold text-zinc-700">
+                          {skill}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                ) : null}
+
+                {job.preferredSkills.length > 0 ? (
+                  <div className="mt-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-400">
+                      Preferred capabilities
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {job.preferredSkills.map((skill) => (
+                        <span key={skill} className="rounded-full border border-dashed border-gray-200 bg-transparent px-3 py-1 text-xs font-medium text-zinc-500">
+                          {skill}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
 
                 <p className="mt-4 text-sm leading-6 text-zinc-700">{job.description}</p>
                 <div className="mt-4 flex gap-2">
@@ -205,6 +223,7 @@ function mapSupabaseJob(job: any, employerEmail: string): JobListing {
     jobType: job.job_type ?? "",
     schedule: job.shift ?? "",
     requiredSkills: job.required_capabilities ?? [],
+    preferredSkills: job.preferred_capabilities ?? [],
     description: job.summary ?? "",
     status: "Active",
     createdAt: job.created_at ?? ""

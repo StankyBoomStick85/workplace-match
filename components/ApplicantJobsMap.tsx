@@ -82,6 +82,7 @@ type JobListing = {
   jobType: string;
   schedule: string;
   requiredSkills: string[];
+  preferredSkills: string[];
   description: string;
   status: "Active";
   createdAt: string;
@@ -1345,6 +1346,7 @@ export function ApplicantJobsMap() {
   function renderJobDetail(job: JobListing, onClosePanel?: () => void) {
     const { matchPercent, interestState, companyName, commuteEstimate } = getJobPopupData(job);
     const requiredSkills = parseFlexibleSkills(job.requiredSkills);
+    const preferredSkills = parseFlexibleSkills(job.preferredSkills);
     const employerAccount = findEmployerAccount(job.employerEmail);
     const thread = getMatchThread(job);
     const actionBlock =
@@ -1424,13 +1426,31 @@ export function ApplicantJobsMap() {
         {requiredSkills.length > 0 ? (
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-              Required skills
+              Required capabilities
             </p>
             <div className="mt-2 flex max-w-xs flex-wrap gap-1.5">
               {requiredSkills.map((skill) => (
                 <span
                   key={skill}
                   className="rounded-full border border-gray-200 bg-gray-50 px-2 py-1 text-xs font-semibold text-zinc-700"
+                >
+                  {skill}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {preferredSkills.length > 0 ? (
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-400">
+              Preferred capabilities
+            </p>
+            <div className="mt-2 flex max-w-xs flex-wrap gap-1.5">
+              {preferredSkills.map((skill) => (
+                <span
+                  key={skill}
+                  className="rounded-full border border-dashed border-gray-200 bg-transparent px-2 py-1 text-xs font-medium text-zinc-500"
                 >
                   {skill}
                 </span>

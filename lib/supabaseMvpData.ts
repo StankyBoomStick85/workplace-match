@@ -46,6 +46,7 @@ export type MvpJobListing = {
   jobType: string;
   schedule: string;
   requiredSkills: string[];
+  preferredSkills: string[];
   description: string;
   status: "Active";
   createdAt: string;
@@ -369,6 +370,7 @@ function mapJob(data: any): MvpJobListing {
     jobType: data.job_type ?? "",
     schedule: data.shift ?? "",
     requiredSkills: data.required_capabilities ?? [],
+    preferredSkills: data.preferred_capabilities ?? [],
     description: data.summary ?? "",
     status: "Active",
     createdAt: data.created_at ?? ""

@@ -31,6 +31,7 @@ type JobListing = {
   jobType: string;
   schedule: string;
   requiredSkills: string[];
+  preferredSkills: string[];
   description: string;
   status: "Active";
   createdAt: string;
@@ -108,6 +109,7 @@ function mapSupabaseJob(job: any, employerEmail: string): JobListing {
     jobType: job.job_type ?? "",
     schedule: job.shift ?? "",
     requiredSkills: job.required_capabilities ?? [],
+    preferredSkills: job.preferred_capabilities ?? [],
     description: job.summary ?? "",
     status: job.active ? "Active" : "Active",
     createdAt: job.created_at ?? ""
@@ -251,6 +253,7 @@ export function EmployerJobForm() {
       jobType: String(formData.get("jobType") ?? "").trim(),
       schedule: String(formData.get("schedule") ?? "").trim(),
       requiredSkills: splitSkills(String(formData.get("requiredSkills") ?? "")),
+      preferredSkills: splitSkills(String(formData.get("preferredSkills") ?? "")),
       description: String(formData.get("description") ?? "").trim()
     };
 
@@ -270,7 +273,7 @@ export function EmployerJobForm() {
       shift: jobData.schedule,
       work_setting: [jobData.locationStreet, jobData.locationCity, jobData.locationState].filter(Boolean).join(", "),
       required_capabilities: jobData.requiredSkills,
-      preferred_capabilities: [],
+      preferred_capabilities: jobData.preferredSkills,
       experience_level: "",
       summary: jobData.description,
       active: true
@@ -432,7 +435,7 @@ export function EmployerJobForm() {
               <option>Flexible</option>
             </select>
           </Field>
-          <Field label="Required skills" id="requiredSkills" fullWidth>
+          <Field label="Required capabilities" id="requiredSkills" fullWidth>
             <textarea
               id="requiredSkills"
               name="requiredSkills"
@@ -443,6 +446,19 @@ Kitchen leadership
 Food safety
 Inventory management`}
               defaultValue={editingJob ? joinSkills(editingJob.requiredSkills) : ""}
+              className={jobFieldClassName}
+            />
+          </Field>
+          <Field label="Preferred capabilities" id="preferredSkills" fullWidth>
+            <textarea
+              id="preferredSkills"
+              name="preferredSkills"
+              rows={4}
+              placeholder={`Optional - enter one skill per line:
+Bilingual
+Forklift certified
+POS system experience`}
+              defaultValue={editingJob ? joinSkills(editingJob.preferredSkills) : ""}
               className={jobFieldClassName}
             />
           </Field>
