@@ -165,11 +165,30 @@ export function MyMatches({ role }: { role: Role }) {
   }, [role]);
 
   function reachOut(record: MatchRecord) {
-    attemptPreferredContact({
-      targetAccount: { email: role === "employer" ? record.candidateProfile?.candidateEmail : record.job.employerEmail },
-      senderLabel: "A mutual match",
-      jobTitle: record.job.title
-    });
+    if (role === "employer") {
+      // Never hand the candidate's actual email to the employer's device (a
+      // mailto: navigation would expose it, and email addresses are
+      // identifying) - match_messages is the only sanctioned contact channel
+      // an employer gets post-match.
+      const message = addMatchThreadMessage({
+        ...getThread(record),
+        senderRole: "employer",
+        senderEmail: accountEmail,
+        text: "Let's schedule a time to connect about this match."
+      });
+      if (message) {
+        setThreadMessages((current) => ({ ...current, [record.key]: [...(current[record.key] ?? []), message] }));
+      }
+      setOpenMessageKey(record.key);
+    } else {
+      // The company side is already public, so handing the employer's
+      // contact info to the candidate is fine.
+      attemptPreferredContact({
+        targetAccount: { email: record.job.employerEmail },
+        senderLabel: "A mutual match",
+        jobTitle: record.job.title
+      });
+    }
     logAdminEvent({
       type: "reach_out_clicked",
       userRole: role === "employer" ? "employer" : "candidate",
@@ -262,15 +281,18 @@ export function MyMatches({ role }: { role: Role }) {
                       <div className="space-y-4 p-4">
                         {role === "employer" ? (
                           <div className="space-y-3">
-                            {/* Mutual-match-only unlock: name and AI narrative summary never
-                                render pre-match - see PendingInterestRecord above. */}
+                            {/* Mutual match unlocks fuller CAPABILITY detail only - never
+                                identity. Workplace Match never discloses name, pronouns,
+                                employer names, branch, rank, clearance, dates/year counts,
+                                publications, or locations served to an employer, at any
+                                tier. employerSummary is the only summary field this block
+                                may render - see PendingInterestRecord above for the
+                                pre-match field allowlist. */}
                             <div className="rounded-md border border-red-100 bg-red-50 p-3">
                               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-red-800">Mutual match unlocked</p>
-                              <p className="mt-1 text-sm font-bold text-zinc-950">
-                                {record.candidateProfile?.fullName || "Name not provided"}
-                              </p>
-                              {record.candidateProfile?.capabilitySummary ? (
-                                <p className="mt-1 text-sm leading-6 text-zinc-700">{record.candidateProfile.capabilitySummary}</p>
+                              <p className="mt-1 text-sm font-bold text-zinc-950">Matched candidate</p>
+                              {record.candidateProfile?.employerSummary ? (
+                                <p className="mt-1 text-sm leading-6 text-zinc-700">{record.candidateProfile.employerSummary}</p>
                               ) : null}
                             </div>
                             <div className="grid gap-3 sm:grid-cols-2">

@@ -8,7 +8,6 @@ import {
   addMatchFoundNotification,
   addNewMessageNotification,
   addScheduleRequestNotification,
-  attemptPreferredContact,
   type ContactMethod
 } from "../lib/contactPreferences";
 import {
@@ -64,12 +63,20 @@ type JobListing = {
 
 type applicantProfile = {
   userId?: string;
+  // candidateEmail is intentionally kept for internal notification routing
+  // only (addNewMessageNotification/addScheduleRequestNotification recipient
+  // lookups) - it must never be rendered. fullName is deliberately NOT part
+  // of this type: this platform never discloses candidate identity to an
+  // employer, at any tier, so there is nothing to accidentally read.
   candidateEmail?: string;
-  fullName?: string;
   zipCode?: string;
   desiredJobType?: string;
   workPreference?: string;
   capabilitySummary?: string;
+  // Capability-only, pronoun-neutral narrative - the ONLY summary field this
+  // file may ever render to an employer. capabilitySummary above is the
+  // candidate's own draft and may contain PII - never render it here.
+  employerSummary?: string;
   topSkills?: string[];
   experienceLevel?: string;
   educationLevel?: string;
@@ -1390,11 +1397,10 @@ function EmployerMutualMatchActions({
       applicantId,
       employerId: employerAccount.email
     });
-    attemptPreferredContact({
-      targetAccount: ApplicantAccount,
-      senderLabel: employerAccount.companyName || employerAccount.displayName || employerAccount.email || "A mutual match",
-      jobTitle: job.title
-    });
+    // Never hand the candidate's actual email/phone to the employer's device
+    // (a mailto:/sms:/tel: navigation would expose it, and email addresses
+    // are identifying) - match_messages is the only sanctioned contact
+    // channel post-match.
     sendEmployerMessage("Let's schedule a time to connect about this match.");
     sendScheduleNotifications(
       "Schedule conversation requested for a mutual match.",
@@ -1433,11 +1439,15 @@ function EmployerMutualMatchActions({
 
   return (
     <div className="mt-3 space-y-2 border-t border-gray-100 pt-3">
-      {/* Mutual-match-only unlock: name and AI narrative summary never render
-          pre-match - only zip-area/skills/match % are shown before this. */}
+      {/* Mutual match unlocks fuller CAPABILITY detail only - never identity.
+          Workplace Match never discloses name, pronouns, employer names,
+          branch, rank, clearance, dates/year counts, publications, or
+          locations served to an employer, at any tier. employerSummary is
+          the only summary field this block may render - it is generated
+          specifically to be capability-only and pronoun-neutral. */}
       <div className="space-y-1.5 rounded-md border border-red-100 bg-red-50 p-3">
         <p className="text-xs font-semibold uppercase tracking-[0.12em] text-red-800">Mutual match unlocked</p>
-        <p className="text-sm font-bold text-zinc-950">{profile.fullName || "Name not provided"}</p>
+        <p className="text-sm font-bold text-zinc-950">Matched candidate</p>
         {profile.experienceLevel ? <p className="text-xs text-zinc-600">{profile.experienceLevel}</p> : null}
         {profile.topSkills?.length ? (
           <div className="flex flex-wrap gap-1.5">
@@ -1448,8 +1458,8 @@ function EmployerMutualMatchActions({
             ))}
           </div>
         ) : null}
-        {profile.capabilitySummary ? (
-          <p className="text-sm leading-6 text-zinc-700">{profile.capabilitySummary}</p>
+        {profile.employerSummary ? (
+          <p className="text-sm leading-6 text-zinc-700">{profile.employerSummary}</p>
         ) : null}
       </div>
       <div className="grid grid-cols-2 gap-2">

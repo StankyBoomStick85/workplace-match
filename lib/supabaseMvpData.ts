@@ -17,6 +17,11 @@ export type MvpApplicantProfile = {
   desiredJobType?: string;
   workPreference?: string;
   capabilitySummary?: string;
+  // Capability-only, pronoun-neutral narrative generated specifically for
+  // employer display - the only summary field an employer-facing view may
+  // ever render. capabilitySummary above is the candidate's own draft (may
+  // contain PII) and must never be shown to an employer.
+  employerSummary?: string;
   topSkills?: string[];
   experienceLevel?: string;
   updatedAt?: string;
@@ -442,6 +447,7 @@ function mapCandidateProfile(data: any): MvpApplicantProfile {
     desiredJobType: Array.isArray(data.job_types) ? data.job_types[0] ?? "" : "",
     workPreference: data.work_preference ?? "",
     capabilitySummary: data.summary ?? "",
+    employerSummary: data.employer_summary ?? "",
     topSkills: data.capability_tags ?? [],
     experienceLevel: data.experience_level ?? "",
     updatedAt: data.created_at ?? "",

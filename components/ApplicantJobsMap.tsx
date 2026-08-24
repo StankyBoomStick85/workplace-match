@@ -1210,11 +1210,13 @@ export function ApplicantJobsMap() {
   }
 
   function reachOutToEmployer(job: JobListing) {
+    // Never put the candidate's own name into the outbound email/sms body -
+    // Workplace Match never discloses candidate identity to an employer, at
+    // any tier, including via what the candidate's own outreach reveals.
     const employerAccount = findEmployerAccount(job.employerEmail);
-    const senderLabel = profile?.fullName || account?.displayName || "A mutual match";
     return attemptPreferredContact({
       targetAccount: employerAccount,
-      senderLabel,
+      senderLabel: "A matched candidate",
       jobTitle: job.title
     });
   }
