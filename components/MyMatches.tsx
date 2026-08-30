@@ -4,6 +4,8 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { attemptPreferredContact } from "../lib/contactPreferences";
 import { logAdminEvent } from "../lib/adminEvents";
+import { logError } from "../lib/logError";
+import { scanEmployerFacingText, formatViolations } from "../lib/employerTextGuard";
 import { addMatchThreadMessage, refreshMatchThreadMessages, type MatchMessage, type MatchThreadContext } from "../lib/matchMessages";
 import { calculateSkillMatch, getApplicantMatchSignals } from "../lib/skillMatch";
 import {
@@ -110,25 +112,51 @@ export function MyMatches({ role }: { role: Role }) {
         role === "employer" ? match.employerId === user.id : match.candidateId === user.id
       );
 
+      const nextMatches = scopedMatches
+        .map((match) => {
+          const job = jobs.find((storedJob) => storedJob.id === match.jobId);
+          if (!job) {
+            return null;
+          }
+
+          return {
+            key: `${match.employerId}:${match.jobId}:${match.candidateId}`,
+            job,
+            match,
+            candidateProfile: candidateProfiles.find((profile) => profile.userId === match.candidateId)
+          };
+        })
+        .filter(Boolean) as MatchRecord[];
+
       setUserId(user.id);
       setAccountEmail(user.email);
-      setMatches(
-        scopedMatches
-          .map((match) => {
-            const job = jobs.find((storedJob) => storedJob.id === match.jobId);
-            if (!job) {
-              return null;
-            }
+      setMatches(nextMatches);
 
-            return {
-              key: `${match.employerId}:${match.jobId}:${match.candidateId}`,
-              job,
-              match,
-              candidateProfile: candidateProfiles.find((profile) => profile.userId === match.candidateId)
-            };
-          })
-          .filter(Boolean) as MatchRecord[]
-      );
+      // Defense in depth: catches an employer_summary row that was generated
+      // before the identity-guard fix and still has PII baked into its
+      // stored text (fixing the render path doesn't fix content already in
+      // the DB - see the regeneration note in the mutual-match unlock). This
+      // is a render-time check, not just a generation-time one, because a
+      // tainted row can be read here regardless of when it was written.
+      if (role === "employer") {
+        for (const record of nextMatches) {
+          const violations = scanEmployerFacingText(record.candidateProfile?.employerSummary ?? "");
+          if (violations.length > 0) {
+            console.error("[MyMatches] employer_summary failed identity guard at render time", {
+              candidateId: record.match.candidateId,
+              violations
+            });
+            logError({
+              route: "MyMatches",
+              errorMessage: `Stored employer_summary failed identity guard: ${formatViolations(violations)}`,
+              errorType: "privacy_violation",
+              severity: "high",
+              userId: record.match.candidateId,
+              metadata: { violations }
+            });
+          }
+        }
+      }
 
       if (role === "employer") {
         const mutualPairKeys = new Set(scopedMatches.map((match) => `${match.jobId}:${match.candidateId}`));
@@ -291,9 +319,12 @@ export function MyMatches({ role }: { role: Role }) {
                             <div className="rounded-md border border-red-100 bg-red-50 p-3">
                               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-red-800">Mutual match unlocked</p>
                               <p className="mt-1 text-sm font-bold text-zinc-950">Matched candidate</p>
-                              {record.candidateProfile?.employerSummary ? (
+                              {record.candidateProfile?.employerSummary &&
+                              scanEmployerFacingText(record.candidateProfile.employerSummary).length === 0 ? (
                                 <p className="mt-1 text-sm leading-6 text-zinc-700">{record.candidateProfile.employerSummary}</p>
-                              ) : null}
+                              ) : (
+                                <p className="mt-1 text-sm text-zinc-500">Capability summary unavailable - pending review.</p>
+                              )}
                             </div>
                             <div className="grid gap-3 sm:grid-cols-2">
                               <div className="rounded-md border border-gray-200 bg-white p-3">

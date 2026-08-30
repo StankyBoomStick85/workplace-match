@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
+import { scanEmployerFacingText, reportTextGuardViolation } from "@/lib/employerTextGuard";
+import { sendEmail } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -60,7 +62,7 @@ export async function POST() {
 
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("job_types, experience_level, capability_tags, summary, alternate_paths")
+    .select("display_name, job_types, experience_level, capability_tags, summary, alternate_paths")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -90,7 +92,7 @@ export async function POST() {
 
   const systemPrompt = `You are a career intelligence engine. Your job is NOT to find roles similar to what this person has already done. Your job is to read the entire profile — every field, every detail, every implied skill — and ask: what kind of person is capable of all of this?
 
-CRITICAL ANONYMITY RULE: This platform never discloses candidate identity to an employer, at any tier. Refer to them only as "this candidate" or using they/them/their pronouns - never he/him, she/her, or any gendered term, and never their name or initials. Never name a past employer, unit, command, branch of service, rank, or security clearance level. Never state exact dates, years of service, tenure length, or age. Never name a specific country, region, or named operation/deployment. Never mention a publication or other named authored work. The candidate's identity must remain fully hidden at all times - describe capability only, never who they are or where/when they did it. If any such identifying detail appears in the profile information below, omit it from your output entirely.
+CRITICAL ANONYMITY RULE: This platform never discloses candidate identity to an employer, at any tier. Refer to them only as "this candidate" or using they/them/their pronouns - never he/him, she/her, or any gendered term, and never their name or initials. Never name a past employer, unit, command, branch of service, or rank. Never state exact dates, years of service, tenure length, or age. Never name a specific country, region, or named operation/deployment. Never mention a publication or other named authored work. Security clearance is the one exception: if it applies, state it as a capability fact ("holds an active security clearance," or the specific level if given) and never name who granted, sponsored, or investigated it. The candidate's identity must remain fully hidden at all times - describe capability only, never who they are or where/when they did it. If any such identifying detail appears in the profile information below, omit it from your output entirely.
 
 Look beyond job titles and education. Look at what this person has actually managed, survived, juggled, and delivered. A person who raised children alone, managed a household budget, handled medical needs, maintained high credit under financial pressure, and kept everything running — that is an operations and logistics brain. Name what that is. Surface it.
 
@@ -141,7 +143,33 @@ Return exactly 5 alternate role paths using this exact format for each:
     return NextResponse.json({ error: `AI generation failed: ${msg}` }, { status: 500 });
   }
 
-  const alternatePaths = parseAlternatePaths(text);
+  const parsedPaths = parseAlternatePaths(text);
+
+  // Mechanical safety net: same category of failure that shipped a live
+  // name/rank/clearance-sponsor/tenure disclosure in commit e79cd4f7. Rather
+  // than try to redact prose in place, a path that fails the guard is
+  // dropped entirely from what gets saved/returned - the rest of the list is
+  // unaffected.
+  const knownFullName = profile.display_name ?? null;
+  const alternatePaths: AlternatePath[] = [];
+  for (const path of parsedPaths) {
+    const combinedText = [path.roleTitle, path.explanation, path.entryPoint, path.gap].join("\n");
+    const violations = scanEmployerFacingText(combinedText, { knownFullName });
+    if (violations.length > 0) {
+      await reportTextGuardViolation({
+        adminClient,
+        sendEmailFn: sendEmail,
+        route: "generate-alternate-paths",
+        field: `alternate_path:${path.roleTitle}`,
+        userId: user.id,
+        violations,
+        text: combinedText,
+        severity: "medium"
+      });
+      continue;
+    }
+    alternatePaths.push(path);
+  }
 
   const { error: updateError } = await adminClient
     .from("candidate_profiles")

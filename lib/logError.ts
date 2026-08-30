@@ -4,6 +4,7 @@ export type ErrorType =
   | "ai_generation"
   | "auth"
   | "database"
+  | "privacy_violation"
   | "unknown";
 
 export interface LogErrorParams {

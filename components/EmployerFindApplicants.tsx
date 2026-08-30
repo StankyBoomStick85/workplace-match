@@ -17,6 +17,8 @@ import {
   type MatchThreadContext
 } from "../lib/matchMessages";
 import { logAdminEvent } from "../lib/adminEvents";
+import { logError } from "../lib/logError";
+import { scanEmployerFacingText, formatViolations } from "../lib/employerTextGuard";
 import {
   addInterest as addSupabaseInterest,
   addMutualMatch as addSupabaseMutualMatch,
@@ -1335,6 +1337,29 @@ function EmployerMutualMatchActions({
     setMessages(getMatchThreadMessages(thread));
   }, [thread.applicantId, thread.employerId, thread.jobId]);
 
+  // Defense in depth: catches an employer_summary row that was generated
+  // before the identity-guard fix and still has PII baked into its stored
+  // text (fixing the render path doesn't fix content already in the DB).
+  // This is a render-time check, not just a generation-time one, because a
+  // tainted row can be read here regardless of when it was written.
+  useEffect(() => {
+    const violations = scanEmployerFacingText(profile.employerSummary ?? "");
+    if (violations.length > 0) {
+      console.error("[EmployerFindApplicants] employer_summary failed identity guard at render time", {
+        candidateId: applicantId,
+        violations
+      });
+      logError({
+        route: "EmployerFindApplicants",
+        errorMessage: `Stored employer_summary failed identity guard: ${formatViolations(violations)}`,
+        errorType: "privacy_violation",
+        severity: "high",
+        userId: applicantId,
+        metadata: { violations }
+      });
+    }
+  }, [applicantId, profile.employerSummary]);
+
   function sendEmployerMessage(text: string) {
     if (!employerAccount) {
       return;
@@ -1458,9 +1483,11 @@ function EmployerMutualMatchActions({
             ))}
           </div>
         ) : null}
-        {profile.employerSummary ? (
+        {profile.employerSummary && scanEmployerFacingText(profile.employerSummary).length === 0 ? (
           <p className="text-sm leading-6 text-zinc-700">{profile.employerSummary}</p>
-        ) : null}
+        ) : (
+          <p className="text-xs text-zinc-500">Capability summary unavailable - pending review.</p>
+        )}
       </div>
       <div className="grid grid-cols-2 gap-2">
         <button

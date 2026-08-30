@@ -14,6 +14,8 @@ import {
   type StoredDoc,
   type CapabilityEntry
 } from "@/lib/capabilityPipeline";
+import { scanEmployerFacingText, reportTextGuardViolation } from "@/lib/employerTextGuard";
+import { sendEmail } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -52,7 +54,7 @@ export async function POST() {
 
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("job_types, experience_level, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, capability_generation_status, document_metadata")
+    .select("display_name, job_types, experience_level, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, capability_generation_status, document_metadata")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -170,9 +172,9 @@ export async function POST() {
   const tStep4End = Date.now();
   console.log("[generate-capability-finalize][timing] step4 complete t=" + tStep4End + " delta=" + (tStep4End - t7) + "ms responseLen=" + positionsText.length);
 
-  const recommendedPosition = extractSection(positionsText, "RECOMMENDED_POSITION", "ENTRY_POINT");
-  const entryPoint = extractSection(positionsText, "ENTRY_POINT", "FUTURE_POSITIONS");
-  const futurePositions = extractSection(positionsText, "FUTURE_POSITIONS");
+  let recommendedPosition = extractSection(positionsText, "RECOMMENDED_POSITION", "ENTRY_POINT");
+  let entryPoint = extractSection(positionsText, "ENTRY_POINT", "FUTURE_POSITIONS");
+  let futurePositions = extractSection(positionsText, "FUTURE_POSITIONS");
 
   const t8 = Date.now();
 
@@ -199,6 +201,44 @@ export async function POST() {
 
   const t9 = Date.now();
   console.log("[generate-capability-finalize][timing] employer summary complete t9=" + t9 + " delta=" + (t9 - t8) + "ms employerSummaryLen=" + employerSummary.length);
+
+  // Mechanical safety net: this is the same category of failure that shipped
+  // a live name/rank/clearance-sponsor/tenure disclosure in commit e79cd4f7 -
+  // a prompt asking for anonymity is not a control, only a check on the
+  // actual output is. employer_summary is checked at "high" severity because
+  // it is the field that actually reaches an employer's screen; the other
+  // three are candidate-facing today but held to the same policy, so they're
+  // checked too, at "medium," to catch the same failure mode before it can
+  // ever reach a future employer-facing surface.
+  const knownFullName = profile.display_name ?? null;
+  const guardChecks: Array<{ field: string; text: string; severity: "high" | "medium" }> = [
+    { field: "employer_summary", text: employerSummary, severity: "high" },
+    { field: "recommended_position", text: recommendedPosition, severity: "medium" },
+    { field: "entry_point", text: entryPoint, severity: "medium" },
+    { field: "future_positions", text: futurePositions, severity: "medium" }
+  ];
+  const redacted: Record<string, string> = {};
+  for (const check of guardChecks) {
+    const violations = scanEmployerFacingText(check.text, { knownFullName });
+    if (violations.length === 0) {
+      continue;
+    }
+    redacted[check.field] = "";
+    await reportTextGuardViolation({
+      adminClient,
+      sendEmailFn: sendEmail,
+      route: "generate-capability-finalize",
+      field: check.field,
+      userId: user.id,
+      violations,
+      text: check.text,
+      severity: check.severity
+    });
+  }
+  if ("employer_summary" in redacted) employerSummary = redacted.employer_summary;
+  if ("recommended_position" in redacted) recommendedPosition = redacted.recommended_position;
+  if ("entry_point" in redacted) entryPoint = redacted.entry_point;
+  if ("future_positions" in redacted) futurePositions = redacted.future_positions;
 
   const { error: updateError } = await adminClient
     .from("candidate_profiles")
