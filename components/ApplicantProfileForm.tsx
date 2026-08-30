@@ -30,6 +30,7 @@ type DocumentMeta = {
   extractedText?: string;
   extractionStatus?: "pending" | "complete" | "failed";
   evidenceStatus?: "pending" | "complete" | "failed";
+  evidenceExtractedAt?: string;
 };
 
 type AlternatePath = {
@@ -77,6 +78,43 @@ type ApplicantProfile = {
 
 function splitSkills(value: string) {
   return value.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+// Renders in the viewer's local timezone via toLocaleString's default behavior.
+// Returns null (never "Invalid Date") for anything missing or unparseable, so
+// callers can fall back to a plain "Not yet extracted" instead of showing junk.
+function formatExtractionTimestamp(iso?: string): string | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
+
+// Compact, single-line extraction status for a document list row. Evidence
+// status/timestamp are display-only here - see extractEvidenceFromOneDocument
+// (lib/capabilityPipeline.ts) for what actually writes them.
+function getExtractionStatusLine(doc: DocumentMeta): { text: string; className: string } {
+  const timestampLabel = formatExtractionTimestamp(doc.evidenceExtractedAt);
+
+  if (doc.evidenceStatus === "complete" && timestampLabel) {
+    return { text: `✓ Extracted ${timestampLabel}`, className: "text-green-700" };
+  }
+
+  if (doc.evidenceStatus === "failed") {
+    return {
+      text: timestampLabel
+        ? `Extraction had trouble reading this document - try Re-extract. Last attempted ${timestampLabel}.`
+        : "Extraction had trouble reading this document - try Re-extract.",
+      className: "font-semibold text-amber-700"
+    };
+  }
+
+  return { text: "Not yet extracted", className: "text-zinc-400" };
 }
 
 type AccordionEntry = { title: string; content: string; tag?: "VERIFIED" | "USER_PROVIDED" };
@@ -581,7 +619,12 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
       setDocumentMeta((current) =>
         current.map((d) =>
           d.id === doc.id
-            ? { ...d, extractionStatus: result.extractionStatus, evidenceStatus: result.evidenceStatus }
+            ? {
+                ...d,
+                extractionStatus: result.extractionStatus,
+                evidenceStatus: result.evidenceStatus,
+                evidenceExtractedAt: result.evidenceExtractedAt
+              }
             : d
         )
       );
@@ -1060,16 +1103,14 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
         {/* Document list */}
         {documentMeta.length > 0 ? (
           <ul className="mt-5 divide-y divide-gray-100 rounded-md border border-gray-200">
-            {documentMeta.map((doc) => (
+            {documentMeta.map((doc) => {
+              const statusLine = getExtractionStatusLine(doc);
+              return (
               <li key={doc.id} className="flex items-center justify-between gap-4 px-4 py-3">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-zinc-900">{doc.label}</p>
                   <p className="truncate text-xs text-zinc-500">{doc.filename}</p>
-                  {doc.evidenceStatus === "failed" ? (
-                    <p className="mt-0.5 text-xs font-semibold text-amber-700">
-                      Extraction had trouble reading this document - try Re-extract.
-                    </p>
-                  ) : null}
+                  <p className={`mt-0.5 text-xs ${statusLine.className}`}>{statusLine.text}</p>
                 </div>
                 <div className="flex shrink-0 items-center gap-3">
                   <button
@@ -1089,7 +1130,8 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
                   </button>
                 </div>
               </li>
-            ))}
+              );
+            })}
           </ul>
         ) : (
           <p className="mt-5 text-sm text-zinc-500">No documents uploaded yet.</p>

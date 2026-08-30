@@ -160,7 +160,8 @@ export async function POST(request: Request) {
       extractionStatus,
       extractedTextLength: extractedText.length,
       evidenceStatus,
-      evidenceCount: evidenceItems.length
+      evidenceCount: evidenceItems.length,
+      evidenceExtractedAt
     });
   } catch (err) {
     console.error("[process-document] metadata update failed", err);
