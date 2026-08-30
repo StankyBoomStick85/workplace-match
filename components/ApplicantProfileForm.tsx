@@ -82,7 +82,7 @@ function splitSkills(value: string) {
 
 // Renders in the viewer's local timezone via toLocaleString's default behavior.
 // Returns null (never "Invalid Date") for anything missing or unparseable, so
-// callers can fall back to a plain "Not yet extracted" instead of showing junk.
+// callers can fall back to a plain "Not yet scanned" instead of showing junk.
 function formatExtractionTimestamp(iso?: string): string | null {
   if (!iso) return null;
   const date = new Date(iso);
@@ -102,19 +102,19 @@ function getExtractionStatusLine(doc: DocumentMeta): { text: string; className: 
   const timestampLabel = formatExtractionTimestamp(doc.evidenceExtractedAt);
 
   if (doc.evidenceStatus === "complete" && timestampLabel) {
-    return { text: `✓ Extracted ${timestampLabel}`, className: "text-green-700" };
+    return { text: `✓ Scanned ${timestampLabel}`, className: "text-green-700" };
   }
 
   if (doc.evidenceStatus === "failed") {
     return {
       text: timestampLabel
-        ? `Extraction had trouble reading this document - try Re-extract. Last attempted ${timestampLabel}.`
-        : "Extraction had trouble reading this document - try Re-extract.",
+        ? `We had trouble reading this document - try Rescan. Last attempted ${timestampLabel}.`
+        : "We had trouble reading this document - try Rescan.",
       className: "font-semibold text-amber-700"
     };
   }
 
-  return { text: "Not yet extracted", className: "text-zinc-400" };
+  return { text: "Not yet scanned", className: "text-zinc-400" };
 }
 
 type AccordionEntry = { title: string; content: string; tag?: "VERIFIED" | "USER_PROVIDED" };
@@ -613,7 +613,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
       const result = await res.json().catch(() => ({}));
       if (!res.ok) {
         console.error("[handleReextractDocument] failed", result);
-        setDocError(result.error ?? "Re-extraction failed. Please try again.");
+        setDocError(result.error ?? "Rescan failed. Please try again.");
         return;
       }
       setDocumentMeta((current) =>
@@ -1099,6 +1099,9 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
         <p className="mt-2 text-sm leading-6 text-zinc-600">
           Add resumes, transcripts, certifications, performance reviews, NCOERs, OERs, or awards. The AI Capability Engine reads these as primary source material to generate a more accurate profile. Accepted formats: PDF, JPG, PNG, DOC, DOCX (5 MB max each).
         </p>
+        <p className="mt-2 text-sm leading-6 text-zinc-600">
+          If a document isn't reading correctly, click Rescan and we'll read it again.
+        </p>
 
         {/* Document list */}
         {documentMeta.length > 0 ? (
@@ -1119,7 +1122,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
                     disabled={reextractingDocId === doc.id}
                     className="text-xs font-semibold text-zinc-500 transition hover:text-red-700 disabled:opacity-50"
                   >
-                    {reextractingDocId === doc.id ? "Re-extracting..." : "Re-extract"}
+                    {reextractingDocId === doc.id ? "Rescanning..." : "Rescan"}
                   </button>
                   <button
                     type="button"
