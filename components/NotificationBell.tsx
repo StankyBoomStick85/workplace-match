@@ -112,6 +112,15 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
       metadata: { notificationType: notification.type }
     });
 
+    if (notification.type === "capability_ready") {
+      const nextPath = "/applicant/profile";
+      if (window.location.pathname === nextPath) {
+        return;
+      }
+      window.location.href = nextPath;
+      return;
+    }
+
     if (notification.type !== "new_match" && notification.type !== "interest_received") {
       return;
     }

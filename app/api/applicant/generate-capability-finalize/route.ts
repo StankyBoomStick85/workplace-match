@@ -16,6 +16,7 @@ import {
 } from "@/lib/capabilityPipeline";
 import { scanEmployerFacingText, reportTextGuardViolation } from "@/lib/employerTextGuard";
 import { sendEmail } from "@/lib/email";
+import { addNotificationByUserId } from "@/lib/supabaseMvpData";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -74,6 +75,15 @@ export async function POST() {
       { status: 400 }
     );
   }
+
+  // Phase feedback: written after the "groups_ready" gate check above (never
+  // before it - overwriting that value before checking it would break the gate)
+  // so a client polling this profile mid-request sees the real final stage
+  // running. Overwritten by "complete" before this request returns.
+  await adminClient
+    .from("candidate_profiles")
+    .update({ capability_generation_status: "writing_profile" })
+    .eq("user_id", user.id);
 
   const evidenceGroups: EvidenceGroup[] = Array.isArray(profile.pending_evidence_groups)
     ? (profile.pending_evidence_groups as EvidenceGroup[])
@@ -259,6 +269,20 @@ export async function POST() {
   if (updateError) {
     console.error("[generate-capability-finalize] Failed to save AI output", updateError);
     return NextResponse.json({ error: "Failed to save generated profile." }, { status: 500 });
+  }
+
+  // Completion notification - so someone who navigates away from the profile
+  // page while this was running still learns it finished. Fired here rather
+  // than at the end of generate-capability (phase 1) because this is the point
+  // the profile is actually fully written and viewable.
+  const { error: notifyError } = await addNotificationByUserId({
+    recipientUserId: user.id,
+    type: "capability_ready",
+    title: "Your capability profile is ready",
+    message: "Your capability profile has finished generating. Review it and approve when you're ready."
+  });
+  if (notifyError) {
+    console.error("[generate-capability-finalize] Failed to send completion notification", notifyError);
   }
 
   const tEnd = Date.now();

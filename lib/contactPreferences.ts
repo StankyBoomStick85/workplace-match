@@ -10,7 +10,7 @@ export type ContactMethod = "email" | "text" | "call";
 
 export type ContactNotification = {
   id: string;
-  type: "new_match" | "new_message" | "schedule_request" | "missed_contact" | "interest_received";
+  type: "new_match" | "new_message" | "schedule_request" | "missed_contact" | "interest_received" | "capability_ready";
   recipientEmail: string;
   senderEmail: string;
   jobId: string;

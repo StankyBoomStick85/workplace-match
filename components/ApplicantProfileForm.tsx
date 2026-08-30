@@ -7,20 +7,18 @@ const PROFILE_PICTURE_BUCKET = "profile-pictures";
 const DOCUMENTS_BUCKET = "candidate-documents";
 const MAX_DOC_BYTES = 5 * 1024 * 1024; // 5 MB
 
-const PHASE1_MESSAGES = [
-  "Analyzing your documents...",
-  "Extracting your experience...",
-  "Reading between the lines...",
-  "Cross-referencing your sources...",
-  "Almost done extracting...",
-];
-const PHASE2_MESSAGES = [
-  "Building your profile...",
-  "Writing your capability summary...",
-  "Mapping your next role...",
-  "Polishing the details...",
-  "Almost there...",
-];
+// Real, backend-sourced stage labels - not a decorative rotation. Keyed by the
+// exact capability_generation_status values generate-capability and
+// generate-capability-finalize write as they progress (see those routes).
+// There's no sub-phase signal inside generate-capability-finalize itself, so
+// "writing_profile" covers the whole of phase 2 as one stage, matching the
+// three named stages this is meant to show: reviewing documents, grouping
+// capabilities, writing profile.
+const STAGE_LABELS: Record<string, string> = {
+  extracting_documents: "Reviewing your documents...",
+  grouping_capabilities: "Grouping your capabilities...",
+  writing_profile: "Writing your profile...",
+};
 
 type DocumentMeta = {
   id: string;
@@ -31,6 +29,7 @@ type DocumentMeta = {
   uploadedAt: string;
   extractedText?: string;
   extractionStatus?: "pending" | "complete" | "failed";
+  evidenceStatus?: "pending" | "complete" | "failed";
 };
 
 type AlternatePath = {
@@ -287,21 +286,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
   const [pendingPictureFile, setPendingPictureFile] = useState<File | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatePhase, setGeneratePhase] = useState<"idle" | "phase1" | "phase2">("idle");
-  const [funMessage, setFunMessage] = useState(PHASE1_MESSAGES[0]);
-
-  useEffect(() => {
-    if (generatePhase === "idle") {
-      return;
-    }
-    const messages = generatePhase === "phase1" ? PHASE1_MESSAGES : PHASE2_MESSAGES;
-    let idx = 0;
-    setFunMessage(messages[idx]);
-    const interval = setInterval(() => {
-      idx = (idx + 1) % messages.length;
-      setFunMessage(messages[idx]);
-    }, 4000);
-    return () => clearInterval(interval);
-  }, [generatePhase]);
+  const [progressMessage, setProgressMessage] = useState(STAGE_LABELS.extracting_documents);
   const [generateError, setGenerateError] = useState("");
   const [canRetryFinalize, setCanRetryFinalize] = useState(false);
   const [pendingReviewMessage, setPendingReviewMessage] = useState("");
@@ -332,6 +317,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
   const [isUploadingDoc, setIsUploadingDoc] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
   const [docError, setDocError] = useState("");
+  const [reextractingDocId, setReextractingDocId] = useState("");
 
   function handleProfilePictureChange(file: File | null) {
     if (!file) return;
@@ -572,11 +558,47 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
     }
   }
 
+  // The only remedy for a badly-extracted document once its evidence is cached -
+  // re-runs process-document for this one already-uploaded document, which
+  // always re-does both transcription and evidence extraction from scratch and
+  // overwrites whatever was cached before. Without this, a bad extraction was
+  // permanent short of deleting and re-uploading the file.
+  async function handleReextractDocument(doc: DocumentMeta) {
+    setDocError("");
+    setReextractingDocId(doc.id);
+    try {
+      const res = await fetch("/api/applicant/process-document", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: doc.path, docId: doc.id }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        console.error("[handleReextractDocument] failed", result);
+        setDocError(result.error ?? "Re-extraction failed. Please try again.");
+        return;
+      }
+      setDocumentMeta((current) =>
+        current.map((d) =>
+          d.id === doc.id
+            ? { ...d, extractionStatus: result.extractionStatus, evidenceStatus: result.evidenceStatus }
+            : d
+        )
+      );
+    } catch (err) {
+      console.error("[handleReextractDocument] unexpected error", err);
+      setDocError("An unexpected error occurred.");
+    } finally {
+      setReextractingDocId("");
+    }
+  }
+
   // Phase 2: reads the evidence groups Phase 1 already saved and produces the final
   // capability profile. Split out so it can be retried on its own if it fails after
   // Phase 1 succeeded, without re-running Phase 1's expensive document extraction.
   async function runFinalize(): Promise<boolean> {
     setGeneratePhase("phase2");
+    setProgressMessage(STAGE_LABELS.writing_profile);
     try {
       const response = await fetch("/api/applicant/generate-capability-finalize", { method: "POST" });
       const result = await response.json();
@@ -626,12 +648,37 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
     }
   }
 
+  // Polls the profile's real capability_generation_status while a generate-capability
+  // request is in flight, so the displayed stage reflects what the backend is
+  // actually doing (see STAGE_LABELS) rather than a decorative rotation untethered
+  // from real progress. Stops as soon as `stopSignal.stopped` is set by the caller.
+  async function pollGenerationStatus(stopSignal: { stopped: boolean }) {
+    while (!stopSignal.stopped) {
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      if (stopSignal.stopped) return;
+      try {
+        const res = await fetch("/api/mvp/read?resource=candidate-profile");
+        const { data } = await res.json();
+        const status = data?.capability_generation_status as string | undefined;
+        const label = status ? STAGE_LABELS[status] : undefined;
+        if (label) setProgressMessage(label);
+      } catch {
+        // Transient poll failure - the next tick tries again; the outstanding
+        // generate-capability request itself is unaffected either way.
+      }
+    }
+  }
+
   async function handleGenerate() {
     setIsGenerating(true);
     setGenerateError("");
     setCanRetryFinalize(false);
     setPendingReviewMessage("");
     setGeneratePhase("phase1");
+    setProgressMessage(STAGE_LABELS.extracting_documents);
+
+    const stopSignal = { stopped: false };
+    pollGenerationStatus(stopSignal);
 
     try {
       const response = await fetch("/api/applicant/generate-capability", { method: "POST" });
@@ -647,10 +694,12 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
         return;
       }
 
+      stopSignal.stopped = true;
       await runFinalize();
     } catch {
       setGenerateError("An unexpected error occurred. Please try again.");
     } finally {
+      stopSignal.stopped = true;
       setIsGenerating(false);
       setGeneratePhase("idle");
     }
@@ -1016,14 +1065,29 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-zinc-900">{doc.label}</p>
                   <p className="truncate text-xs text-zinc-500">{doc.filename}</p>
+                  {doc.evidenceStatus === "failed" ? (
+                    <p className="mt-0.5 text-xs font-semibold text-amber-700">
+                      Extraction had trouble reading this document - try Re-extract.
+                    </p>
+                  ) : null}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => handleDeleteDocument(doc)}
-                  className="shrink-0 text-xs font-semibold text-zinc-500 transition hover:text-red-700"
-                >
-                  Remove
-                </button>
+                <div className="flex shrink-0 items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => handleReextractDocument(doc)}
+                    disabled={reextractingDocId === doc.id}
+                    className="text-xs font-semibold text-zinc-500 transition hover:text-red-700 disabled:opacity-50"
+                  >
+                    {reextractingDocId === doc.id ? "Re-extracting..." : "Re-extract"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteDocument(doc)}
+                    className="text-xs font-semibold text-zinc-500 transition hover:text-red-700"
+                  >
+                    Remove
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
@@ -1114,7 +1178,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                  </svg>
-                 {funMessage}
+                 {progressMessage}
               </>
             ) : (
               "Generate My Capability Profile"

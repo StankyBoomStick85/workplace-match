@@ -88,7 +88,7 @@ export type MvpMatch = {
 
 export type MvpNotification = {
   id: string;
-  type: "new_match" | "new_message" | "schedule_request" | "missed_contact" | "interest_received";
+  type: "new_match" | "new_message" | "schedule_request" | "missed_contact" | "interest_received" | "capability_ready";
   recipientEmail: string;
   senderEmail: string;
   jobId: string;

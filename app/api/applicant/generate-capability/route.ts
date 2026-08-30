@@ -80,11 +80,98 @@ export async function POST(request: Request) {
 
   console.log("[generate-capability][timing] STAGE INPUT docCount=" + storedDocs.length + " correctionMessagePresent=" + Boolean(correctionMessage));
 
-  // --- Step 1: per-document evidence extraction ---
-  const { items: extractedItems, unreadableDocLabels, evidenceExtractionFailures } =
-    await extractEvidenceFromDocuments(storedDocs, adminClient, anthropic, correctionMessage);
+  // Phase feedback: written before the expensive work starts so a client polling
+  // this profile mid-request sees which real stage is running (see
+  // ApplicantProfileForm.tsx's generate-phase polling). Always overwritten by
+  // "groups_ready" before this request returns - see the final update below.
+  await adminClient
+    .from("candidate_profiles")
+    .update({ capability_generation_status: "extracting_documents" })
+    .eq("user_id", user.id);
 
-  const allEvidenceItems: EvidenceItem[] = [...extractedItems];
+  // --- Step 1: per-document evidence extraction ---
+  // A correction changes extraction behavior itself - buildExtractionPrompt's
+  // correctionSection tells the model to use the correction text to decide what
+  // evidence to extract and how to describe it - so cached evidence is invalid by
+  // definition whenever correctionMessage is present. That path always re-extracts
+  // every document fresh and never reads or writes the cache, so a correction's
+  // results can never poison what a plain, no-correction "Generate" reads later.
+  let allEvidenceItems: EvidenceItem[];
+  let unreadableDocLabels: string[];
+  let evidenceExtractionFailures: string[];
+  // Patch-by-id, not a full array snapshot - the candidate's document list can
+  // change (upload/delete) while this request is running, since the upload/
+  // delete controls aren't disabled during generation. Keeping only the
+  // per-doc fields to merge (applied against a FRESH read right before the
+  // final write, below) means a concurrent add/delete is never clobbered by
+  // a stale full-array overwrite from the snapshot read at the top of this
+  // request.
+  const cachePatchByDocId = new Map<string, Pick<StoredDoc, "evidenceItems" | "evidenceStatus" | "evidenceExtractedAt">>();
+
+  if (correctionMessage) {
+    const result = await extractEvidenceFromDocuments(storedDocs, adminClient, anthropic, correctionMessage);
+    allEvidenceItems = [...result.items];
+    unreadableDocLabels = result.unreadableDocLabels;
+    evidenceExtractionFailures = result.evidenceExtractionFailures;
+  } else {
+    const cached: StoredDoc[] = [];
+    const needsExtraction: StoredDoc[] = [];
+    for (const doc of storedDocs) {
+      if (doc.evidenceStatus === "complete" && Array.isArray(doc.evidenceItems)) {
+        cached.push(doc);
+      } else {
+        needsExtraction.push(doc);
+      }
+    }
+
+    console.log(
+      "[generate-capability][timing] cache split cachedCount=" + cached.length +
+      " needsExtractionCount=" + needsExtraction.length
+    );
+
+    const cachedItems = cached.flatMap((doc) => doc.evidenceItems ?? []);
+
+    let backfilledItems: EvidenceItem[] = [];
+    let backfillUnreadable: string[] = [];
+    let backfillFailures: string[] = [];
+
+    if (needsExtraction.length > 0) {
+      // Cache-miss backfill only - never the full 27-at-once fan-out. Runs at the
+      // same concurrency-limited pool used everywhere else in this pipeline (see
+      // EXTRACTION_CONCURRENCY_LIMIT), so a large backlog of never-cached
+      // documents (e.g. right after this feature ships) degrades to a controlled
+      // queue instead of colliding with account rate limits.
+      const backfillResult = await extractEvidenceFromDocuments(needsExtraction, adminClient, anthropic);
+      backfilledItems = backfillResult.items;
+      backfillUnreadable = backfillResult.unreadableDocLabels;
+      backfillFailures = backfillResult.evidenceExtractionFailures;
+
+      // Persist what was just backfilled so it never has to be re-extracted again -
+      // this is the entire point of the cache. A doc that failed extraction is
+      // marked "failed" rather than left "pending" forever, so it's visible (via
+      // the per-document re-extract control) rather than silently retried on
+      // every future Generate click.
+      const evidenceByDocId = new Map<string, EvidenceItem[]>();
+      for (const item of backfilledItems) {
+        const list = evidenceByDocId.get(item.sourceDocId) ?? [];
+        list.push(item);
+        evidenceByDocId.set(item.sourceDocId, list);
+      }
+      const extractedAt = new Date().toISOString();
+      for (const doc of needsExtraction) {
+        const items = evidenceByDocId.get(doc.id) ?? [];
+        cachePatchByDocId.set(doc.id, {
+          evidenceItems: items,
+          evidenceStatus: items.length > 0 ? "complete" : "failed",
+          evidenceExtractedAt: extractedAt
+        });
+      }
+    }
+
+    allEvidenceItems = [...cachedItems, ...backfilledItems];
+    unreadableDocLabels = backfillUnreadable;
+    evidenceExtractionFailures = backfillFailures;
+  }
 
   const t4 = Date.now();
   console.log("[generate-capability][timing] document extraction complete delta=" + (t4 - t2) + "ms docCount=" + storedDocs.length + " extractedEvidence=" + allEvidenceItems.length + " unreadable=" + unreadableDocLabels.length + " extractionFailures=" + evidenceExtractionFailures.length + " correctionMessagePresent=" + Boolean(correctionMessage));
@@ -96,6 +183,11 @@ export async function POST(request: Request) {
   }));
 
   console.log("[generate-capability][timing] totalEvidence (incl. self-reported)=" + allEvidenceItems.length);
+
+  await adminClient
+    .from("candidate_profiles")
+    .update({ capability_generation_status: "grouping_capabilities" })
+    .eq("user_id", user.id);
 
   // --- Step 2: cross-document grouping pass (chunked + merge) ---
   const t5 = Date.now();
@@ -140,6 +232,31 @@ export async function POST(request: Request) {
   if (correctionMessage) {
     updatePayload.correction_notes = correctionMessage;
     updatePayload.is_approved = false;
+  }
+
+  if (cachePatchByDocId.size > 0) {
+    // Re-read document_metadata fresh here rather than reusing the storedDocs
+    // snapshot from the top of this request - the candidate's document list can
+    // have changed (upload/delete) during the extraction work above, and this
+    // merge must apply against current reality, not a stale copy that would
+    // silently resurrect a deleted document or drop one just added.
+    const { data: freshProfile, error: freshFetchError } = await adminClient
+      .from("candidate_profiles")
+      .select("document_metadata")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (freshFetchError) {
+      console.error("[generate-capability] Failed to re-fetch document_metadata for cache merge", freshFetchError);
+    } else {
+      const freshDocs: StoredDoc[] = Array.isArray(freshProfile?.document_metadata)
+        ? (freshProfile.document_metadata as StoredDoc[])
+        : [];
+      updatePayload.document_metadata = freshDocs.map((doc) => {
+        const patch = cachePatchByDocId.get(doc.id);
+        return patch ? { ...doc, ...patch } : doc;
+      });
+    }
   }
 
   const tDbWriteStart = Date.now();

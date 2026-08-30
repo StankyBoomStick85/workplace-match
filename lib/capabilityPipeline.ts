@@ -26,6 +26,15 @@ export type StoredDoc = {
   contentType: string;
   extractedText?: string;
   extractionStatus?: "pending" | "complete" | "failed";
+  // Per-document evidence cache, populated once at upload time (see
+  // process-document/route.ts) so generate-capability never has to re-run
+  // extraction for a document it's already extracted. Never used when a
+  // correction is in progress - extraction behavior itself changes during a
+  // correction (see buildExtractionPrompt), so cached evidence is invalid by
+  // definition in that path and must always be bypassed.
+  evidenceItems?: EvidenceItem[];
+  evidenceStatus?: "pending" | "complete" | "failed";
+  evidenceExtractedAt?: string;
 };
 
 export type CapabilityEntry = {
@@ -210,6 +219,169 @@ export function buildSelfReportedEvidenceItems(input: {
   return items;
 }
 
+// Runs a worker pool of exactly `limit` concurrent workers pulling from a shared
+// index, rather than fixed-size chunking - a slow item never stalls the other
+// (limit - 1) workers the way waiting for a whole chunk to finish would. Used to
+// cap Anthropic call concurrency so a large document backlog degrades to a
+// controlled queue instead of an unthrottled fan-out that collides with account
+// rate limits and the SDK's own retry/backoff (which produces the same wall-clock
+// cost as running sequentially, just with extra failed attempts along the way).
+export async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    for (;;) {
+      const current = nextIndex++;
+      if (current >= items.length) return;
+      try {
+        const value = await fn(items[current], current);
+        results[current] = { status: "fulfilled", value };
+      } catch (reason) {
+        results[current] = { status: "rejected", reason };
+      }
+    }
+  }
+
+  const workerCount = Math.min(limit, items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
+// Extraction concurrency ceiling shared by every caller (single-document upload-time
+// extraction always runs at concurrency 1 in practice since it's one document; this
+// applies when generate-capability backfills multiple cache misses or re-extracts
+// everything for a correction). Chosen to stay well under typical account rate
+// limits rather than firing every document at once.
+export const EXTRACTION_CONCURRENCY_LIMIT = 5;
+
+export type SingleDocEvidenceResult = {
+  items: EvidenceItem[];
+  unreadable: boolean;
+  extractionFailed: boolean;
+};
+
+// Extracts evidence from exactly one document. Pulled out of extractEvidenceFromDocuments
+// so it can be called standalone at upload time (one document, one invocation) as well as
+// in bulk (below) for cache misses and correction-driven full re-extraction.
+export async function extractEvidenceFromOneDocument(
+  doc: StoredDoc,
+  adminClient: SupabaseClient,
+  anthropic: Anthropic,
+  correctionInstruction?: string,
+  idx = 0
+): Promise<SingleDocEvidenceResult> {
+  let docContent: ContentBlock[] = [];
+  let usesPdfBeta = false;
+
+  if (doc.extractionStatus === "complete" && doc.extractedText) {
+    docContent = [{ type: "text", text: `Document: "${doc.label}" (${doc.filename})\n\n${doc.extractedText}` }];
+  } else {
+    const isImage = doc.contentType.startsWith("image/");
+    const isPdf = doc.contentType === "application/pdf";
+
+    if (!isImage && !isPdf) {
+      return { items: [], unreadable: true, extractionFailed: false };
+    }
+
+    try {
+      const { data: blob, error: dlErr } = await adminClient.storage
+        .from("candidate-documents")
+        .download(doc.path);
+      if (dlErr || !blob) throw dlErr ?? new Error("empty download");
+      const bytes = await blob.arrayBuffer();
+      if (bytes.byteLength > 4 * 1024 * 1024) {
+        return { items: [], unreadable: true, extractionFailed: false };
+      }
+      const b64 = Buffer.from(bytes).toString("base64");
+
+      if (isImage) {
+        const mediaType = doc.contentType as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+        docContent = [
+          { type: "image", source: { type: "base64", media_type: mediaType, data: b64 } },
+          { type: "text", text: `(Above image document: "${doc.label}", filename: "${doc.filename}")` }
+        ];
+      } else {
+        docContent = [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 }, title: doc.label }];
+        usesPdfBeta = true;
+      }
+    } catch (err) {
+      console.error("[capabilityPipeline][step1] failed to load doc", doc.path, err);
+      return { items: [], unreadable: true, extractionFailed: false };
+    }
+  }
+
+  const messageContent: ContentBlock[] = [
+    ...docContent,
+    { type: "text", text: buildExtractionPrompt(doc, correctionInstruction) }
+  ];
+
+  try {
+    let response;
+    if (usesPdfBeta) {
+      response = await anthropic.beta.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 4096,
+        temperature: 0.2,
+        betas: ["pdfs-2024-09-25"],
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        messages: [{ role: "user", content: messageContent as any }],
+      });
+    } else {
+      response = await anthropic.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 4096,
+        temperature: 0.2,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        messages: [{ role: "user", content: messageContent as any }],
+      });
+    }
+
+    const raw = response.content.find((b) => b.type === "text")?.text ?? "[]";
+
+    let parsed: EvidenceItem[] = [];
+    try {
+      const directParse = JSON.parse(raw);
+      parsed = Array.isArray(directParse) ? (directParse as EvidenceItem[]) : [];
+    } catch {
+      let arrayParsed = false;
+      const match = raw.match(/\[[\s\S]*\]/);
+      if (match) {
+        try {
+          const matchParse = JSON.parse(match[0]);
+          parsed = Array.isArray(matchParse) ? (matchParse as EvidenceItem[]) : [];
+          arrayParsed = true;
+        } catch { /* fall through to object-level salvage */ }
+      }
+      if (!arrayParsed) {
+        const objectMatches = raw.match(/\{[^{}]*\}/g) ?? [];
+        const salvaged: EvidenceItem[] = [];
+        for (const objStr of objectMatches) {
+          try {
+            const obj = JSON.parse(objStr);
+            if (obj && typeof obj === "object") salvaged.push(obj as EvidenceItem);
+          } catch { /* skip malformed object */ }
+        }
+        parsed = salvaged;
+      }
+    }
+
+    const extractionFailed = parsed.length === 0 && doc.extractionStatus === "complete" && !!doc.extractedText;
+    if (extractionFailed) {
+      console.error("[capabilityPipeline][step1][" + idx + "] EVIDENCE EXTRACTION FAILURE: doc=" + JSON.stringify(doc.label) + " had complete extractedText but yielded zero evidence items");
+    }
+
+    return { items: parsed, unreadable: false, extractionFailed };
+  } catch (err) {
+    console.error("[capabilityPipeline][step1][" + idx + "] Haiku error", err);
+    return { items: [], unreadable: false, extractionFailed: false };
+  }
+}
+
 export async function extractEvidenceFromDocuments(
   storedDocs: StoredDoc[],
   adminClient: SupabaseClient,
@@ -220,121 +392,17 @@ export async function extractEvidenceFromDocuments(
   const unreadableDocLabels: string[] = [];
   const evidenceExtractionFailures: string[] = [];
 
-  const extractEvidenceFromDoc = async (doc: StoredDoc, idx: number): Promise<EvidenceItem[]> => {
-    let docContent: ContentBlock[] = [];
-    let usesPdfBeta = false;
+  const results = await mapWithConcurrency(storedDocs, EXTRACTION_CONCURRENCY_LIMIT, (doc, idx) =>
+    extractEvidenceFromOneDocument(doc, adminClient, anthropic, correctionInstruction, idx)
+  );
 
-    if (doc.extractionStatus === "complete" && doc.extractedText) {
-      docContent = [{ type: "text", text: `Document: "${doc.label}" (${doc.filename})\n\n${doc.extractedText}` }];
-    } else {
-      const isImage = doc.contentType.startsWith("image/");
-      const isPdf = doc.contentType === "application/pdf";
-
-      if (!isImage && !isPdf) {
-        unreadableDocLabels.push(`"${doc.label}" (${doc.filename})`);
-        return [];
-      }
-
-      try {
-        const { data: blob, error: dlErr } = await adminClient.storage
-          .from("candidate-documents")
-          .download(doc.path);
-        if (dlErr || !blob) throw dlErr ?? new Error("empty download");
-        const bytes = await blob.arrayBuffer();
-        if (bytes.byteLength > 4 * 1024 * 1024) {
-          unreadableDocLabels.push(`"${doc.label}" (file too large)`);
-          return [];
-        }
-        const b64 = Buffer.from(bytes).toString("base64");
-
-        if (isImage) {
-          const mediaType = doc.contentType as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
-          docContent = [
-            { type: "image", source: { type: "base64", media_type: mediaType, data: b64 } },
-            { type: "text", text: `(Above image document: "${doc.label}", filename: "${doc.filename}")` }
-          ];
-        } else {
-          docContent = [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 }, title: doc.label }];
-          usesPdfBeta = true;
-        }
-      } catch (err) {
-        console.error("[capabilityPipeline][step1] failed to load doc", doc.path, err);
-        unreadableDocLabels.push(`"${doc.label}" (could not be read)`);
-        return [];
-      }
-    }
-
-    const messageContent: ContentBlock[] = [
-      ...docContent,
-      { type: "text", text: buildExtractionPrompt(doc, correctionInstruction) }
-    ];
-
-    try {
-      let response;
-      if (usesPdfBeta) {
-        response = await anthropic.beta.messages.create({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 4096,
-          temperature: 0.2,
-          betas: ["pdfs-2024-09-25"],
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          messages: [{ role: "user", content: messageContent as any }],
-        });
-      } else {
-        response = await anthropic.messages.create({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 4096,
-          temperature: 0.2,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          messages: [{ role: "user", content: messageContent as any }],
-        });
-      }
-
-      const raw = response.content.find((b) => b.type === "text")?.text ?? "[]";
-
-      let parsed: EvidenceItem[] = [];
-      try {
-        const directParse = JSON.parse(raw);
-        parsed = Array.isArray(directParse) ? (directParse as EvidenceItem[]) : [];
-      } catch {
-        let arrayParsed = false;
-        const match = raw.match(/\[[\s\S]*\]/);
-        if (match) {
-          try {
-            const matchParse = JSON.parse(match[0]);
-            parsed = Array.isArray(matchParse) ? (matchParse as EvidenceItem[]) : [];
-            arrayParsed = true;
-          } catch { /* fall through to object-level salvage */ }
-        }
-        if (!arrayParsed) {
-          const objectMatches = raw.match(/\{[^{}]*\}/g) ?? [];
-          const salvaged: EvidenceItem[] = [];
-          for (const objStr of objectMatches) {
-            try {
-              const obj = JSON.parse(objStr);
-              if (obj && typeof obj === "object") salvaged.push(obj as EvidenceItem);
-            } catch { /* skip malformed object */ }
-          }
-          parsed = salvaged;
-        }
-      }
-
-      if (parsed.length === 0 && doc.extractionStatus === "complete" && !!doc.extractedText) {
-        evidenceExtractionFailures.push(`"${doc.label}" (${doc.filename})`);
-        console.error("[capabilityPipeline][step1][" + idx + "] EVIDENCE EXTRACTION FAILURE: doc=" + JSON.stringify(doc.label) + " had complete extractedText but yielded zero evidence items");
-      }
-
-      return parsed;
-    } catch (err) {
-      console.error("[capabilityPipeline][step1][" + idx + "] Haiku error", err);
-      return [];
-    }
-  };
-
-  const results = await Promise.allSettled(storedDocs.map((doc, idx) => extractEvidenceFromDoc(doc, idx)));
-  for (const result of results) {
-    if (result.status === "fulfilled") allEvidenceItems.push(...result.value);
-  }
+  storedDocs.forEach((doc, idx) => {
+    const result = results[idx];
+    if (result.status !== "fulfilled") return;
+    allEvidenceItems.push(...result.value.items);
+    if (result.value.unreadable) unreadableDocLabels.push(`"${doc.label}" (${doc.filename})`);
+    if (result.value.extractionFailed) evidenceExtractionFailures.push(`"${doc.label}" (${doc.filename})`);
+  });
 
   return { items: allEvidenceItems, unreadableDocLabels, evidenceExtractionFailures };
 }
