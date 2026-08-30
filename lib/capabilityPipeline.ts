@@ -605,8 +605,23 @@ Use each group's own "groupId" value from the EVIDENCE GROUPS above, exactly as 
 One entry per line. No numbered lists. No bullets. No category headers in the output.`;
 }
 
+// "sentinel" = the model deliberately returned STEP3_ESCALATE_SENTINEL (only
+// possible when a correction is in play - see buildStep3Prompt's correctionSection).
+// "count_mismatch" = the response wasn't the sentinel, but didn't produce a valid,
+// well-formed entry for every input group - this is the case a truncated or
+// malformed response falls into, and missingGroupIds/parsedCount/expectedCount/
+// rawTextLength exist specifically so a caller can log what actually happened
+// instead of the previous bare "not fully parseable" with no data behind it.
+export type Step3EscalateReason = "sentinel" | "count_mismatch";
 export type Step3Result =
-  | { kind: "escalate" }
+  | {
+      kind: "escalate";
+      reason: Step3EscalateReason;
+      rawTextLength: number;
+      parsedCount: number;
+      expectedCount: number;
+      missingGroupIds: string[];
+    }
   | { kind: "entries"; capabilitySummary: string; capabilityEntries: CapabilityEntry[] };
 
 // Parses Step 3's line-prefixed output. verificationStatus is ALWAYS taken from the
@@ -619,11 +634,19 @@ export type Step3Result =
 export function parseStep3Response(raw: string, evidenceGroups: EvidenceGroup[], storedDocs: StoredDoc[]): Step3Result {
   const trimmed = raw.trim();
   if (trimmed === STEP3_ESCALATE_SENTINEL) {
-    return { kind: "escalate" };
+    return {
+      kind: "escalate",
+      reason: "sentinel",
+      rawTextLength: trimmed.length,
+      parsedCount: 0,
+      expectedCount: evidenceGroups.length,
+      missingGroupIds: []
+    };
   }
 
   const capabilityEntries: CapabilityEntry[] = [];
   const prosLines: string[] = [];
+  const matchedGroupIds = new Set<string>();
 
   for (const line of raw.split("\n")) {
     const prefixMatch = line.match(/^\[([\w-]+)\]\s*(.*)$/);
@@ -648,12 +671,20 @@ export function parseStep3Response(raw: string, evidenceGroups: EvidenceGroup[],
       primaryDocId: group.primarySourceDocId,
       corroboratingDocLabels: group.corroboratingDocIds.map((id) => resolveDocLabel(id, storedDocs))
     });
+    matchedGroupIds.add(groupId);
   }
 
   if (capabilityEntries.length !== evidenceGroups.length) {
     // Not every group produced a valid entry - not safely parseable. Escalate rather
     // than save a capability list that silently dropped or garbled some entries.
-    return { kind: "escalate" };
+    return {
+      kind: "escalate",
+      reason: "count_mismatch",
+      rawTextLength: raw.length,
+      parsedCount: capabilityEntries.length,
+      expectedCount: evidenceGroups.length,
+      missingGroupIds: evidenceGroups.map((g) => g.groupId).filter((id) => !matchedGroupIds.has(id))
+    };
   }
 
   return { kind: "entries", capabilitySummary: prosLines.join("\n"), capabilityEntries };

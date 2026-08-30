@@ -107,13 +107,18 @@ export async function POST(request: Request) {
   // exact same two-request split the main "Generate" button already uses to avoid
   // this timeout.
   let tier1Result: Step3Result;
+  let tier1StopReason: string | null = null;
   try {
+    // max_tokens raised 4096->8192 to match generate-capability-finalize's Step 3
+    // call and Step 2's grouping ceiling - see that route for why a large
+    // evidence-group count can approach the old ceiling on its own.
     const tier1Response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 4096,
+      max_tokens: 8192,
       temperature: 0.2,
       messages: [{ role: "user", content: buildStep3Prompt(savedGroups, correctionMessage) }],
     });
+    tier1StopReason = tier1Response.stop_reason;
     const rawTier1 = tier1Response.content.find((b) => b.type === "text")?.text ?? "";
     tier1Result = parseStep3Response(rawTier1, savedGroups, storedDocs);
   } catch (err) {
@@ -122,7 +127,19 @@ export async function POST(request: Request) {
   }
 
   if (tier1Result.kind !== "entries") {
-    console.log("[correct-capability][tier1] escalation required (sentinel or unparseable Step 3 output)");
+    // Diagnostics logged even though this path already has a recovery route
+    // (escalation to Tier 2) - a "sentinel" here is expected/normal, but
+    // "count_mismatch" is the same failure mode diagnosed on
+    // generate-capability-finalize's hard-fail path, and worth the same
+    // visibility here even though it isn't fatal in this route.
+    console.log("[correct-capability][tier1] escalation required", {
+      reason: tier1Result.reason,
+      stopReason: tier1StopReason,
+      rawTextLength: tier1Result.rawTextLength,
+      parsedCount: tier1Result.parsedCount,
+      expectedCount: tier1Result.expectedCount,
+      missingGroupIds: tier1Result.missingGroupIds
+    });
     return NextResponse.json({ success: true, tier: "escalation_required" });
   }
 

@@ -118,9 +118,14 @@ export async function POST() {
 
   if (evidenceGroups.length > 0) {
     try {
+      // max_tokens raised 4096->8192 (matching Step 2's grouping ceiling): with no
+      // description-length cap in buildStep3Prompt, 17+ evidence groups can plausibly
+      // approach 4096 output tokens on their own, and a response cut off mid-line
+      // fails the exact-count check below just like a genuinely malformed one - see
+      // the diagnostic that traced this route's 500s to exactly that failure mode.
       const step3Response = await anthropic.messages.create({
         model: "claude-sonnet-4-6",
-        max_tokens: 4096,
+        max_tokens: 8192,
         temperature: 0.2,
         messages: [{ role: "user", content: buildStep3Prompt(evidenceGroups) }],
       });
@@ -129,11 +134,22 @@ export async function POST() {
       const result = parseStep3Response(rawStep3Text, evidenceGroups, storedDocs);
 
       if (result.kind === "escalate") {
-        // Phase 2 always calls buildStep3Prompt without a correction instruction, so the
-        // model has no sentinel to return here - this branch only fires on a genuine
-        // parse failure (partial/garbled output), which is why it's a hard error rather
-        // than a silent partial save.
-        console.error("[generate-capability-finalize] Step 3 output was not fully parseable (unexpected without a correction in play)");
+        // Phase 2 always calls buildStep3Prompt without a correction instruction, so
+        // "sentinel" should never happen here - only "count_mismatch" is expected,
+        // and even that shouldn't happen with the raised ceiling above. Logged with
+        // full diagnostics (previously just a bare string with no data behind it) so
+        // a recurrence is immediately explainable instead of requiring a repro.
+        console.error(
+          "[generate-capability-finalize] Step 3 output was not fully parseable (unexpected without a correction in play)",
+          {
+            reason: result.reason,
+            stopReason: step3Response.stop_reason,
+            rawTextLength: result.rawTextLength,
+            parsedCount: result.parsedCount,
+            expectedCount: result.expectedCount,
+            missingGroupIds: result.missingGroupIds
+          }
+        );
         return NextResponse.json({ error: "Failed to generate capability entries. Please try again." }, { status: 500 });
       }
 
