@@ -123,6 +123,36 @@ const CASES = [
   { name: "honorific + name", text: "Mentored directly by Dr. Reyes during a two-year rotation.", expectViolation: true, expectCategory: "honorific_name" },
   { name: "candidate name, distinctive", text: "Joel DeToy personally rebuilt the intake process end to end.", name_opt: "Joel DeToy", expectViolation: true, expectCategory: "candidate_name" },
   { name: "candidate name, all common words, near co-occurrence", text: "Under Will Hunt the division doubled its output in a year.", name_opt: "Will Hunt", expectViolation: true, expectCategory: "candidate_name" },
+
+  // ─────────── RUN 2026-09-07 16:50 REGRESSIONS ───────────
+  // FP1: "deployments" armed the Tier-2 gate and flagged "General" in a
+  // civilian title. Must be CLEAN now (deployed/deployments are no longer an
+  // arming signal, and there is no strong signal or nearby weak signal).
+  {
+    name: "FP1: 'General' in 'Assistant General Manager', 'active deployments' elsewhere",
+    text: "This candidate is ready to step into an Assistant General Manager role today. They have driven measurable gains across audits, organizational transitions, and active deployments, and have led teams of forty or more.",
+    expectViolation: false,
+  },
+  {
+    name: "FP1 exact: employer_summary sentence from run 16:50",
+    text: "This candidate is ready to step into an Assistant General Manager role today.",
+    expectViolation: false,
+  },
+  // FP2: "step down" inside an explicit negation - the model REJECTING the
+  // frame. Must be CLEAN now.
+  {
+    name: "FP2: 'step down' inside 'rather than a step down'",
+    text: "The seniority is calibrated to what they already lead, making this the right entry point at the appropriate tier rather than a step down.",
+    expectViolation: false,
+  },
+  { name: "negated framing: 'not a bridge role'", text: "This is a genuine leadership seat, not a bridge role or a holding pattern.", expectViolation: false },
+  { name: "negated framing: 'without stepping down'", text: "They can move into this position without stepping down in scope or pay.", expectViolation: false },
+  { name: "negated framing: 'does not need to prove they can'", text: "Given the track record, the candidate does not need to prove they can operate at this level.", expectViolation: false },
+
+  // Negation must NOT excuse a hard term or a real disclosure.
+  { name: "negation does NOT excuse 'military'", text: "This is not a military role, but the same discipline shows up daily.", expectViolation: true, expectCategory: "outsider_framing" },
+  { name: "must still catch: 'held the rank of General'", text: "Earlier in their career they held the rank of General, overseeing a large staff.", expectViolation: true, expectCategory: "military_rank" },
+  { name: "must still catch: 'must prove they can' (not negated)", text: "They will still have to prove they can operate in a corporate environment before advancing.", expectViolation: true, expectCategory: "outsider_framing" },
 ];
 
 let failures = 0;
@@ -152,48 +182,55 @@ async function runDbCheck() {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) {
     console.log("--db: NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not in env; skipping DB check.");
+    console.log("      run with env loaded, e.g.  node --env-file=.env.local scripts/verify-text-guard.mjs --db");
     return;
   }
+  // Optional: `--db=2026-09-07T16` restricts to rows whose created_at starts
+  // with that prefix. Default: the 20 most recent generation_debug rows.
+  const arg = process.argv.find((a) => a.startsWith("--db="));
+  const prefix = arg ? arg.slice("--db=".length) : null;
+
   const { createClient } = await import("@supabase/supabase-js");
   const db = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
 
-  const { data, error } = await db
+  let q = db
     .from("error_logs")
-    .select("created_at, error_type, metadata")
-    .eq("route", "generate-capability-finalize")
+    .select("created_at, route, error_type, metadata")
     .in("error_type", ["generation_debug", "privacy_violation"])
-    .gte("created_at", "2026-09-07T15:26:00Z")
-    .lte("created_at", "2026-09-07T15:29:00Z")
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: false })
+    .limit(prefix ? 200 : 20);
+  if (prefix) q = q.gte("created_at", prefix).lt("created_at", prefix + "￿");
+  const { data, error } = await q;
 
   if (error) {
     console.log("--db: query failed:", error.message);
     return;
   }
   if (!data?.length) {
-    console.log("--db: no error_logs rows found in the 2026-09-07 15:27 window.");
+    console.log(`--db: no generation_debug / privacy_violation rows found${prefix ? ` for prefix ${prefix}` : ""}.`);
     return;
   }
 
-  console.log("=== --db: scanning real stored text from 2026-09-07 15:27 run ===\n");
-  /** @type {{label:string, text:string}[]} */
-  const fields = [];
+  console.log(`=== --db: scanning real stored text (${data.length} row(s)${prefix ? `, prefix ${prefix}` : ", most recent"}) ===\n`);
   for (const row of data) {
+    /** @type {{label:string, text:string}[]} */
+    const fields = [];
     const md = row.metadata ?? {};
     if (row.error_type === "generation_debug") {
-      if (md.step3?.raw) fields.push({ label: "generation_debug.step3.raw", text: md.step3.raw });
-      if (md.step4?.raw) fields.push({ label: "generation_debug.step4.raw (all 3 position sections)", text: md.step4.raw });
-      if (md.employerSummary?.raw) fields.push({ label: "generation_debug.employerSummary.raw", text: md.employerSummary.raw });
-    } else if (row.error_type === "privacy_violation") {
-      if (md.textPreview) fields.push({ label: `privacy_violation[${md.field}].textPreview`, text: md.textPreview });
+      if (md.step3?.raw) fields.push({ label: "step3.raw", text: md.step3.raw });
+      if (md.step4?.raw) fields.push({ label: "step4.raw (recommended_position + entry_point + future_positions)", text: md.step4.raw });
+      if (md.employerSummary?.raw) fields.push({ label: "employerSummary.raw", text: md.employerSummary.raw });
+    } else if (md.textPreview) {
+      fields.push({ label: `privacy_violation[${md.field}].textPreview`, text: md.textPreview });
     }
+    if (!fields.length) continue;
+    console.log(`--- ${row.created_at}  ${row.route}  (${row.error_type}) ---`);
+    for (const f of fields) {
+      const v = scanEmployerFacingText(f.text);
+      const status = v.length === 0 ? "CLEAN" : `${v.length} violation(s)`;
+      console.log(`  [${status}] ${f.label}  (${f.text.length} chars)`);
+      if (v.length) console.log(`            ${formatViolations(v)}`);
+    }
+    console.log("");
   }
-
-  for (const f of fields) {
-    const v = scanEmployerFacingText(f.text);
-    const status = v.length === 0 ? "CLEAN" : `${v.length} violation(s)`;
-    console.log(`[${status}] ${f.label}  (${f.text.length} chars)`);
-    if (v.length) console.log(`          ${formatViolations(v)}`);
-  }
-  console.log("");
 }

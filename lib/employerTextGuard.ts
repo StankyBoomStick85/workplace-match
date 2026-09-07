@@ -68,18 +68,22 @@ function escapeRegExp(value: string): string {
 //   private     → private sector, private equity, private practice
 //   lieutenant  → Lieutenant Governor, police / fire lieutenant
 //   ensign      → a ship's flag; a fictional (Star Trek) rank
-// These are flagged ONLY when the same text independently shows military
-// context (MILITARY_CONTEXT_PATTERN) OR the word sits in an explicit
-// rank-attribution phrase ("held the rank of Major", "served as a Captain").
+// These are flagged ONLY when: the text shows a STRONG military signal
+// anywhere (MILITARY_CONTEXT_STRONG — branch name / Tier-1 rank / DD-214 /
+// pay grade / ...), OR a WEAK signal (MILITARY_CONTEXT_WEAK — infantry /
+// platoon / combat zone / ...) sits within ~50 chars of the word, OR the word
+// is in a rank-attribution phrase ("held the rank of Major"). A phrase in its
+// own negation ("this is a management seat, not a rank like General") is
+// skipped.
 //
-// Why this does not just relocate the false positives: every time the Tier-2
-// gate opens via MILITARY_CONTEXT_PATTERN, that pattern matched on a branch
-// name or a Tier-1 rank — each of which is ALREADY an independent violation,
-// so the field is being blanked with or without the Tier-2 hit; the Tier-2
-// match only adds detail to the report. The only case where a Tier-2 term is
-// the sole trigger is the rank-attribution phrase, and that construction does
-// not appear around civilian titles — "General Manager" is never preceded by
-// "the rank of". Clean civilian prose has neither signal, so it now passes.
+// Why this does not just relocate the false positives: whenever the STRONG
+// gate opens it matched a branch name or a Tier-1 rank — already an
+// independent violation — so the field is blanked with or without the Tier-2
+// hit; the Tier-2 match only adds detail. The WEAK gate needs the signal
+// close to the specific word, so a stray "deployments" one sentence away can
+// no longer convert "Assistant General Manager" into a rank. The only case
+// where a Tier-2 term is the sole trigger is the attribution phrase, which
+// never precedes a civilian title. Clean prose has none of these, so it passes.
 const RANK_TERMS_UNAMBIGUOUS = [
   "private first class",
   "sergeant first class",
@@ -165,32 +169,36 @@ const BRANCH_TERMS = [
   "\\bspecial forces\\b",
 ];
 
-// Everyday-English tokens that signal the text is genuinely about military
-// service. Any ONE, anywhere in the scanned text, "arms" the Tier-2 rank
-// words. Kept broad on purpose — a false arm here is harmless because the
-// branch / Tier-1 term that armed it is itself already a violation.
-const MILITARY_VOCAB = [
-  "\\bmilitary\\b",
+// Signals that the surrounding text is genuinely about military service, used
+// to "arm" the Tier-2 rank words (general, major, captain, commander,
+// specialist, private, lieutenant, ensign). Split by strength:
+//
+// STRONG — a branch name, a Tier-1 rank, or vocabulary that essentially only
+// occurs in a military-service context. Any one, ANYWHERE in the text, arms
+// every Tier-2 word. Safe as a whole-text signal: a branch or Tier-1 rank is
+// already an independent violation, and the rest (DD-214, GI Bill, pay grade,
+// court-martial, ...) do not collide with ordinary business prose.
+//
+// WEAK — unit / formation words: military, but far weaker evidence and
+// occasionally civilian. A weak signal arms a Tier-2 word ONLY when it sits
+// within ~50 characters of that specific word.
+//
+// Deliberately in NEITHER set: "deployed" / "deployment(s)" — ordinary
+// software- and delivery-vocabulary; this is the word that mis-armed "General"
+// in "Assistant General Manager" (run 2026-09-07 16:50). Also out: "veteran"
+// ("a veteran operator" = experienced), and bare "brigade"/"squadron" ("fire
+// brigade", flying "squadron").
+const MILITARY_CONTEXT_STRONG_TERMS = [
+  ...BRANCH_TERMS,
+  ...RANK_TERMS_UNAMBIGUOUS.map((t) => `\\b${escapeRegExp(t)}\\b`),
   "\\bservicemembers?\\b",
   "\\bservice members?\\b",
   "\\bactive[- ]duty\\b",
-  "\\bveterans?\\b",
   "\\barmed forces\\b",
   "\\buniformed service\\b",
-  "\\bwar ?fighters?\\b",
-  "\\bdeployed\\b",
-  "\\bdeployments?\\b",
-  "\\bcombat (?:tour|deployment|zone|operations?|arms?)\\b",
-  "\\binfantry\\b",
-  "\\bplatoons?\\b",
-  "\\bbattalions?\\b",
-  "\\bbrigades?\\b",
-  "\\bsquadrons?\\b",
-  "\\bregiments?\\b",
-  "\\bgarrison\\b",
-  "\\benlisted\\b",
   "\\bnon[- ]commissioned officers?\\b",
   "\\bcommissioned officers?\\b",
+  "\\benlisted (?:personnel|service members?|soldiers?|troops|ranks)\\b",
   "\\bcourt[- ]martial\\b",
   "\\bdd[- ]?214\\b",
   "\\bgi bill\\b",
@@ -201,19 +209,35 @@ const MILITARY_VOCAB = [
   "\\b[ewo]-[1-9]\\b", // pay grades E-1..W-9..O-9
 ];
 
-const MILITARY_CONTEXT_PATTERN = new RegExp(
-  [
-    ...BRANCH_TERMS,
-    ...RANK_TERMS_UNAMBIGUOUS.map((t) => `\\b${escapeRegExp(t)}\\b`),
-    ...MILITARY_VOCAB,
-  ].join("|"),
-  "i"
-);
+const MILITARY_CONTEXT_WEAK_TERMS = [
+  "\\binfantry\\b",
+  "\\bplatoons?\\b",
+  "\\bbattalions?\\b",
+  "\\bgarrison\\b",
+  "\\bregiments?\\b",
+  "\\bcombat (?:tour|deployment|zone|zones|operations?|patrol)\\b",
+  "\\bwar ?fighters?\\b",
+];
+
+const MILITARY_CONTEXT_STRONG = new RegExp(MILITARY_CONTEXT_STRONG_TERMS.join("|"), "i");
+const MILITARY_CONTEXT_WEAK = new RegExp(MILITARY_CONTEXT_WEAK_TERMS.join("|"), "i");
 
 // Text immediately before a Tier-2 rank word that, on its own, makes the word
 // a rank rather than a job title.
 const RANK_ATTRIBUTION_BEFORE =
   /(?:rank of|ranked|promoted to|rose to(?: the rank of)?|held the rank of|attained the rank of|served as|serving as|commissioned as|retired as|decorated as)\s+(?:a |an |the )?$/i;
+
+// A guarded phrase appearing inside its own negation ("rather than a step
+// down", "not a bridge role", "without stepping down", "does not need to prove
+// they can ...") is the model REJECTING the frame — it must not be flagged.
+// Tested against the ~48 chars immediately before a match, and only counts a
+// negation that is in the same clause as the phrase (no ". ; : ! ? ," between
+// the negation word and the match). Applied to the Tier-2 rank gate, deficit
+// framing phrases, clearance attributions, years, tenure, and publication —
+// NOT to a branch name, a Tier-1 rank, or the bare words "civilian"/"military",
+// which disclose regardless of how they are used.
+const NEGATED_BEFORE =
+  /\b(?:rather than|instead of|as opposed to|far from|the opposite of|without|not|never|no longer|isn'?t|aren'?t|wasn'?t|weren'?t|doesn'?t|don'?t|didn'?t|won'?t|wouldn'?t|can'?t|couldn'?t|cannot)\b[^.;:!?,]{0,40}$/i;
 
 // ── Clearance sponsor / agency ─────────────────────────────────────────────
 // Clearance LEVEL is an allowed capability fact ("holds an active Top Secret
@@ -264,7 +288,7 @@ const CLEARANCE_CONTEXT_DEPENDENT = [
 ];
 
 const CLEARANCE_CONTEXT_PATTERN =
-  /\b(?:clearances?|classified|declassified|top secret|ts\/sci|sci|secret clearance|security clearance|polygraph|special access program|compartmented|need[- ]to[- ]know|cleared for)\b/i;
+  /\b(?:clearances?|classified|declassified|top secret|ts\/sci|secret clearance|security clearance|polygraph|special access program|compartmented|need[- ]to[- ]know|cleared for)\b/i;
 
 // ── Publication reference ─────────────────────────────────────────────────
 // Policy: never mention a publication, book, article, or other named authored
@@ -288,9 +312,18 @@ const PRONOUN_TERMS = ["he", "him", "his", "himself", "she", "her", "hers", "her
 // ambiguous words — "translate", "transition", "context" — are matched only
 // next to a framing/deficit cue, not on every ordinary use ("translate
 // strategy into results", "a systems transition", "brings industry context").
-const OUTSIDER_FRAMING_ALWAYS = [
+// "civilian" / "military" disclose the frame no matter how they are used
+// (even inside a negation like "not a military background"), so they are
+// always flagged.
+const OUTSIDER_FRAMING_HARD = [
   "\\bcivilian\\b",
   "\\bmilitary\\b",
+];
+
+// Deficit constructions. Flagged UNLESS they appear inside their own negation
+// ("rather than a step down", "not a bridge role", "without stepping down") —
+// there the model is rejecting the frame, not using it (see NEGATED_BEFORE).
+const OUTSIDER_FRAMING_DEFICIT = [
   "\\bacclimat(?:e|es|ed|ing|ion)\\b",
   "\\bre-?acclimat\\w*\\b",
   "\\bstep(?:ping)?[- ]down\\b",
@@ -304,17 +337,17 @@ const OUTSIDER_FRAMING_ALWAYS = [
 const OUTSIDER_FRAMING_CONTEXTUAL: { re: RegExp; near: RegExp; window: number }[] = [
   {
     re: /\btranslat(?:e|es|ed|ing|ion)\b/gi,
-    near: /\b(?:experience|background|skills?|capabilit\w*|service|leadership|record|resume|history)\b/i,
+    near: /\b(?:experience|background|skills?|capabilit\w*|service|leadership)\b/i,
     window: 45,
   },
   {
     re: /\btransition(?:s|ed|ing)?\b/gi,
-    near: /\b(?:new sector|new field|new industry|the industry|corporate|commercial|workforce|private[- ]?sector|business world)\b/i,
+    near: /\b(?:new sector|new field|new industry|the private sector|private[- ]?sector|corporate world|business world|the workforce|civilian)\b/i,
     window: 40,
   },
   {
     re: /\b(?:sector|industry|corporate|commercial|business)\s+context\b/gi,
-    near: /\b(?:need|needs|needed|lack|lacks|lacking|require|requires|required|missing|without|build|building|gain|gaining|acquire|acquiring|develop|developing|first|before)\b/i,
+    near: /\b(?:need|needs|needed|lack|lacks|lacking|require|requires|required|missing|without|first|before)\b/i,
     window: 45,
   },
   {
@@ -452,12 +485,23 @@ export function scanEmployerFacingText(
   );
   pushMatches(violations, rankScanText, "military_rank", unambiguousRankRe);
 
-  const militaryContext = MILITARY_CONTEXT_PATTERN.test(rankScanText);
+  // Tier-2 (context-dependent) rank words: flag only when the text carries a
+  // STRONG military signal anywhere, OR a WEAK signal within ~50 chars of this
+  // specific word, OR the word sits in a rank-attribution phrase ("held the
+  // rank of General"). Skip when the word is inside its own negation
+  // ("this is a management seat, not a rank like General").
+  const strongMilitaryContext = MILITARY_CONTEXT_STRONG.test(rankScanText);
   const contextRankRe = new RegExp(`\\b(${RANK_TERMS_CONTEXT_DEPENDENT.join("|")})\\b`, "gi");
   for (const m of rankScanText.matchAll(contextRankRe)) {
     const idx = m.index ?? 0;
     const before = rankScanText.slice(Math.max(0, idx - 48), idx);
-    if (militaryContext || RANK_ATTRIBUTION_BEFORE.test(before)) {
+    if (NEGATED_BEFORE.test(before)) continue;
+    let armed = strongMilitaryContext || RANK_ATTRIBUTION_BEFORE.test(before);
+    if (!armed) {
+      const around = rankScanText.slice(Math.max(0, idx - 50), idx + m[0].length + 50);
+      armed = MILITARY_CONTEXT_WEAK.test(around);
+    }
+    if (armed) {
       violations.push({ category: "military_rank", match: m[0], index: idx });
     }
   }
@@ -466,15 +510,19 @@ export function scanEmployerFacingText(
   pushMatches(violations, text, "branch_of_service", new RegExp(`(${BRANCH_TERMS.join("|")})`, "gi"));
 
   // ── Clearance sponsor / agency ─────────────────────────────────────────
-  pushMatches(
-    violations,
-    text,
-    "clearance_sponsor_or_agency",
-    new RegExp(`(${CLEARANCE_AGENCY_NAMES.join("|")})`, "gi")
-  );
+  // Spelled-out agency names: always (unless negated - "not investigated by
+  // any outside agency"). Acronyms / "<x> by" attributions: only within ~80
+  // chars of clearance language, and not when negated.
+  const agencyNameRe = new RegExp(`(${CLEARANCE_AGENCY_NAMES.join("|")})`, "gi");
+  for (const m of text.matchAll(agencyNameRe)) {
+    const idx = m.index ?? 0;
+    if (NEGATED_BEFORE.test(text.slice(Math.max(0, idx - 48), idx))) continue;
+    violations.push({ category: "clearance_sponsor_or_agency", match: m[0], index: idx });
+  }
   const clearanceCtxRe = new RegExp(`(${CLEARANCE_CONTEXT_DEPENDENT.join("|")})`, "gi");
   for (const m of text.matchAll(clearanceCtxRe)) {
     const idx = m.index ?? 0;
+    if (NEGATED_BEFORE.test(text.slice(Math.max(0, idx - 48), idx))) continue;
     const window = text.slice(Math.max(0, idx - 80), idx + m[0].length + 80);
     if (CLEARANCE_CONTEXT_PATTERN.test(window)) {
       violations.push({ category: "clearance_sponsor_or_agency", match: m[0], index: idx });
@@ -485,7 +533,12 @@ export function scanEmployerFacingText(
   // Skip digits that are part of a currency amount or a longer number
   // ("$2000", "12000") rather than a standalone year. Residual, accepted: a
   // bare four-digit magnitude like "a team of 2000" still matches.
-  pushMatches(violations, text, "explicit_year", /(?<![$£€\d,.\-])\b(19|20)\d{2}\b/g);
+  const yearRe = /(?<![$£€\d,.\-])\b(?:19|20)\d{2}\b/g;
+  for (const m of text.matchAll(yearRe)) {
+    const idx = m.index ?? 0;
+    if (NEGATED_BEFORE.test(text.slice(Math.max(0, idx - 48), idx))) continue;
+    violations.push({ category: "explicit_year", match: m[0], index: idx });
+  }
 
   // ── Tenure count ─────────────────────────────────────────────────────
   // "5 years of service" is a disclosure; "within 3-5 years" / "over the next
@@ -499,24 +552,35 @@ export function scanEmployerFacingText(
   for (const m of text.matchAll(tenureRe)) {
     const idx = m.index ?? 0;
     const before = text.slice(Math.max(0, idx - 40), idx);
-    if (!forwardFraming.test(before)) {
-      violations.push({ category: "tenure_count", match: m[0], index: idx });
-    }
+    if (forwardFraming.test(before)) continue;
+    if (NEGATED_BEFORE.test(text.slice(Math.max(0, idx - 48), idx))) continue;
+    violations.push({ category: "tenure_count", match: m[0], index: idx });
   }
 
   // ── Publication reference ───────────────────────────────────────────
-  pushMatches(violations, text, "publication_reference", PUBLICATION_PATTERN);
+  for (const m of text.matchAll(PUBLICATION_PATTERN)) {
+    const idx = m.index ?? 0;
+    if (NEGATED_BEFORE.test(text.slice(Math.max(0, idx - 48), idx))) continue;
+    violations.push({ category: "publication_reference", match: m[0], index: idx });
+  }
 
   // ── Outsider / deficit framing ─────────────────────────────────────
   pushMatches(
     violations,
     text,
     "outsider_framing",
-    new RegExp(`(${OUTSIDER_FRAMING_ALWAYS.join("|")})`, "gi")
+    new RegExp(`(${OUTSIDER_FRAMING_HARD.join("|")})`, "gi")
   );
+  const deficitRe = new RegExp(`(${OUTSIDER_FRAMING_DEFICIT.join("|")})`, "gi");
+  for (const m of text.matchAll(deficitRe)) {
+    const idx = m.index ?? 0;
+    if (NEGATED_BEFORE.test(text.slice(Math.max(0, idx - 48), idx))) continue;
+    violations.push({ category: "outsider_framing", match: m[0], index: idx });
+  }
   for (const { re, near, window } of OUTSIDER_FRAMING_CONTEXTUAL) {
     for (const m of text.matchAll(re)) {
       const idx = m.index ?? 0;
+      if (NEGATED_BEFORE.test(text.slice(Math.max(0, idx - 48), idx))) continue;
       const w = text.slice(Math.max(0, idx - window), idx + m[0].length + window);
       if (near.test(w)) {
         violations.push({ category: "outsider_framing", match: m[0], index: idx });
