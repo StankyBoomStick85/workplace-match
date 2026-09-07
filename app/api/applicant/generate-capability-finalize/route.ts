@@ -116,6 +116,8 @@ export async function POST() {
 
   let capabilitySummary = "";
   let capabilityEntries: CapabilityEntry[] = [];
+  let rawStep3Text = "";
+  let step3StopReason: string | null = null;
 
   if (evidenceGroups.length > 0) {
     try {
@@ -131,7 +133,8 @@ export async function POST() {
         messages: [{ role: "user", content: buildStep3Prompt(evidenceGroups) }],
       });
 
-      const rawStep3Text = step3Response.content.find((b) => b.type === "text")?.text ?? "";
+      step3StopReason = step3Response.stop_reason;
+      rawStep3Text = step3Response.content.find((b) => b.type === "text")?.text ?? "";
       const result = parseStep3Response(rawStep3Text, evidenceGroups, storedDocs);
 
       if (result.kind === "escalate") {
@@ -171,6 +174,8 @@ export async function POST() {
 
   let positionsText = "";
   let step4StopReason: string | null = null;
+  let rawEmployerText = "";
+  let employerStopReason: string | null = null;
   try {
     // max_tokens raised 4096->8192, matching Step 3: this call asks for three full
     // sections in one response, and the old ceiling was confirmed to truncate after
@@ -214,15 +219,72 @@ export async function POST() {
   );
 
   const step4Sections = extractStep4Sections(positionsText);
-  let recommendedPosition = step4Sections.recommendedPosition;
-  let entryPoint = step4Sections.entryPoint;
-  let futurePositions = step4Sections.futurePositions;
+  const recommendedPosition = step4Sections.recommendedPosition;
+  const entryPoint = step4Sections.entryPoint;
+  const futurePositions = step4Sections.futurePositions;
+  let employerSummary = "";
+
+  // --- Observability: stage tracing + raw-response persistence --------------
+  // traceStage logs each field's length + first 200 chars at every stage it
+  // passes through, so a populated field going empty is pinned to an exact
+  // stage instead of inferred from the final DB row. persistGenerationDebug
+  // writes the FULL raw Step 3 / Step 4 / employer-summary text to a durable,
+  // queryable error_logs row (error_type "generation_debug") for every run -
+  // success or failure - and also echoes it to stdout so the raw text survives
+  // even if that insert fails. Chose error_logs over a jsonb column on
+  // candidate_profiles: error_logs rows are append-only and timestamped so
+  // every run is retained for good-vs-bad comparison (a profile column would be
+  // overwritten each run), it needs no migration (error_type is free-text), it
+  // reuses the query surface already in use for this investigation, and it
+  // keeps raw model output - which can contain identity detail - out of the
+  // more widely-read candidate_profiles row.
+  const traceStage = (stage: string) => {
+    const fmt = (v: string) => "len=" + (v ?? "").length + " head=" + JSON.stringify((v ?? "").slice(0, 200));
+    console.log(
+      "[generate-capability-finalize][step4-trace][" + stage + "] " +
+      JSON.stringify({
+        recommended_position: fmt(recommendedPosition),
+        entry_point: fmt(entryPoint),
+        future_positions: fmt(futurePositions),
+        employer_summary: fmt(employerSummary)
+      })
+    );
+  };
+  const persistGenerationDebug = async (reason: string) => {
+    const payload = {
+      reason,
+      step3: { stopReason: step3StopReason, length: rawStep3Text.length, raw: rawStep3Text },
+      step4: { stopReason: step4StopReason, length: positionsText.length, raw: positionsText },
+      employerSummary: { stopReason: employerStopReason, length: rawEmployerText.length, raw: rawEmployerText },
+      step4Sections: {
+        recommendedPositionLength: step4Sections.recommendedPosition.length,
+        entryPointLength: step4Sections.entryPoint.length,
+        futurePositionsLength: step4Sections.futurePositions.length,
+        missingSections: step4Sections.missingSections
+      }
+    };
+    console.log("[generate-capability-finalize][generation-debug] " + JSON.stringify(payload));
+    try {
+      await adminClient.from("error_logs").insert({
+        route: "generate-capability-finalize",
+        error_message: "Raw capability-generation responses captured for run (" + reason + ")",
+        error_type: "generation_debug",
+        user_id: user.id,
+        severity: "low",
+        metadata: payload
+      });
+    } catch (err) {
+      console.error("[generate-capability-finalize] Failed to write generation_debug row", err);
+    }
+  };
+  traceStage("after-extractStep4Sections");
 
   if (step4Sections.missingSections.length > 0) {
     // Fail loudly rather than write a profile that's missing two-thirds of its
     // content with a "complete" status and a 200 response - this is the exact
     // failure mode diagnosed: nothing throws on a truncated-but-200 response, so
     // this check is the only thing standing between that and a silent partial save.
+    await persistGenerationDebug("step4-missing-sections");
     await reportGenerationFailure({
       adminClient,
       sendEmailFn: sendEmail,
@@ -234,7 +296,8 @@ export async function POST() {
       metadata: {
         missingSections: step4Sections.missingSections,
         stopReason: step4StopReason,
-        responseLength: positionsText.length
+        responseLength: positionsText.length,
+        rawStep4Text: positionsText
       }
     });
     return NextResponse.json(
@@ -243,12 +306,13 @@ export async function POST() {
     );
   }
 
+  traceStage("after-missingSections-check");
+
   const t8 = Date.now();
 
   // --- Employer Summary ---
   const isAlternateSummary = profile.summary_priority === "alternate";
 
-  let employerSummary = "";
   try {
     const employerMessage = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
@@ -260,8 +324,9 @@ export async function POST() {
         content: buildEmployerSummaryUserPrompt({ capabilitySummary, recommendedPosition, entryPoint, isAlternateSummary })
       }],
     });
-    const employerStopReason = employerMessage.stop_reason;
-    employerSummary = employerMessage.content.find((b) => b.type === "text")?.text ?? "";
+    employerStopReason = employerMessage.stop_reason;
+    rawEmployerText = employerMessage.content.find((b) => b.type === "text")?.text ?? "";
+    employerSummary = rawEmployerText;
 
     if (!employerSummary) {
       // The call succeeded (no exception) but returned no usable text block - a
@@ -304,6 +369,8 @@ export async function POST() {
   const t9 = Date.now();
   console.log("[generate-capability-finalize][timing] employer summary complete t9=" + t9 + " delta=" + (t9 - t8) + "ms employerSummaryLen=" + employerSummary.length);
 
+  await persistGenerationDebug("success-path");
+
   // Mechanical safety net: this is the same category of failure that shipped
   // a live name/rank/clearance-sponsor/tenure disclosure in commit e79cd4f7 -
   // a prompt asking for anonymity is not a control, only a check on the
@@ -319,13 +386,13 @@ export async function POST() {
     { field: "entry_point", text: entryPoint, severity: "medium" },
     { field: "future_positions", text: futurePositions, severity: "medium" }
   ];
-  const redacted: Record<string, string> = {};
+  const redactedFields: string[] = [];
   for (const check of guardChecks) {
     const violations = scanEmployerFacingText(check.text, { knownFullName });
     if (violations.length === 0) {
       continue;
     }
-    redacted[check.field] = "";
+    redactedFields.push(check.field);
     await reportTextGuardViolation({
       adminClient,
       sendEmailFn: sendEmail,
@@ -337,10 +404,35 @@ export async function POST() {
       severity: check.severity
     });
   }
-  if ("employer_summary" in redacted) employerSummary = redacted.employer_summary;
-  if ("recommended_position" in redacted) recommendedPosition = redacted.recommended_position;
-  if ("entry_point" in redacted) entryPoint = redacted.entry_point;
-  if ("future_positions" in redacted) futurePositions = redacted.future_positions;
+
+  traceStage("after-guard-block");
+
+  // ABORT on any redaction - same failure posture as the Step 4 missing-sections
+  // check above. A hollowed-out profile is not a success: it must never be written
+  // with status "complete" or returned as 200. (Previously this block zeroed each
+  // flagged field in place and let the save proceed.)
+  if (redactedFields.length > 0) {
+    await reportGenerationFailure({
+      adminClient,
+      sendEmailFn: sendEmail,
+      route: "generate-capability-finalize",
+      errorType: "guard_redaction_abort",
+      message: `Text guard flagged field(s); aborted before write: ${redactedFields.join(", ")}`,
+      userId: user.id,
+      severity: "high",
+      metadata: {
+        redactedFields,
+        step4StopReason,
+        employerSummaryLength: rawEmployerText.length
+      }
+    });
+    return NextResponse.json(
+      { error: "Failed to generate your profile. Please try again." },
+      { status: 500 }
+    );
+  }
+
+  traceStage("before-db-write");
 
   const { error: updateError } = await adminClient
     .from("candidate_profiles")
