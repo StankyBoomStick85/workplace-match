@@ -430,7 +430,7 @@ Grouping rules:
 - If ANY item in a group has isOfficialDocument=true, set verificationStatus="VERIFIED" and use that document's sourceDocId as primarySourceDocId.
 - Otherwise set verificationStatus="USER_PROVIDED".
 - Self-reported items (sourceDocId="profile-self-reported") may be grouped with document evidence ONLY when that document directly supports the exact same capability. Otherwise they form their own USER_PROVIDED group.
-- Military service signal (DD214, NCOERs, OERs, award orders) carries heavy weight — preserve these capabilities, do not collapse them into generic groups.
+- Evidence from ANY official document type — service records, certifications, licenses, degrees, transcripts, performance evaluations, award orders — is preserved: a distinct capability it supports must not be collapsed into a generic group. No document category gets preferential protection over another.
 - A block tagged VERIFIED must be entirely supported by verified evidence. Do not blend self-reported content into a VERIFIED block.${correctionSection}
 
 Return ONLY a valid JSON array. Each object must have exactly these fields:
@@ -477,7 +477,75 @@ export type BatchTiming = {
   itemsIn: number;
   groupsOut: number;
   elapsedMs: number;
+  // Observability: was this batch's response cut off, salvaged, or lost entirely?
+  stopReason: string | null;
+  wasTruncated: boolean;
+  salvagedCount: number | null;
+  candidateCount: number | null;
+  error: string | null; // non-null => the whole batch threw; its itemsIn produced zero groups
 };
+
+// Per-sourceDocId accounting of whether Step 2's output actually represents its
+// input. "Represented" = the docId appears as a group's primarySourceDocId or in
+// its corroboratingDocIds. claimCountDelta is a SOFT signal only (the grouping
+// model returns representative claim strings, not an exhaustive list), logged for
+// visibility but never used as a pass/fail gate — missingDocIds is the reliable
+// signal, and missingOfficialDocIds (a verified document with zero footprint) is
+// the hard-failure trigger.
+export type GroupingCoverage = {
+  inputItemCount: number;
+  inputDocIds: string[];
+  officialInputDocIds: string[];
+  representedClaimCount: number;
+  representedDocIds: string[];
+  unknownOutputDocIds: string[]; // cited by a group but not present in the input (model error)
+  missingDocIds: string[];
+  missingOfficialDocIds: string[];
+  missingItemCountByDocId: Record<string, number>;
+  claimCountDelta: number;
+};
+
+export function computeGroupingCoverage(
+  evidenceItems: EvidenceItem[],
+  groups: EvidenceGroup[]
+): GroupingCoverage {
+  const itemCountByDocId = new Map<string, number>();
+  const officialDocIds = new Set<string>();
+  for (const item of evidenceItems) {
+    itemCountByDocId.set(item.sourceDocId, (itemCountByDocId.get(item.sourceDocId) ?? 0) + 1);
+    if (item.isOfficialDocument) officialDocIds.add(item.sourceDocId);
+  }
+  const inputDocIds = [...itemCountByDocId.keys()];
+  const inputDocIdSet = new Set(inputDocIds);
+
+  const representedDocIdSet = new Set<string>();
+  let representedClaimCount = 0;
+  for (const g of groups) {
+    if (Array.isArray(g?.claims)) representedClaimCount += g.claims.length;
+    if (g?.primarySourceDocId) representedDocIdSet.add(g.primarySourceDocId);
+    if (Array.isArray(g?.corroboratingDocIds)) {
+      for (const id of g.corroboratingDocIds) if (id) representedDocIdSet.add(id);
+    }
+  }
+
+  const missingDocIds = inputDocIds.filter((id) => !representedDocIdSet.has(id));
+  const missingOfficialDocIds = missingDocIds.filter((id) => officialDocIds.has(id));
+  const missingItemCountByDocId: Record<string, number> = {};
+  for (const id of missingDocIds) missingItemCountByDocId[id] = itemCountByDocId.get(id) ?? 0;
+
+  return {
+    inputItemCount: evidenceItems.length,
+    inputDocIds,
+    officialInputDocIds: [...officialDocIds],
+    representedClaimCount,
+    representedDocIds: [...representedDocIdSet].filter((id) => inputDocIdSet.has(id)),
+    unknownOutputDocIds: [...representedDocIdSet].filter((id) => !inputDocIdSet.has(id)),
+    missingDocIds,
+    missingOfficialDocIds,
+    missingItemCountByDocId,
+    claimCountDelta: representedClaimCount - evidenceItems.length,
+  };
+}
 
 export type GroupingResult = {
   groups: EvidenceGroup[];
@@ -486,6 +554,13 @@ export type GroupingResult = {
   mergeRan: boolean;
   mergeElapsedMs: number | null;
   preliminaryGroupCount: number;
+  mergeStopReason: string | null;
+  mergeWasTruncated: boolean;
+  mergeSalvagedCount: number | null;
+  failedBatchIndexes: number[];
+  truncatedBatchIndexes: number[];
+  coverageAfterGrouping: GroupingCoverage;
+  coverageAfterMerge: GroupingCoverage | null;
 };
 
 export async function runEvidenceGrouping(
@@ -494,7 +569,12 @@ export async function runEvidenceGrouping(
   correctionInstruction?: string
 ): Promise<GroupingResult> {
   if (evidenceItems.length === 0) {
-    return { groups: [], batchCount: 0, batchTimings: [], mergeRan: false, mergeElapsedMs: null, preliminaryGroupCount: 0 };
+    return {
+      groups: [], batchCount: 0, batchTimings: [], mergeRan: false, mergeElapsedMs: null,
+      preliminaryGroupCount: 0, mergeStopReason: null, mergeWasTruncated: false, mergeSalvagedCount: null,
+      failedBatchIndexes: [], truncatedBatchIndexes: [],
+      coverageAfterGrouping: computeGroupingCoverage(evidenceItems, []), coverageAfterMerge: null,
+    };
   }
 
   const evidenceBatches: EvidenceItem[][] = [];
@@ -512,13 +592,29 @@ export async function runEvidenceGrouping(
         messages: [{ role: "user", content: buildEvidenceGroupingPrompt(batch, correctionInstruction) }],
       });
 
+      const stopReason = batchResponse.stop_reason ?? null;
       const rawBatch = batchResponse.content.find((b) => b.type === "text")?.text ?? "[]";
-      const { groups } = parseEvidenceGroupsFromRaw(rawBatch);
+      const { groups, wasTruncated, salvagedCount, candidateCount } = parseEvidenceGroupsFromRaw(rawBatch);
       const tagged = groups.map((g) => ({ ...g, groupId: "b" + batchIdx + "-" + (g.groupId ?? "g?") }));
-      return { groups: tagged, timing: { batchIndex: batchIdx, itemsIn: batch.length, groupsOut: tagged.length, elapsedMs: Date.now() - start } };
+      if (stopReason === "max_tokens" || wasTruncated) {
+        console.error(
+          "[capabilityPipeline][step2a][batch" + batchIdx + "] TRUNCATED/SALVAGED - trailing groups may be lost." +
+          " stopReason=" + stopReason + " wasTruncated=" + wasTruncated +
+          " candidateObjects=" + candidateCount + " salvagedGroups=" + salvagedCount +
+          " keptGroups=" + tagged.length + " itemsIn=" + batch.length
+        );
+      }
+      return {
+        groups: tagged,
+        timing: { batchIndex: batchIdx, itemsIn: batch.length, groupsOut: tagged.length, elapsedMs: Date.now() - start, stopReason, wasTruncated, salvagedCount, candidateCount, error: null },
+      };
     } catch (err) {
-      console.error("[capabilityPipeline][step2a][batch" + batchIdx + "] Sonnet error, skipping batch", err);
-      return { groups: [], timing: { batchIndex: batchIdx, itemsIn: batch.length, groupsOut: 0, elapsedMs: Date.now() - start } };
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[capabilityPipeline][step2a][batch" + batchIdx + "] Sonnet error - " + batch.length + " evidence items from this batch produced ZERO groups", err);
+      return {
+        groups: [],
+        timing: { batchIndex: batchIdx, itemsIn: batch.length, groupsOut: 0, elapsedMs: Date.now() - start, stopReason: null, wasTruncated: false, salvagedCount: null, candidateCount: null, error: message },
+      };
     }
   };
 
@@ -534,7 +630,34 @@ export async function runEvidenceGrouping(
   });
   batchTimings.sort((a, b) => a.batchIndex - b.batchIndex);
 
+  const failedBatchIndexes = batchTimings.filter((t) => t.error !== null).map((t) => t.batchIndex);
+  const truncatedBatchIndexes = batchTimings.filter((t) => t.stopReason === "max_tokens" || t.wasTruncated).map((t) => t.batchIndex);
+  if (failedBatchIndexes.length > 0) {
+    console.error("[capabilityPipeline][step2a] " + failedBatchIndexes.length + " batch(es) failed entirely: " + JSON.stringify(failedBatchIndexes));
+  }
+
+  const coverageAfterGrouping = computeGroupingCoverage(evidenceItems, preliminaryGroups);
+  if (coverageAfterGrouping.missingDocIds.length > 0) {
+    console.error(
+      "[capabilityPipeline][step2a] COVERAGE GAP after grouping " +
+      JSON.stringify({
+        missingDocIds: coverageAfterGrouping.missingDocIds,
+        missingOfficialDocIds: coverageAfterGrouping.missingOfficialDocIds,
+        missingItemCountByDocId: coverageAfterGrouping.missingItemCountByDocId,
+        claimCountDelta: coverageAfterGrouping.claimCountDelta,
+      })
+    );
+  }
+
+  let finalGroups: EvidenceGroup[] = preliminaryGroups;
+  let mergeRan = false;
+  let mergeElapsedMs: number | null = null;
+  let mergeStopReason: string | null = null;
+  let mergeWasTruncated = false;
+  let mergeSalvagedCount: number | null = null;
+
   if (preliminaryGroups.length > 1) {
+    mergeRan = true;
     const mergeStart = Date.now();
     try {
       const mergeResponse = await anthropic.messages.create({
@@ -544,22 +667,58 @@ export async function runEvidenceGrouping(
         messages: [{ role: "user", content: buildEvidenceGroupMergePrompt(preliminaryGroups) }],
       });
 
+      mergeStopReason = mergeResponse.stop_reason ?? null;
       const rawMerge = mergeResponse.content.find((b) => b.type === "text")?.text ?? "[]";
-      const { groups: mergedGroups } = parseEvidenceGroupsFromRaw(rawMerge);
-      const mergeElapsedMs = Date.now() - mergeStart;
+      const parsed = parseEvidenceGroupsFromRaw(rawMerge);
+      mergeWasTruncated = parsed.wasTruncated;
+      mergeSalvagedCount = parsed.salvagedCount;
+      mergeElapsedMs = Date.now() - mergeStart;
 
-      if (mergedGroups.length === 0) {
-        console.error("[capabilityPipeline][step2b] MERGE FAILURE, falling back to unmerged preliminary groups");
-        return { groups: preliminaryGroups, batchCount: evidenceBatches.length, batchTimings, mergeRan: true, mergeElapsedMs, preliminaryGroupCount: preliminaryGroups.length };
+      if (mergeStopReason === "max_tokens" || parsed.wasTruncated) {
+        console.error(
+          "[capabilityPipeline][step2b] MERGE TRUNCATED/SALVAGED - trailing merged groups may be lost." +
+          " stopReason=" + mergeStopReason + " wasTruncated=" + parsed.wasTruncated +
+          " candidateObjects=" + parsed.candidateCount + " salvagedGroups=" + parsed.salvagedCount +
+          " keptGroups=" + parsed.groups.length + " preliminaryGroups=" + preliminaryGroups.length
+        );
       }
-      return { groups: mergedGroups, batchCount: evidenceBatches.length, batchTimings, mergeRan: true, mergeElapsedMs, preliminaryGroupCount: preliminaryGroups.length };
+
+      if (parsed.groups.length === 0) {
+        console.error("[capabilityPipeline][step2b] MERGE FAILURE (0 groups parsed), falling back to unmerged preliminary groups");
+        finalGroups = preliminaryGroups;
+      } else {
+        finalGroups = parsed.groups;
+      }
     } catch (err) {
+      mergeElapsedMs = Date.now() - mergeStart;
       console.error("[capabilityPipeline][step2b] Sonnet error, falling back to unmerged preliminary groups", err);
-      return { groups: preliminaryGroups, batchCount: evidenceBatches.length, batchTimings, mergeRan: true, mergeElapsedMs: Date.now() - mergeStart, preliminaryGroupCount: preliminaryGroups.length };
+      finalGroups = preliminaryGroups;
     }
   }
 
-  return { groups: preliminaryGroups, batchCount: evidenceBatches.length, batchTimings, mergeRan: false, mergeElapsedMs: null, preliminaryGroupCount: preliminaryGroups.length };
+  const coverageAfterMerge = mergeRan ? computeGroupingCoverage(evidenceItems, finalGroups) : null;
+  if (coverageAfterMerge && coverageAfterMerge.missingDocIds.length > coverageAfterGrouping.missingDocIds.length) {
+    console.error(
+      "[capabilityPipeline][step2b] MERGE INTRODUCED A COVERAGE GAP " +
+      JSON.stringify({ before: coverageAfterGrouping.missingDocIds, after: coverageAfterMerge.missingDocIds })
+    );
+  }
+
+  return {
+    groups: finalGroups,
+    batchCount: evidenceBatches.length,
+    batchTimings,
+    mergeRan,
+    mergeElapsedMs,
+    preliminaryGroupCount: preliminaryGroups.length,
+    mergeStopReason,
+    mergeWasTruncated,
+    mergeSalvagedCount,
+    failedBatchIndexes,
+    truncatedBatchIndexes,
+    coverageAfterGrouping,
+    coverageAfterMerge,
+  };
 }
 
 // ---------- Step 3: plain-language naming pass ----------

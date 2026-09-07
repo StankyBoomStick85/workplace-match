@@ -4,6 +4,8 @@ import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
 import { extractEvidenceFromDocuments, runEvidenceGrouping, buildSelfReportedEvidenceItems, type EvidenceItem, type StoredDoc } from "@/lib/capabilityPipeline";
+import { reportGenerationFailure } from "@/lib/generationAlerts";
+import { sendEmail } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -211,14 +213,129 @@ export async function POST(request: Request) {
   }
 
   const t5b = Date.now();
+  const cov = groupingResult.coverageAfterMerge ?? groupingResult.coverageAfterGrouping;
   console.log(
     "[generate-capability][timing] step2 (grouping) complete delta=" + (t5b - t5) + "ms" +
     " batchCount=" + groupingResult.batchCount +
     " totalEvidenceItems=" + allEvidenceItems.length +
     " mergeRan=" + groupingResult.mergeRan +
     " groupCount=" + evidenceGroups.length +
+    " representedDocIds=" + cov.representedDocIds.length + "/" + cov.inputDocIds.length +
+    " missingDocIds=" + JSON.stringify(cov.missingDocIds) +
+    " missingOfficialDocIds=" + JSON.stringify(cov.missingOfficialDocIds) +
+    " claimCountDelta=" + cov.claimCountDelta +
+    " failedBatches=" + JSON.stringify(groupingResult.failedBatchIndexes) +
+    " truncatedBatches=" + JSON.stringify(groupingResult.truncatedBatchIndexes) +
     " correctionMessagePresent=" + Boolean(correctionMessage)
   );
+
+  // --- Step 2 conservation + failure surfacing -----------------------------
+  // Step 1 (extraction) is conserved item-for-item; Step 2 (grouping/merge) is
+  // not. Anything below that indicates evidence was lost must reach error_logs,
+  // not just stdout - and a wholesale loss of a VERIFIED document is fatal, not
+  // a warning: we do not save a profile that is knowingly missing verified
+  // credentials.
+
+  // (D) A whole batch threw -> ~150 evidence items produced zero groups.
+  if (groupingResult.failedBatchIndexes.length > 0) {
+    const failedTimings = groupingResult.batchTimings.filter((t) => t.error !== null);
+    const lostItems = failedTimings.reduce((sum, t) => sum + t.itemsIn, 0);
+    await reportGenerationFailure({
+      adminClient,
+      sendEmailFn: sendEmail,
+      route: "generate-capability",
+      errorType: "step2_batch_failed",
+      message: `Step 2 grouping: ${groupingResult.failedBatchIndexes.length} batch(es) failed entirely; ~${lostItems} evidence items produced no groups`,
+      userId: user.id,
+      severity: "high",
+      metadata: {
+        failedBatchIndexes: groupingResult.failedBatchIndexes,
+        batchErrors: failedTimings.map((t) => ({ batchIndex: t.batchIndex, itemsIn: t.itemsIn, error: t.error })),
+      },
+    });
+  }
+
+  // (C) A grouping or merge response was cut off at max_tokens (or needed
+  // object-level salvage) -> trailing groups silently dropped.
+  const mergeTruncated = groupingResult.mergeWasTruncated || groupingResult.mergeStopReason === "max_tokens";
+  if (groupingResult.truncatedBatchIndexes.length > 0 || mergeTruncated) {
+    await reportGenerationFailure({
+      adminClient,
+      sendEmailFn: sendEmail,
+      route: "generate-capability",
+      errorType: "step2_truncated",
+      message: `Step 2 grouping: response truncation detected (batches ${JSON.stringify(groupingResult.truncatedBatchIndexes)}, merge=${mergeTruncated})`,
+      userId: user.id,
+      severity: "medium",
+      metadata: {
+        truncatedBatchIndexes: groupingResult.truncatedBatchIndexes,
+        mergeStopReason: groupingResult.mergeStopReason,
+        mergeWasTruncated: groupingResult.mergeWasTruncated,
+        mergeSalvagedCount: groupingResult.mergeSalvagedCount,
+        batchTimings: groupingResult.batchTimings.map((t) => ({
+          batchIndex: t.batchIndex, itemsIn: t.itemsIn, groupsOut: t.groupsOut,
+          stopReason: t.stopReason, wasTruncated: t.wasTruncated, salvagedCount: t.salvagedCount,
+        })),
+      },
+    });
+  }
+
+  // (B) Conservation - hard failure: a document whose evidence is officially
+  // verified has zero footprint in the final groups. Retrying Step 2 is cheap;
+  // shipping a profile that silently lost verified credentials is not.
+  if (cov.missingOfficialDocIds.length > 0) {
+    await reportGenerationFailure({
+      adminClient,
+      sendEmailFn: sendEmail,
+      route: "generate-capability",
+      errorType: "step2_evidence_loss",
+      message: `Step 2 grouping dropped ALL evidence from ${cov.missingOfficialDocIds.length} official document(s): ${JSON.stringify(cov.missingOfficialDocIds)}`,
+      userId: user.id,
+      severity: "high",
+      metadata: {
+        missingOfficialDocIds: cov.missingOfficialDocIds,
+        missingDocIds: cov.missingDocIds,
+        missingItemCountByDocId: cov.missingItemCountByDocId,
+        inputItemCount: cov.inputItemCount,
+        representedClaimCount: cov.representedClaimCount,
+        claimCountDelta: cov.claimCountDelta,
+        groupCount: evidenceGroups.length,
+        failedBatchIndexes: groupingResult.failedBatchIndexes,
+        truncatedBatchIndexes: groupingResult.truncatedBatchIndexes,
+        mergeIntroducedGap:
+          (groupingResult.coverageAfterMerge?.missingDocIds.length ?? 0) >
+          groupingResult.coverageAfterGrouping.missingDocIds.length,
+      },
+    });
+    return NextResponse.json(
+      { error: "Some of your verified documents were lost during analysis. Please try generating again." },
+      { status: 500 }
+    );
+  }
+
+  // (B) Conservation - warning: a non-official document (or the self-reported
+  // summary, whose synthetic id a faithful grouping may legitimately not cite)
+  // lost representation, or every group came back with an empty claims array.
+  // The profile is still built, but the gap must be visible.
+  if (cov.missingDocIds.length > 0 || (evidenceGroups.length > 0 && cov.representedClaimCount === 0)) {
+    await reportGenerationFailure({
+      adminClient,
+      sendEmailFn: sendEmail,
+      route: "generate-capability",
+      errorType: "step2_coverage_warning",
+      message: `Step 2 grouping: ${cov.missingDocIds.length} document(s) lost representation; represented claims ${cov.representedClaimCount} vs ${cov.inputItemCount} input items`,
+      userId: user.id,
+      severity: "medium",
+      metadata: {
+        missingDocIds: cov.missingDocIds,
+        missingItemCountByDocId: cov.missingItemCountByDocId,
+        inputItemCount: cov.inputItemCount,
+        representedClaimCount: cov.representedClaimCount,
+        claimCountDelta: cov.claimCountDelta,
+        unknownOutputDocIds: cov.unknownOutputDocIds,
+      },
+    });
+  }
 
   // --- Phase 1 handoff: save grouped evidence for Phase 2 (and later corrections) to pick up ---
   // A correction invalidates any prior approval and is recorded on the profile here,
