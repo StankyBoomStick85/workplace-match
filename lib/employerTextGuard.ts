@@ -36,7 +36,8 @@ export type TextGuardCategory =
   | "clearance_sponsor_or_agency"
   | "explicit_year"
   | "tenure_count"
-  | "publication_reference";
+  | "publication_reference"
+  | "outsider_framing";
 
 export type TextGuardViolation = {
   category: TextGuardCategory;
@@ -276,6 +277,53 @@ const PUBLICATION_PATTERN =
 
 const PRONOUN_TERMS = ["he", "him", "his", "himself", "she", "her", "hers", "herself"];
 
+// ── Outsider / deficit framing ─────────────────────────────────────────────
+// Employer-facing generated text must read as a capable professional applying
+// for a job — not as someone being brought into ordinary work from elsewhere.
+// "civilian" and "military" have NO legitimate use in an anonymized capability
+// summary: each word is only meaningful as the other's opposite, so using
+// either one discloses the background every anonymity rule here exists to
+// hide. The rest are deficit constructions ("bridge into", "sector
+// acclimation", "must earn their way in", "step down"). The genuinely
+// ambiguous words — "translate", "transition", "context" — are matched only
+// next to a framing/deficit cue, not on every ordinary use ("translate
+// strategy into results", "a systems transition", "brings industry context").
+const OUTSIDER_FRAMING_ALWAYS = [
+  "\\bcivilian\\b",
+  "\\bmilitary\\b",
+  "\\bacclimat(?:e|es|ed|ing|ion)\\b",
+  "\\bre-?acclimat\\w*\\b",
+  "\\bstep(?:ping)?[- ]down\\b",
+  "\\bcareer transition\\b",
+  "\\bbridg(?:e|es|ed|ing)\\s+(?:in)?to\\b",
+  "\\bbridge\\s+(?:role|position|job|step)\\b",
+  "\\bbridg(?:e|ing)\\s+(?:their|the|them|his|her|this candidate'?s?)\\s+(?:background|experience|gap|way|transition)\\b",
+  "\\btransition(?:ing)?\\s+(?:in)?to\\s+(?:the\\s+)?(?:workforce|private[- ]sector|the private sector|corporate world|business world|commercial sector)\\b",
+];
+
+const OUTSIDER_FRAMING_CONTEXTUAL: { re: RegExp; near: RegExp; window: number }[] = [
+  {
+    re: /\btranslat(?:e|es|ed|ing|ion)\b/gi,
+    near: /\b(?:experience|background|skills?|capabilit\w*|service|leadership|record|resume|history)\b/i,
+    window: 45,
+  },
+  {
+    re: /\btransition(?:s|ed|ing)?\b/gi,
+    near: /\b(?:new sector|new field|new industry|the industry|corporate|commercial|workforce|private[- ]?sector|business world)\b/i,
+    window: 40,
+  },
+  {
+    re: /\b(?:sector|industry|corporate|commercial|business)\s+context\b/gi,
+    near: /\b(?:need|needs|needed|lack|lacks|lacking|require|requires|required|missing|without|build|building|gain|gaining|acquire|acquiring|develop|developing|first|before)\b/i,
+    window: 45,
+  },
+  {
+    re: /\b(?:earn|earns|earned|earning|prove|proves|proved|proving)\b/gi,
+    near: /\b(?:their way|the way|entry|a place|legitimacy|credibility|themselves|they can|their worth|their value|into the|belong)\b/i,
+    window: 40,
+  },
+];
+
 // Given-name tokens that are also ordinary English words. A lone occurrence of
 // one of these is almost never the candidate; it is flagged only when another
 // token of the same name also appears (see scanForKnownName).
@@ -458,6 +506,23 @@ export function scanEmployerFacingText(
 
   // ── Publication reference ───────────────────────────────────────────
   pushMatches(violations, text, "publication_reference", PUBLICATION_PATTERN);
+
+  // ── Outsider / deficit framing ─────────────────────────────────────
+  pushMatches(
+    violations,
+    text,
+    "outsider_framing",
+    new RegExp(`(${OUTSIDER_FRAMING_ALWAYS.join("|")})`, "gi")
+  );
+  for (const { re, near, window } of OUTSIDER_FRAMING_CONTEXTUAL) {
+    for (const m of text.matchAll(re)) {
+      const idx = m.index ?? 0;
+      const w = text.slice(Math.max(0, idx - window), idx + m[0].length + window);
+      if (near.test(w)) {
+        violations.push({ category: "outsider_framing", match: m[0], index: idx });
+      }
+    }
+  }
 
   // ── Honorific + name ────────────────────────────────────────────────
   pushMatches(violations, text, "honorific_name", /\b(Mr|Mrs|Ms|Dr)\.\s+[A-Z][a-z]+/g);

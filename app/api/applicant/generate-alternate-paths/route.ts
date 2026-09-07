@@ -103,6 +103,8 @@ For each alternate path, ask:
 
 Range the results: include roles they could start next week AND roles that need 60–90 days of preparation. Do not cluster all results in one industry. Think broadly — operations, logistics, sales, project coordination, public sector, trades management, healthcare administration, finance, education, tech-adjacent.
 
+Write about a capable professional choosing what to pursue next. Describe what they have done and can do as accomplished fact. Do not frame them as an outsider to ordinary work, or as someone entering, breaking into, transitioning to, adjusting to, or acclimating to a new sector, and do not describe their experience as needing translation or conversion. Do not use the words "civilian" or "military" anywhere in your output, and do not use any wording that implies the candidate must earn their way into normal employment or prove they can do work they have already done. State a gap only as a specific, nameable missing item, never as a vague category of unfamiliarity.
+
 Do not use the words entry level, junior, senior, or any tier label. Do not pigeonhole based on what they have done. Surface what they are capable of becoming.`;
 
   const prompt = `Here is the candidate's complete profile:
@@ -124,7 +126,7 @@ Return exactly 5 alternate role paths using this exact format for each:
 [The exact first job title to apply for to get a foot in the door]
 
 ## GAP
-[One specific thing — a cert, 90 days OJT, one course — that gets them fully competitive]`;
+[One specific, nameable thing — a named certification, ~90 days of on-the-job training, or one named course — that makes them fully competitive. State a concrete missing item, never a vague category of unfamiliarity.]`;
 
   const anthropic = new Anthropic({ apiKey });
 

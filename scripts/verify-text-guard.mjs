@@ -69,6 +69,40 @@ const CASES = [
   { name: "'generally' / 'operations' - no false substring", text: "Generally regarded as the person who stabilized operations and rebuilt the ration-planning workflow.", expectViolation: false },
   { name: "pronoun-free 'they' summary", text: "They rebuilt the function, they hired the leaders, and their playbook is still in use.", expectViolation: false },
 
+  // ─────────── OUTSIDER FRAMING - must PASS CLEAN (guard not over-broad) ───────────
+  { name: "translate = render strategy into action", text: "Known for the ability to translate strategy into measurable execution across three business units.", expectViolation: false },
+  { name: "transition = systems migration, not sector", text: "Led a major systems transition to a new ERP platform, on time and under budget.", expectViolation: false },
+  { name: "context = brings it, does not lack it", text: "Brings deep industry context to procurement and vendor negotiations.", expectViolation: false },
+  { name: "bridge = liaison between functions", text: "Served as the bridge between engineering and sales, keeping both aligned on delivery.", expectViolation: false },
+  { name: "earn = earns trust, not entry", text: "Quickly earns the trust of frontline teams and executives alike.", expectViolation: false },
+  { name: "veteran = experienced, not the noun", text: "A veteran operator who has run high-volume distribution centers for years.", expectViolation: false },
+
+  // ─────────── OUTSIDER FRAMING - must be CAUGHT ───────────
+  { name: "live example: 'inside a civilian operational structure'", text: "This step places them inside a civilian operational structure where the same skills apply.", expectViolation: true, expectCategory: "outsider_framing" },
+  { name: "live example: 'sector acclimation' timeline", text: "Within 12-24 months of sector acclimation, they are positioned for a director-level role.", expectViolation: true, expectCategory: "outsider_framing" },
+  { name: "live example: 'familiarity with civilian operational systems'", text: "Would benefit from familiarity with civilian operational systems and industry-standard software platforms.", expectViolation: true, expectCategory: "outsider_framing" },
+  { name: "'translate' their leadership experience", text: "The task is to translate their leadership experience into terms a hiring manager recognizes.", expectViolation: true, expectCategory: "outsider_framing" },
+  { name: "'bridge role into' a career", text: "This is a strong bridge role into a commercial operations career.", expectViolation: true, expectCategory: "outsider_framing" },
+  { name: "'prove they can' framing", text: "They will need to prove they can operate in a corporate environment before advancing.", expectViolation: true, expectCategory: "outsider_framing" },
+  { name: "bare 'military' in output", text: "Draws on a military background to lead calmly under pressure.", expectViolation: true, expectCategory: "outsider_framing" },
+  { name: "'career transition' phrase", text: "Supports a smooth career transition into operations management.", expectViolation: true, expectCategory: "outsider_framing" },
+  { name: "'needs industry context' vague gap", text: "The main gap is that they still need broader industry context before leading a P&L.", expectViolation: true, expectCategory: "outsider_framing" },
+  { name: "'step down' to entry role", text: "May have to step down into a coordinator role to get started.", expectViolation: true, expectCategory: "outsider_framing" },
+
+  // Composite: the current live employer-summary style vs. a rewrite that
+  // follows the new prompts. BEFORE must be caught; AFTER must be clean.
+  {
+    name: "COMPOSITE before: outsider-framed employer summary",
+    text: "This step places the candidate inside a civilian operational structure and begins to translate verified leadership and accountability capabilities into sector-specific context. They would build familiarity with civilian operational systems and industry-standard software platforms. Within 12-24 months of sector acclimation, they are positioned to bridge into a general management track.",
+    expectViolation: true,
+    expectCategory: "outsider_framing",
+  },
+  {
+    name: "COMPOSITE after: capability-first rewrite (new prompts)",
+    text: "This candidate is ready now for a General Manager or Assistant General Manager role in a multi-site operations environment. They have run day-to-day operations for organizations of several hundred people, owning workforce scheduling and readiness, equipment and asset accountability across large inventories, resupply under tight timelines, and safety oversight for high-consequence work. They have built and led teams from the ground up, developed first-line supervisors into managers, and held direct accountability for training programs, standards enforcement, and audit-ready recordkeeping. Their leadership record is documented across multiple independent supervisor evaluations, and they hold an active Top Secret security clearance. What they bring to a hiring manager is a proven operations brain that already thinks in throughput, cost control, risk, and people development. The one concrete gap is hands-on time with a specific commercial ERP or workforce-management platform such as NetSuite, SAP, or Kronos, which is a few weeks of platform-specific ramp-up, not a capability gap. On this trajectory they are well positioned to move into a Director of Operations or Site General Manager seat.",
+    expectViolation: false,
+  },
+
   // ─────────── MUST STILL BE CAUGHT (genuine disclosures) ───────────
   {
     name: "VERBATIM 2026-09-07 leak string",
