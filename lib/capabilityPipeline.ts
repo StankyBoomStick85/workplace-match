@@ -409,9 +409,15 @@ export async function extractEvidenceFromDocuments(
 
 // ---------- Step 2: cross-document grouping + merge ----------
 
-// Chunks evidence into batches so a single Sonnet call never has to hold and group
-// hundreds of items at once. Tune here if batches still truncate.
-const EVIDENCE_BATCH_SIZE = 150;
+// Chunks evidence into batches so a single Sonnet grouping call never has to hold
+// and group hundreds of items at once. 150 was still too large: batches of dense
+// documents (an NCOER yields 25-40 evidence items) produced 38-40 distinct groups,
+// and one group's JSON with its claim strings runs ~200-270 output tokens, so the
+// response hit the 8192 ceiling and salvaged a truncated tail. 100 items caps the
+// worst case near ~40 groups (~10K tokens), comfortably under the raised
+// per-batch max_tokens of 16000 (see groupBatch).
+const EVIDENCE_BATCH_SIZE = 100;
+const GROUPING_BATCH_MAX_TOKENS = 16000;
 
 export function buildEvidenceGroupingPrompt(items: EvidenceItem[], correctionInstruction?: string): string {
   const correctionSection = correctionInstruction
@@ -445,31 +451,189 @@ Return ONLY a valid JSON array. Each object must have exactly these fields:
 No markdown fences. No explanation. No text outside the JSON array.`;
 }
 
+// The merge call decides WHICH preliminary groups describe the same capability
+// and should be combined; it does NOT re-emit group content. Re-serializing every
+// group's claims under an 8192-token cap was physically impossible for a
+// multi-document profile (~140 preliminary groups x ~260 tokens each ≈ 36K
+// tokens) and silently truncated - the run that motivated this returned 20 of
+// ~140 groups with the rest discarded. A merge PLAN is O(number of merges), not
+// O(total evidence): ~1-3K tokens even at 350 preliminary groups. The mechanical
+// parts (unioning claims / corroborating ids, re-resolving verificationStatus and
+// primarySourceDocId, the VERIFIED-purity rule) move verbatim into applyMergePlan
+// below - same semantics, applied deterministically in code so they cannot be cut
+// off. The criteria for what combines are unchanged from the previous prompt.
 export function buildEvidenceGroupMergePrompt(groups: EvidenceGroup[]): string {
-  return `You are merging preliminary capability groups that were produced independently from separate batches of evidence for the same job applicant. Some groups from different batches describe the exact same underlying capability (e.g. the same duty appearing in evidence from two different documents) and must be merged into one. Groups that are already distinct capabilities must NOT be merged.
+  return `You are reconciling preliminary capability groups produced independently from separate batches of evidence for the same job applicant. Some groups from different batches describe the exact same underlying capability (e.g. the same duty appearing in evidence from two different documents). Your job is to identify which groups should be combined.
 
 PRELIMINARY GROUPS:
 ${JSON.stringify(groups, null, 2)}
 
-Merging rules:
-- Merge two or more groups ONLY when they describe the exact same underlying capability — not merely a similar theme or domain.
-- When merging, combine their "claims" arrays (deduplicate identical claim strings; keep distinct phrasing that adds evidence).
-- When merging, combine their "corroboratingDocIds" (deduplicate), and add the losing group's primarySourceDocId to corroboratingDocIds if it differs from the winning group's.
-- Re-resolve verificationStatus and primarySourceDocId using the same priority rules as before: if ANY merged claim traces to an official document, the merged group is VERIFIED and primarySourceDocId must be that official document's sourceDocId. Otherwise USER_PROVIDED.
-- A merged VERIFIED group must remain entirely supported by verified evidence — do not blend a self-reported-only group into a VERIFIED group unless it was already grouped with official evidence in its source batch.
-- Groups that do not match anything else pass through unchanged, exactly as given.
-- Do not invent new claims. Do not drop claims. Every claim from every input group must appear in exactly one output group.
+Rules for deciding what combines:
+- Combine two or more groups ONLY when they describe the exact same underlying capability — not merely a similar theme or domain.
+- Two distinct capabilities must NOT be combined solely because they relate to a similar theme or domain.
+- A group that does not clearly match another is left alone.
 
-Return ONLY a valid JSON array of the final merged groups. Each object must have exactly these fields:
-{
-  "groupId": "g1",
-  "claims": ["claim string 1", "claim string 2"],
-  "verificationStatus": "VERIFIED" | "USER_PROVIDED",
-  "primarySourceDocId": "sourceDocId of the strongest/most official source",
-  "corroboratingDocIds": ["other sourceDocIds that also support this group"]
+Return ONLY a JSON object of exactly this shape, and nothing else:
+
+{ "merges": [ ["groupId", "groupId"], ["groupId", "groupId", "groupId"] ] }
+
+- Each inner array is one set of groupIds to combine into a single group.
+- Use each group's own "groupId" value exactly as given above.
+- List a groupId in at most one inner array.
+- Any groupId not listed is kept unchanged — do NOT list groups that stand alone.
+- If nothing should be combined, return { "merges": [] }.
+- Do NOT return group contents, claims, verification tags, or any other field. Only the merge sets.
+
+No markdown fences. No explanation. No text outside the JSON object.`;
 }
 
-No markdown fences. No explanation. No text outside the JSON array.`;
+export type MergePlan = { merges: string[][] };
+
+export type MergePlanApplication = {
+  groups: EvidenceGroup[];
+  mergeInstructionsApplied: number;
+  invalidGroupIdRefs: string[]; // referenced by the plan but not a real preliminary groupId
+  duplicateGroupIdRefs: string[]; // referenced in more than one merge set
+  unaccountedGroupIds: string[]; // preliminary groups that ended up neither merged nor passed through (invariant: empty)
+  splitForVerifiedSafety: string[][]; // merge sets where USER_PROVIDED members were pulled out rather than blended into VERIFIED
+};
+
+// Tolerant parse of the merge plan. On any failure returns an empty plan
+// (parseOk=false) - applyMergePlan with an empty plan passes every preliminary
+// group through unchanged, which is exactly the old "MERGE FAILURE -> fall back to
+// unmerged" behaviour.
+export function parseMergePlan(raw: string): { plan: MergePlan; parseOk: boolean } {
+  const coerce = (s: string): MergePlan | null => {
+    try {
+      const obj = JSON.parse(s);
+      if (obj && typeof obj === "object" && Array.isArray((obj as { merges?: unknown }).merges)) {
+        const merges = ((obj as { merges: unknown[] }).merges)
+          .filter((m): m is unknown[] => Array.isArray(m))
+          .map((m) => m.filter((x): x is string => typeof x === "string"))
+          .filter((m) => m.length > 0);
+        return { merges };
+      }
+    } catch {
+      /* fall through */
+    }
+    return null;
+  };
+  const direct = coerce(raw.trim());
+  if (direct) return { plan: direct, parseOk: true };
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (match) {
+    const salvaged = coerce(match[0]);
+    if (salvaged) return { plan: salvaged, parseOk: true };
+  }
+  return { plan: { merges: [] }, parseOk: false };
+}
+
+// Combines one set of preliminary groups into a single group, applying verbatim
+// the rules the merge prompt used to ask the model to apply:
+// - claims: union across all members, exact-string dedup, winner's claims first
+// - corroboratingDocIds: union across all members, plus each non-winner member's
+//   primarySourceDocId when it differs from the winner's, deduped
+// - verificationStatus: VERIFIED if ANY member is VERIFIED, else USER_PROVIDED
+// - primarySourceDocId: the winner's - winner = the first VERIFIED member, or the
+//   first member if none is VERIFIED (so a VERIFIED merged group's primary is
+//   always an official document's id)
+// Claim/corroborating ORDER was never specified for the model's output, so the
+// winner-first ordering here is a deterministic-but-equivalent choice.
+function mergeGroupSet(members: EvidenceGroup[]): EvidenceGroup {
+  const winner = members.find((g) => g.verificationStatus === "VERIFIED") ?? members[0];
+  const anyVerified = members.some((g) => g.verificationStatus === "VERIFIED");
+
+  const seenClaims = new Set<string>();
+  const claims: string[] = [];
+  for (const g of [winner, ...members.filter((g) => g !== winner)]) {
+    for (const c of g.claims ?? []) {
+      if (!seenClaims.has(c)) {
+        seenClaims.add(c);
+        claims.push(c);
+      }
+    }
+  }
+
+  const seenDoc = new Set<string>();
+  const corroboratingDocIds: string[] = [];
+  const addDoc = (id: string | null | undefined) => {
+    if (id && id !== winner.primarySourceDocId && !seenDoc.has(id)) {
+      seenDoc.add(id);
+      corroboratingDocIds.push(id);
+    }
+  };
+  for (const g of members) {
+    for (const id of g.corroboratingDocIds ?? []) addDoc(id);
+    if (g !== winner) addDoc(g.primarySourceDocId);
+  }
+
+  return {
+    groupId: winner.groupId,
+    claims,
+    verificationStatus: anyVerified ? "VERIFIED" : "USER_PROVIDED",
+    primarySourceDocId: winner.primarySourceDocId,
+    corroboratingDocIds,
+  };
+}
+
+// Applies a validated merge plan to the preliminary groups. Every preliminary
+// group is either folded into a merge or passed through verbatim - nothing is
+// dropped (see unaccountedGroupIds, an invariant that must stay empty).
+export function applyMergePlan(preliminaryGroups: EvidenceGroup[], plan: MergePlan): MergePlanApplication {
+  const byId = new Map(preliminaryGroups.map((g) => [g.groupId, g] as const));
+  const invalidGroupIdRefs: string[] = [];
+  const duplicateGroupIdRefs: string[] = [];
+  const splitForVerifiedSafety: string[][] = [];
+  const consumed = new Set<string>();
+  const mergedGroups: EvidenceGroup[] = [];
+  let mergeInstructionsApplied = 0;
+
+  for (const rawIds of plan.merges) {
+    const ids: string[] = [];
+    for (const id of rawIds) {
+      if (!byId.has(id)) {
+        invalidGroupIdRefs.push(id);
+        continue;
+      }
+      if (consumed.has(id) || ids.includes(id)) {
+        duplicateGroupIdRefs.push(id);
+        continue;
+      }
+      ids.push(id);
+    }
+    if (ids.length < 2) continue; // nothing left to combine; any single valid id falls through to pass-through
+
+    let members = ids.map((id) => byId.get(id)!);
+
+    // VERIFIED purity: never blend a self-reported-only (USER_PROVIDED) group into
+    // a VERIFIED one. If the set mixes both, keep only the VERIFIED members in the
+    // merge; the USER_PROVIDED members are left un-consumed and pass through.
+    const verifiedMembers = members.filter((g) => g.verificationStatus === "VERIFIED");
+    if (verifiedMembers.length > 0 && verifiedMembers.length < members.length) {
+      splitForVerifiedSafety.push(ids);
+      members = verifiedMembers;
+    }
+    if (members.length < 2) continue;
+
+    for (const g of members) consumed.add(g.groupId);
+    mergedGroups.push(mergeGroupSet(members));
+    mergeInstructionsApplied++;
+  }
+
+  const passThrough = preliminaryGroups.filter((g) => !consumed.has(g.groupId));
+  const groups = [...mergedGroups, ...passThrough];
+
+  const accounted = new Set<string>([...consumed, ...passThrough.map((g) => g.groupId)]);
+  const unaccountedGroupIds = preliminaryGroups.map((g) => g.groupId).filter((id) => !accounted.has(id));
+
+  return {
+    groups,
+    mergeInstructionsApplied,
+    invalidGroupIdRefs,
+    duplicateGroupIdRefs,
+    unaccountedGroupIds,
+    splitForVerifiedSafety,
+  };
 }
 
 export type BatchTiming = {
@@ -555,8 +719,16 @@ export type GroupingResult = {
   mergeElapsedMs: number | null;
   preliminaryGroupCount: number;
   mergeStopReason: string | null;
+  // true only if the merge PLAN itself failed to parse or hit max_tokens - with
+  // the plan being O(merges) not O(evidence) this should never happen; kept as a
+  // tripwire. On a true here the merge is skipped and preliminary groups pass through.
   mergeWasTruncated: boolean;
-  mergeSalvagedCount: number | null;
+  mergePlanParseOk: boolean;
+  mergeInstructionsApplied: number;
+  mergePlanInvalidGroupIdRefs: string[];
+  mergePlanDuplicateGroupIdRefs: string[];
+  mergePlanUnaccountedGroupIds: string[];
+  mergePlanSplitForVerifiedSafety: string[][];
   failedBatchIndexes: number[];
   truncatedBatchIndexes: number[];
   coverageAfterGrouping: GroupingCoverage;
@@ -571,7 +743,9 @@ export async function runEvidenceGrouping(
   if (evidenceItems.length === 0) {
     return {
       groups: [], batchCount: 0, batchTimings: [], mergeRan: false, mergeElapsedMs: null,
-      preliminaryGroupCount: 0, mergeStopReason: null, mergeWasTruncated: false, mergeSalvagedCount: null,
+      preliminaryGroupCount: 0, mergeStopReason: null, mergeWasTruncated: false,
+      mergePlanParseOk: true, mergeInstructionsApplied: 0, mergePlanInvalidGroupIdRefs: [],
+      mergePlanDuplicateGroupIdRefs: [], mergePlanUnaccountedGroupIds: [], mergePlanSplitForVerifiedSafety: [],
       failedBatchIndexes: [], truncatedBatchIndexes: [],
       coverageAfterGrouping: computeGroupingCoverage(evidenceItems, []), coverageAfterMerge: null,
     };
@@ -587,7 +761,7 @@ export async function runEvidenceGrouping(
     try {
       const batchResponse = await anthropic.messages.create({
         model: "claude-sonnet-4-6",
-        max_tokens: 8192,
+        max_tokens: GROUPING_BATCH_MAX_TOKENS,
         temperature: 0.2,
         messages: [{ role: "user", content: buildEvidenceGroupingPrompt(batch, correctionInstruction) }],
       });
@@ -654,7 +828,12 @@ export async function runEvidenceGrouping(
   let mergeElapsedMs: number | null = null;
   let mergeStopReason: string | null = null;
   let mergeWasTruncated = false;
-  let mergeSalvagedCount: number | null = null;
+  let mergePlanParseOk = true;
+  let mergeInstructionsApplied = 0;
+  let mergePlanInvalidGroupIdRefs: string[] = [];
+  let mergePlanDuplicateGroupIdRefs: string[] = [];
+  let mergePlanUnaccountedGroupIds: string[] = [];
+  let mergePlanSplitForVerifiedSafety: string[][] = [];
 
   if (preliminaryGroups.length > 1) {
     mergeRan = true;
@@ -662,33 +841,57 @@ export async function runEvidenceGrouping(
     try {
       const mergeResponse = await anthropic.messages.create({
         model: "claude-sonnet-4-6",
-        max_tokens: 8192,
+        max_tokens: 16000,
         temperature: 0.2,
         messages: [{ role: "user", content: buildEvidenceGroupMergePrompt(preliminaryGroups) }],
       });
 
       mergeStopReason = mergeResponse.stop_reason ?? null;
-      const rawMerge = mergeResponse.content.find((b) => b.type === "text")?.text ?? "[]";
-      const parsed = parseEvidenceGroupsFromRaw(rawMerge);
-      mergeWasTruncated = parsed.wasTruncated;
-      mergeSalvagedCount = parsed.salvagedCount;
-      mergeElapsedMs = Date.now() - mergeStart;
+      const rawMerge = mergeResponse.content.find((b) => b.type === "text")?.text ?? "";
+      const { plan, parseOk } = parseMergePlan(rawMerge);
+      mergePlanParseOk = parseOk;
+      mergeWasTruncated = !parseOk || mergeStopReason === "max_tokens";
 
-      if (mergeStopReason === "max_tokens" || parsed.wasTruncated) {
+      if (mergeStopReason === "max_tokens" || !parseOk) {
         console.error(
-          "[capabilityPipeline][step2b] MERGE TRUNCATED/SALVAGED - trailing merged groups may be lost." +
-          " stopReason=" + mergeStopReason + " wasTruncated=" + parsed.wasTruncated +
-          " candidateObjects=" + parsed.candidateCount + " salvagedGroups=" + parsed.salvagedCount +
-          " keptGroups=" + parsed.groups.length + " preliminaryGroups=" + preliminaryGroups.length
+          "[capabilityPipeline][step2b] MERGE PLAN unparseable or truncated - no merges applied, preliminary groups pass through." +
+          " stopReason=" + mergeStopReason + " parseOk=" + parseOk +
+          " rawLength=" + rawMerge.length + " preliminaryGroups=" + preliminaryGroups.length
         );
       }
 
-      if (parsed.groups.length === 0) {
-        console.error("[capabilityPipeline][step2b] MERGE FAILURE (0 groups parsed), falling back to unmerged preliminary groups");
-        finalGroups = preliminaryGroups;
-      } else {
-        finalGroups = parsed.groups;
+      // Apply the plan in code - deterministic, cannot truncate.
+      const applied = applyMergePlan(preliminaryGroups, plan);
+      finalGroups = applied.groups;
+      mergeInstructionsApplied = applied.mergeInstructionsApplied;
+      mergePlanInvalidGroupIdRefs = applied.invalidGroupIdRefs;
+      mergePlanDuplicateGroupIdRefs = applied.duplicateGroupIdRefs;
+      mergePlanUnaccountedGroupIds = applied.unaccountedGroupIds;
+      mergePlanSplitForVerifiedSafety = applied.splitForVerifiedSafety;
+      mergeElapsedMs = Date.now() - mergeStart;
+
+      if (applied.invalidGroupIdRefs.length > 0 || applied.duplicateGroupIdRefs.length > 0 || applied.splitForVerifiedSafety.length > 0) {
+        console.error(
+          "[capabilityPipeline][step2b] MERGE PLAN issues (instruction(s) partially skipped, no evidence lost) " +
+          JSON.stringify({
+            invalidGroupIdRefs: applied.invalidGroupIdRefs,
+            duplicateGroupIdRefs: applied.duplicateGroupIdRefs,
+            splitForVerifiedSafety: applied.splitForVerifiedSafety,
+          })
+        );
       }
+      if (applied.unaccountedGroupIds.length > 0) {
+        console.error(
+          "[capabilityPipeline][step2b] INVARIANT VIOLATION - preliminary groups neither merged nor passed through: " +
+          JSON.stringify(applied.unaccountedGroupIds)
+        );
+      }
+      console.log(
+        "[capabilityPipeline][step2b] merge plan applied" +
+        " preliminaryGroups=" + preliminaryGroups.length +
+        " mergeInstructionsApplied=" + mergeInstructionsApplied +
+        " finalGroups=" + finalGroups.length
+      );
     } catch (err) {
       mergeElapsedMs = Date.now() - mergeStart;
       console.error("[capabilityPipeline][step2b] Sonnet error, falling back to unmerged preliminary groups", err);
@@ -713,7 +916,12 @@ export async function runEvidenceGrouping(
     preliminaryGroupCount: preliminaryGroups.length,
     mergeStopReason,
     mergeWasTruncated,
-    mergeSalvagedCount,
+    mergePlanParseOk,
+    mergeInstructionsApplied,
+    mergePlanInvalidGroupIdRefs,
+    mergePlanDuplicateGroupIdRefs,
+    mergePlanUnaccountedGroupIds,
+    mergePlanSplitForVerifiedSafety,
     failedBatchIndexes,
     truncatedBatchIndexes,
     coverageAfterGrouping,

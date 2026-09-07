@@ -255,23 +255,35 @@ export async function POST(request: Request) {
     });
   }
 
-  // (C) A grouping or merge response was cut off at max_tokens (or needed
-  // object-level salvage) -> trailing groups silently dropped.
+  // (C) A grouping-batch response was cut off at max_tokens (or needed
+  // object-level salvage) -> trailing groups silently dropped. The merge no
+  // longer re-emits content (it returns a compact plan applied in code), so
+  // mergeWasTruncated here means the tiny plan itself failed to parse / hit the
+  // cap - a tripwire that should never fire.
   const mergeTruncated = groupingResult.mergeWasTruncated || groupingResult.mergeStopReason === "max_tokens";
-  if (groupingResult.truncatedBatchIndexes.length > 0 || mergeTruncated) {
+  const mergePlanHadIssues =
+    groupingResult.mergePlanInvalidGroupIdRefs.length > 0 ||
+    groupingResult.mergePlanDuplicateGroupIdRefs.length > 0 ||
+    groupingResult.mergePlanUnaccountedGroupIds.length > 0;
+  if (groupingResult.truncatedBatchIndexes.length > 0 || mergeTruncated || mergePlanHadIssues) {
     await reportGenerationFailure({
       adminClient,
       sendEmailFn: sendEmail,
       route: "generate-capability",
       errorType: "step2_truncated",
-      message: `Step 2 grouping: response truncation detected (batches ${JSON.stringify(groupingResult.truncatedBatchIndexes)}, merge=${mergeTruncated})`,
+      message: `Step 2 grouping: truncation or merge-plan issue detected (batches ${JSON.stringify(groupingResult.truncatedBatchIndexes)}, mergeTruncated=${mergeTruncated}, mergePlanIssues=${mergePlanHadIssues})`,
       userId: user.id,
       severity: "medium",
       metadata: {
         truncatedBatchIndexes: groupingResult.truncatedBatchIndexes,
         mergeStopReason: groupingResult.mergeStopReason,
         mergeWasTruncated: groupingResult.mergeWasTruncated,
-        mergeSalvagedCount: groupingResult.mergeSalvagedCount,
+        mergePlanParseOk: groupingResult.mergePlanParseOk,
+        mergeInstructionsApplied: groupingResult.mergeInstructionsApplied,
+        mergePlanInvalidGroupIdRefs: groupingResult.mergePlanInvalidGroupIdRefs,
+        mergePlanDuplicateGroupIdRefs: groupingResult.mergePlanDuplicateGroupIdRefs,
+        mergePlanUnaccountedGroupIds: groupingResult.mergePlanUnaccountedGroupIds,
+        mergePlanSplitForVerifiedSafety: groupingResult.mergePlanSplitForVerifiedSafety,
         batchTimings: groupingResult.batchTimings.map((t) => ({
           batchIndex: t.batchIndex, itemsIn: t.itemsIn, groupsOut: t.groupsOut,
           stopReason: t.stopReason, wasTruncated: t.wasTruncated, salvagedCount: t.salvagedCount,
