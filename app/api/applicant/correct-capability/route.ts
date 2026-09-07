@@ -8,13 +8,14 @@ import {
   buildStep4Prompt,
   buildEmployerSummaryUserPrompt,
   parseStep3Response,
-  extractSection,
+  extractStep4Sections,
   EMPLOYER_SUMMARY_SYSTEM_PROMPT,
   type EvidenceGroup,
   type StoredDoc,
   type Step3Result
 } from "@/lib/capabilityPipeline";
 import { scanEmployerFacingText, reportTextGuardViolation } from "@/lib/employerTextGuard";
+import { reportGenerationFailure } from "@/lib/generationAlerts";
 import { sendEmail } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
@@ -157,10 +158,14 @@ export async function POST(request: Request) {
     : "Not specified";
 
   let positionsText = "";
+  let step4StopReason: string | null = null;
   try {
+    // max_tokens raised 4096->8192, matching generate-capability-finalize's Step 4
+    // call - see that route for the diagnostic that traced silently-incomplete
+    // profiles to this ceiling truncating a three-section response.
     const step4Response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 4096,
+      max_tokens: 8192,
       temperature: 0.2,
       messages: [{
         role: "user",
@@ -174,16 +179,49 @@ export async function POST(request: Request) {
         })
       }],
     });
+    step4StopReason = step4Response.stop_reason;
     positionsText = step4Response.content.find((b) => b.type === "text")?.text ?? "";
+    if (step4StopReason === "max_tokens") {
+      console.error("[correct-capability] Step 4 response TRUNCATED (stop_reason=max_tokens)", {
+        responseLength: positionsText.length
+      });
+    }
   } catch (err) {
     console.error("[correct-capability] step4 Anthropic API error", err);
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: `AI generation failed: ${message}` }, { status: 500 });
   }
 
-  let recommendedPosition = extractSection(positionsText, "RECOMMENDED_POSITION", "ENTRY_POINT");
-  let entryPoint = extractSection(positionsText, "ENTRY_POINT", "FUTURE_POSITIONS");
-  let futurePositions = extractSection(positionsText, "FUTURE_POSITIONS");
+  const step4Sections = extractStep4Sections(positionsText);
+  let recommendedPosition = step4Sections.recommendedPosition;
+  let entryPoint = step4Sections.entryPoint;
+  let futurePositions = step4Sections.futurePositions;
+
+  if (step4Sections.missingSections.length > 0) {
+    // Same failure mode as generate-capability-finalize's Step 4 - fail loudly
+    // rather than save a corrected profile that's missing required sections with
+    // no error anywhere. This route already treats a Step 4 API exception as
+    // fatal (see the catch above); a truncated-but-200 response deserves the
+    // same treatment, which it didn't get before this check existed.
+    await reportGenerationFailure({
+      adminClient,
+      sendEmailFn: sendEmail,
+      route: "correct-capability",
+      errorType: "step4_incomplete",
+      message: `Step 4 response missing required section(s): ${step4Sections.missingSections.join(", ")}`,
+      userId: user.id,
+      severity: "high",
+      metadata: {
+        missingSections: step4Sections.missingSections,
+        stopReason: step4StopReason,
+        responseLength: positionsText.length
+      }
+    });
+    return NextResponse.json(
+      { error: "Failed to generate your recommended positions. Please try again." },
+      { status: 500 }
+    );
+  }
 
   const isAlternateSummary = profile.summary_priority === "alternate";
   let employerSummary = "";
@@ -198,9 +236,36 @@ export async function POST(request: Request) {
         content: buildEmployerSummaryUserPrompt({ capabilitySummary, recommendedPosition, entryPoint, isAlternateSummary })
       }],
     });
+    const employerStopReason = employerMessage.stop_reason;
     employerSummary = employerMessage.content.find((b) => b.type === "text")?.text ?? "";
+
+    if (!employerSummary) {
+      await reportGenerationFailure({
+        adminClient,
+        sendEmailFn: sendEmail,
+        route: "correct-capability",
+        errorType: "employer_summary_empty_response",
+        message: "Employer summary call returned no usable text block",
+        userId: user.id,
+        severity: "high",
+        metadata: { stopReason: employerStopReason }
+      });
+    } else if (employerStopReason === "max_tokens") {
+      console.error("[correct-capability] Employer summary response TRUNCATED (stop_reason=max_tokens)", {
+        responseLength: employerSummary.length
+      });
+    }
   } catch (err) {
-    console.error("[correct-capability] Employer summary API error", err);
+    const message = err instanceof Error ? err.message : String(err);
+    await reportGenerationFailure({
+      adminClient,
+      sendEmailFn: sendEmail,
+      route: "correct-capability",
+      errorType: "employer_summary_api_error",
+      message: `Employer summary API call threw: ${message}`,
+      userId: user.id,
+      severity: "high"
+    });
     employerSummary = "";
   }
 

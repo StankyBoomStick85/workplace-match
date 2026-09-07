@@ -752,6 +752,42 @@ List only roles that genuinely fit. No minimum or maximum number.
 Respond with only the three sections above. No preamble, no closing remarks.`;
 }
 
+export type Step4ExtractionResult = {
+  recommendedPosition: string;
+  entryPoint: string;
+  futurePositions: string;
+  missingSections: string[];
+};
+
+// Validates that Step 4's response actually contains what buildStep4Prompt asked
+// for, rather than trusting a 200 response at face value - a truncated response
+// (stop_reason "max_tokens") produces exactly this shape: RECOMMENDED_POSITION
+// populated, ENTRY_POINT/FUTURE_POSITIONS missing because the response was cut off
+// before their headings were ever emitted, and extractSection correctly (per its
+// own contract) returns "" for a heading it can't find - nothing throws.
+//
+// RECOMMENDED_POSITION and ENTRY_POINT are both mandatory single answers per the
+// prompt ("State the single best..."), so a missing heading OR an empty one under a
+// present heading is a failure for those two. FUTURE_POSITIONS is explicitly allowed
+// to have no content ("List only roles that genuinely fit. No minimum or maximum
+// number.") - only a missing heading counts as a failure there, since present-heading
+// empty-content is the model correctly following that instruction, not truncation.
+export function extractStep4Sections(positionsText: string): Step4ExtractionResult {
+  const lower = positionsText.toLowerCase();
+  const hasHeading = (heading: string) => lower.includes(`## ${heading}`.toLowerCase());
+
+  const recommendedPosition = extractSection(positionsText, "RECOMMENDED_POSITION", "ENTRY_POINT");
+  const entryPoint = extractSection(positionsText, "ENTRY_POINT", "FUTURE_POSITIONS");
+  const futurePositions = extractSection(positionsText, "FUTURE_POSITIONS");
+
+  const missingSections: string[] = [];
+  if (!hasHeading("RECOMMENDED_POSITION") || !recommendedPosition) missingSections.push("RECOMMENDED_POSITION");
+  if (!hasHeading("ENTRY_POINT") || !entryPoint) missingSections.push("ENTRY_POINT");
+  if (!hasHeading("FUTURE_POSITIONS")) missingSections.push("FUTURE_POSITIONS");
+
+  return { recommendedPosition, entryPoint, futurePositions, missingSections };
+}
+
 // ---------- Employer-facing summary ----------
 
 export const EMPLOYER_SUMMARY_SYSTEM_PROMPT =
