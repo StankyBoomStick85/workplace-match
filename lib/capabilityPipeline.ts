@@ -994,6 +994,11 @@ One entry per line. No numbered lists. No bullets. No category headers in the ou
 // malformed response falls into, and missingGroupIds/parsedCount/expectedCount/
 // rawTextLength exist specifically so a caller can log what actually happened
 // instead of the previous bare "not fully parseable" with no data behind it.
+// matchedEntries carries whatever entries WERE successfully parsed before the
+// mismatch was detected - a "count_mismatch" from a completed (non-truncated)
+// response is usually a handful of groups the model simply skipped, not a sign
+// the other entries are unreliable, so the caller can retry just the missing
+// groupIds and merge the result with these rather than redoing all of them.
 export type Step3EscalateReason = "sentinel" | "count_mismatch";
 export type Step3Result =
   | {
@@ -1003,6 +1008,7 @@ export type Step3Result =
       parsedCount: number;
       expectedCount: number;
       missingGroupIds: string[];
+      matchedEntries: CapabilityEntry[];
     }
   | { kind: "entries"; capabilitySummary: string; capabilityEntries: CapabilityEntry[] };
 
@@ -1022,7 +1028,8 @@ export function parseStep3Response(raw: string, evidenceGroups: EvidenceGroup[],
       rawTextLength: trimmed.length,
       parsedCount: 0,
       expectedCount: evidenceGroups.length,
-      missingGroupIds: []
+      missingGroupIds: [],
+      matchedEntries: []
     };
   }
 
@@ -1065,7 +1072,8 @@ export function parseStep3Response(raw: string, evidenceGroups: EvidenceGroup[],
       rawTextLength: raw.length,
       parsedCount: capabilityEntries.length,
       expectedCount: evidenceGroups.length,
-      missingGroupIds: evidenceGroups.map((g) => g.groupId).filter((id) => !matchedGroupIds.has(id))
+      missingGroupIds: evidenceGroups.map((g) => g.groupId).filter((id) => !matchedGroupIds.has(id)),
+      matchedEntries: capabilityEntries
     };
   }
 

@@ -118,8 +118,11 @@ export async function POST() {
   let capabilityEntries: CapabilityEntry[] = [];
   let rawStep3Text = "";
   let step3StopReason: string | null = null;
+  let step3RetryRawText: string | null = null;
+  let step3RetryStopReason: string | null = null;
 
   if (evidenceGroups.length > 0) {
+    let step3Phase: "initial" | "retry" = "initial";
     try {
       // max_tokens raised 4096->8192 (matching Step 2's grouping ceiling): with no
       // description-length cap in buildStep3Prompt, 17+ evidence groups can plausibly
@@ -137,37 +140,113 @@ export async function POST() {
       rawStep3Text = step3Response.content.find((b) => b.type === "text")?.text ?? "";
       const result = parseStep3Response(rawStep3Text, evidenceGroups, storedDocs);
 
-      if (result.kind === "escalate") {
+      if (result.kind === "entries") {
+        capabilitySummary = result.capabilitySummary;
+        capabilityEntries = result.capabilityEntries;
+      } else {
         // Phase 2 always calls buildStep3Prompt without a correction instruction, so
         // "sentinel" should never happen here - only "count_mismatch" is expected.
-        // Reported through reportGenerationFailure (error_logs row + alert email),
-        // not just console.error, so a recurrence shows up without needing someone
-        // to go dig through hosting logs for it - that gap is what cost three
-        // sessions of guesswork on the group-count blowout this was added for.
-        await reportGenerationFailure({
-          adminClient,
-          sendEmailFn: sendEmail,
-          route: "generate-capability-finalize",
-          errorType: "step3_failed",
-          message: `Step 3 naming pass output was not fully parseable (reason=${result.reason})`,
-          userId: user.id,
-          severity: "high",
-          metadata: {
-            reason: result.reason,
-            groupCount: evidenceGroups.length,
-            maxTokens: 8192,
-            stopReason: step3Response.stop_reason,
-            rawTextLength: result.rawTextLength,
-            parsedCount: result.parsedCount,
-            expectedCount: result.expectedCount,
-            missingGroupIds: result.missingGroupIds
-          },
+        // A "count_mismatch" on a response that actually finished (stop_reason
+        // "end_turn", not "max_tokens") is a different failure from truncation: the
+        // model completed and simply skipped a handful of groups outright, so the
+        // other entries it did produce are fine - retrying just the missing groupIds
+        // recovers them instead of discarding a complete, mostly-correct response.
+        // Truncation gets no retry: that's a genuinely different problem (see the
+        // group-count-reduction fix, not a naming-pass retry) and retrying the same
+        // over-budget prompt would just truncate again.
+        const canRetry = result.reason === "count_mismatch" && step3StopReason !== "max_tokens";
+
+        if (!canRetry) {
+          await reportGenerationFailure({
+            adminClient,
+            sendEmailFn: sendEmail,
+            route: "generate-capability-finalize",
+            errorType: "step3_failed",
+            message: `Step 3 naming pass output was not fully parseable (reason=${result.reason})`,
+            userId: user.id,
+            severity: "high",
+            metadata: {
+              reason: result.reason,
+              failureMode: step3StopReason === "max_tokens" ? "truncated" : "sentinel",
+              retryAttempted: false,
+              groupCount: evidenceGroups.length,
+              maxTokens: 8192,
+              stopReason: step3StopReason,
+              rawTextLength: result.rawTextLength,
+              parsedCount: result.parsedCount,
+              expectedCount: result.expectedCount,
+              missingGroupIds: result.missingGroupIds
+            },
+          });
+          return NextResponse.json({ error: "Failed to generate capability entries. Please try again." }, { status: 500 });
+        }
+
+        const missingGroups = evidenceGroups.filter((g) => result.missingGroupIds.includes(g.groupId));
+        console.log(
+          "[generate-capability-finalize] Step 3 count_mismatch on a completed response - retrying " +
+          missingGroups.length + " of " + evidenceGroups.length + " group(s): " + JSON.stringify(result.missingGroupIds)
+        );
+
+        step3Phase = "retry";
+        const retryResponse = await anthropic.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 8192,
+          temperature: 0.2,
+          messages: [{ role: "user", content: buildStep3Prompt(missingGroups) }],
         });
-        return NextResponse.json({ error: "Failed to generate capability entries. Please try again." }, { status: 500 });
+        step3RetryStopReason = retryResponse.stop_reason;
+        step3RetryRawText = retryResponse.content.find((b) => b.type === "text")?.text ?? "";
+        const retryResult = parseStep3Response(step3RetryRawText, missingGroups, storedDocs);
+
+        if (retryResult.kind === "entries") {
+          // Concatenated rather than re-interleaved into the original evidenceGroups
+          // order: the first call's entries already follow the leadership/technical/
+          // credentials ordering buildStep3Prompt asked for, and CapabilityEntry
+          // carries no groupId to re-sort by - a handful of recovered entries tacked
+          // on the end is a cosmetic ordering cost, not a correctness one. No entry
+          // is dropped: every group is accounted for across the two calls (this
+          // branch), the report below (retry still short), or the no-retry report
+          // above (truncated/sentinel) - there is no path that silently loses one.
+          capabilityEntries = [...result.matchedEntries, ...retryResult.capabilityEntries];
+          capabilitySummary = capabilityEntries
+            .map((e) => `**${e.name}** [${e.verificationStatus}]: ${e.description}`)
+            .join("\n\n");
+          console.log(
+            "[generate-capability-finalize] Step 3 retry recovered all " + missingGroups.length + " missing group(s)"
+          );
+        } else {
+          // Only ONE retry (constraint D) - a second shortfall fails for good, but
+          // reported with both attempts' numbers so the log distinguishes "transient
+          // omission, recovered" from "these specific groupIds consistently will not
+          // name" instead of requiring another multi-session diagnostic to tell them apart.
+          const stillMissingGroupIds = retryResult.kind === "escalate" ? retryResult.missingGroupIds : missingGroups.map((g) => g.groupId);
+          const retryParsedCount = retryResult.kind === "escalate" ? retryResult.parsedCount : 0;
+          await reportGenerationFailure({
+            adminClient,
+            sendEmailFn: sendEmail,
+            route: "generate-capability-finalize",
+            errorType: "step3_failed",
+            message: `Step 3 naming pass: retry did not recover all missing groups (${stillMissingGroupIds.length} of ${missingGroups.length} still missing after one retry)`,
+            userId: user.id,
+            severity: "high",
+            metadata: {
+              reason: "retry_exhausted",
+              groupCount: evidenceGroups.length,
+              maxTokens: 8192,
+              initialStopReason: step3StopReason,
+              initialParsedCount: result.parsedCount,
+              initialExpectedCount: result.expectedCount,
+              initialMissingGroupIds: result.missingGroupIds,
+              retryStopReason: step3RetryStopReason,
+              retryParsedCount,
+              retryExpectedCount: missingGroups.length,
+              stillMissingGroupIds
+            },
+          });
+          return NextResponse.json({ error: "Failed to generate capability entries. Please try again." }, { status: 500 });
+        }
       }
 
-      capabilitySummary = result.capabilitySummary;
-      capabilityEntries = result.capabilityEntries;
       const tStep3End = Date.now();
       console.log("[generate-capability-finalize][timing] step3 END t=" + tStep3End + " delta=" + (tStep3End - t6) + "ms capabilityLen=" + capabilitySummary.length + " entryCount=" + capabilityEntries.length);
     } catch (err) {
@@ -175,18 +254,21 @@ export async function POST() {
       // capabilitySummary/capabilityEntries left empty, producing a corrupted
       // profile instead of a visible failure. Step 4's identical catch block
       // (below) already reports and returns an error - this now matches it.
+      // Covers both the initial call and the (at most one) retry call - step3Phase
+      // says which was in flight when it threw.
       const message = err instanceof Error ? err.message : String(err);
-      console.error("[generate-capability-finalize] step3 Sonnet error", err);
+      console.error("[generate-capability-finalize] step3 Sonnet error (phase=" + step3Phase + ")", err);
       await reportGenerationFailure({
         adminClient,
         sendEmailFn: sendEmail,
         route: "generate-capability-finalize",
         errorType: "step3_failed",
-        message: `Step 3 naming pass API call failed: ${message}`,
+        message: `Step 3 naming pass API call failed during ${step3Phase} attempt: ${message}`,
         userId: user.id,
         severity: "high",
         metadata: {
           reason: "api_error",
+          phase: step3Phase,
           groupCount: evidenceGroups.length,
           maxTokens: 8192,
         },
@@ -282,7 +364,12 @@ export async function POST() {
   const persistGenerationDebug = async (reason: string) => {
     const payload = {
       reason,
-      step3: { stopReason: step3StopReason, length: rawStep3Text.length, raw: rawStep3Text },
+      step3: {
+        stopReason: step3StopReason,
+        length: rawStep3Text.length,
+        raw: rawStep3Text,
+        retry: step3RetryRawText === null ? null : { stopReason: step3RetryStopReason, length: step3RetryRawText.length, raw: step3RetryRawText }
+      },
       step4: { stopReason: step4StopReason, length: positionsText.length, raw: positionsText },
       employerSummary: { stopReason: employerStopReason, length: rawEmployerText.length, raw: rawEmployerText },
       step4Sections: {
