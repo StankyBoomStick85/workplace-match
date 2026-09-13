@@ -461,17 +461,32 @@ No markdown fences. No explanation. No text outside the JSON array.`;
 // parts (unioning claims / corroborating ids, re-resolving verificationStatus and
 // primarySourceDocId, the VERIFIED-purity rule) move verbatim into applyMergePlan
 // below - same semantics, applied deterministically in code so they cannot be cut
-// off. The criteria for what combines are unchanged from the previous prompt.
+// off.
+//
+// Consolidation scope, not a new pass: grouping (step 2a) runs independently per
+// 100-item batch with no cross-batch context, so the same broader capability
+// routinely comes back as several differently-worded preliminary groups - one per
+// batch whose evidence happened to touch it - not just as literal duplicates of
+// one restated claim. The original criterion here ("exact same underlying
+// capability") only caught the latter, so a real profile's preliminary group
+// count (a function of batch count, not of how many distinct things the person
+// can do) passed straight through to Step 3 ungrouped. Broadened below to also
+// combine those same-broader-capability restatements, in this same pass rather
+// than a separate one: it already sees every preliminary group at once, already
+// produces a plan applied deterministically in code, and a second LLM pass over
+// the same input would just be this rule running twice.
 export function buildEvidenceGroupMergePrompt(groups: EvidenceGroup[]): string {
-  return `You are reconciling preliminary capability groups produced independently from separate batches of evidence for the same job applicant. Some groups from different batches describe the exact same underlying capability (e.g. the same duty appearing in evidence from two different documents). Your job is to identify which groups should be combined.
+  return `You are reconciling preliminary capability groups produced independently from separate batches of evidence for the same job applicant. Because each batch was grouped without seeing the others, the same broader capability often comes back as several separate groups - not just as one duty restated twice, but as different specific incidents, roles, or documents that all demonstrate the same underlying capability. Your job is to identify which groups should be combined into one.
 
 PRELIMINARY GROUPS:
 ${JSON.stringify(groups, null, 2)}
 
 Rules for deciding what combines:
-- Combine two or more groups ONLY when they describe the exact same underlying capability — not merely a similar theme or domain.
-- Two distinct capabilities must NOT be combined solely because they relate to a similar theme or domain.
+- Combine two or more groups when they describe the SAME BROADER CAPABILITY, even if the specific incidents, roles, timeframes, or source documents differ. Test: would a hiring manager describe these as "the same skill, shown more than once" rather than as two different things this person can do? If yes, combine them.
+- Do NOT combine groups that describe genuinely different skills or deliverables just because they sit in a similar theme or domain. Example: leading a team and training/mentoring people are related, leadership-adjacent skills, but they are different things a hiring manager would list separately - do not combine them. The same applies to e.g. asset accountability vs. budget management, or technical execution vs. advising others on it.
+- When it is genuinely unclear whether two groups are the same skill or two related-but-different skills, leave them separate. Under-combining loses nothing (Step 3 still produces a usable entry for each); over-combining destroys specific, evidence-backed strengths by folding them into a vague catch-all.
 - A group that does not clearly match another is left alone.
+- For calibration only, not a target to hit: most single-person profiles, however many preliminary groups batching produced, describe on the order of a dozen to a few dozen genuinely distinct broad capabilities - not hundreds (a sign this pass under-combined restatements of the same thing) and not just a handful (a sign genuinely different skills got folded together). Use this only to sanity-check your own output; the two rules above decide the actual count, not this number.
 
 Return ONLY a JSON object of exactly this shape, and nothing else:
 

@@ -139,21 +139,30 @@ export async function POST() {
 
       if (result.kind === "escalate") {
         // Phase 2 always calls buildStep3Prompt without a correction instruction, so
-        // "sentinel" should never happen here - only "count_mismatch" is expected,
-        // and even that shouldn't happen with the raised ceiling above. Logged with
-        // full diagnostics (previously just a bare string with no data behind it) so
-        // a recurrence is immediately explainable instead of requiring a repro.
-        console.error(
-          "[generate-capability-finalize] Step 3 output was not fully parseable (unexpected without a correction in play)",
-          {
+        // "sentinel" should never happen here - only "count_mismatch" is expected.
+        // Reported through reportGenerationFailure (error_logs row + alert email),
+        // not just console.error, so a recurrence shows up without needing someone
+        // to go dig through hosting logs for it - that gap is what cost three
+        // sessions of guesswork on the group-count blowout this was added for.
+        await reportGenerationFailure({
+          adminClient,
+          sendEmailFn: sendEmail,
+          route: "generate-capability-finalize",
+          errorType: "step3_failed",
+          message: `Step 3 naming pass output was not fully parseable (reason=${result.reason})`,
+          userId: user.id,
+          severity: "high",
+          metadata: {
             reason: result.reason,
+            groupCount: evidenceGroups.length,
+            maxTokens: 8192,
             stopReason: step3Response.stop_reason,
             rawTextLength: result.rawTextLength,
             parsedCount: result.parsedCount,
             expectedCount: result.expectedCount,
             missingGroupIds: result.missingGroupIds
-          }
-        );
+          },
+        });
         return NextResponse.json({ error: "Failed to generate capability entries. Please try again." }, { status: 500 });
       }
 
@@ -162,7 +171,27 @@ export async function POST() {
       const tStep3End = Date.now();
       console.log("[generate-capability-finalize][timing] step3 END t=" + tStep3End + " delta=" + (tStep3End - t6) + "ms capabilityLen=" + capabilitySummary.length + " entryCount=" + capabilityEntries.length);
     } catch (err) {
+      // Previously swallowed silently: the route fell through to Step 4 with
+      // capabilitySummary/capabilityEntries left empty, producing a corrupted
+      // profile instead of a visible failure. Step 4's identical catch block
+      // (below) already reports and returns an error - this now matches it.
+      const message = err instanceof Error ? err.message : String(err);
       console.error("[generate-capability-finalize] step3 Sonnet error", err);
+      await reportGenerationFailure({
+        adminClient,
+        sendEmailFn: sendEmail,
+        route: "generate-capability-finalize",
+        errorType: "step3_failed",
+        message: `Step 3 naming pass API call failed: ${message}`,
+        userId: user.id,
+        severity: "high",
+        metadata: {
+          reason: "api_error",
+          groupCount: evidenceGroups.length,
+          maxTokens: 8192,
+        },
+      });
+      return NextResponse.json({ error: `AI generation failed: ${message}` }, { status: 500 });
     }
   }
 
