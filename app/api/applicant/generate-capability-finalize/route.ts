@@ -14,7 +14,7 @@ import {
   type StoredDoc,
   type CapabilityEntry
 } from "@/lib/capabilityPipeline";
-import { scanEmployerFacingText, reportTextGuardViolation } from "@/lib/employerTextGuard";
+import { scanEmployerFacingText, reportTextGuardViolation, scanCapabilityEntries } from "@/lib/employerTextGuard";
 import { reportGenerationFailure } from "@/lib/generationAlerts";
 import { sendEmail } from "@/lib/email";
 import { addNotificationByUserId } from "@/lib/supabaseMvpData";
@@ -521,6 +521,18 @@ export async function POST() {
     });
   }
 
+  // capability_entries checked separately from the string-field loop above: it's
+  // an array of {name, description} entries, not one block of text, and it DOES
+  // reach an employer today - the "candidate-profiles" read endpoint sends this
+  // field raw (see the aiFields fix in api/mvp/read/route.ts), so it is held to
+  // the same "high" severity as employer_summary, not "medium". Scanned as one
+  // aggregate check (not one reportTextGuardViolation call per bad entry) so a
+  // systemic failure across many entries produces one alert, not a flood of them.
+  const capabilityEntryViolations = scanCapabilityEntries(capabilityEntries, { knownFullName });
+  if (capabilityEntryViolations.length > 0) {
+    redactedFields.push("capability_entries");
+  }
+
   traceStage("after-guard-block");
 
   // ABORT on any redaction - same failure posture as the Step 4 missing-sections
@@ -539,7 +551,14 @@ export async function POST() {
       metadata: {
         redactedFields,
         step4StopReason,
-        employerSummaryLength: rawEmployerText.length
+        employerSummaryLength: rawEmployerText.length,
+        capabilityEntryCount: capabilityEntries.length,
+        capabilityEntryViolations: capabilityEntryViolations.map((v) => ({
+          index: v.index,
+          field: v.field,
+          textPreview: (v.field === "name" ? capabilityEntries[v.index]?.name : capabilityEntries[v.index]?.description)?.slice(0, 500),
+          violations: v.violations
+        }))
       }
     });
     return NextResponse.json(

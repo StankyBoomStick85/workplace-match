@@ -1,5 +1,6 @@
 import { formatStoredPayRange } from "./payFormatting";
 import { supabase } from "./supabase";
+import type { CapabilityEntry } from "./capabilityPipeline";
 
 export type MvpRole = "candidate" | "employer" | "admin";
 
@@ -22,6 +23,13 @@ export type MvpApplicantProfile = {
   // ever render. capabilitySummary above is the candidate's own draft (may
   // contain PII) and must never be shown to an employer.
   employerSummary?: string;
+  // Structured per-capability entries - passed through raw here exactly like
+  // employerSummary above is. NOT safe to render as-is: every employer-facing
+  // consumer must gate it through isCapabilityEntriesSafe/scanCapabilityEntries
+  // (lib/employerTextGuard.ts) immediately before display, same as
+  // employerSummary already is at each render site. Never render this in an
+  // employer-facing view without that check.
+  capabilityEntries?: CapabilityEntry[];
   topSkills?: string[];
   experienceLevel?: string;
   updatedAt?: string;
@@ -448,6 +456,7 @@ function mapCandidateProfile(data: any): MvpApplicantProfile {
     workPreference: data.work_preference ?? "",
     capabilitySummary: data.summary ?? "",
     employerSummary: data.employer_summary ?? "",
+    capabilityEntries: Array.isArray(data.capability_entries) ? data.capability_entries : [],
     topSkills: data.capability_tags ?? [],
     experienceLevel: data.experience_level ?? "",
     updatedAt: data.created_at ?? "",

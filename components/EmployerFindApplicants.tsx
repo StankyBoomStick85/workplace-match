@@ -18,7 +18,8 @@ import {
 } from "../lib/matchMessages";
 import { logAdminEvent } from "../lib/adminEvents";
 import { logError } from "../lib/logError";
-import { scanEmployerFacingText, formatViolations } from "../lib/employerTextGuard";
+import { scanEmployerFacingText, formatViolations, scanCapabilityEntries } from "../lib/employerTextGuard";
+import type { CapabilityEntry } from "../lib/capabilityPipeline";
 import {
   addInterest as addSupabaseInterest,
   addMutualMatch as addSupabaseMutualMatch,
@@ -79,6 +80,12 @@ type applicantProfile = {
   // file may ever render to an employer. capabilitySummary above is the
   // candidate's own draft and may contain PII - never render it here.
   employerSummary?: string;
+  // Structured per-capability entries. NOT currently rendered anywhere in this
+  // file - present so the render-time guard below can watch it the same way
+  // employer_summary is watched. If a future change ever displays these, it
+  // MUST gate through isCapabilityEntriesSafe first, exactly like
+  // employerSummary is gated at its render site below.
+  capabilityEntries?: CapabilityEntry[];
   topSkills?: string[];
   experienceLevel?: string;
   educationLevel?: string;
@@ -1359,6 +1366,31 @@ function EmployerMutualMatchActions({
       });
     }
   }, [applicantId, profile.employerSummary]);
+
+  // Same defense-in-depth as the employer_summary check above, for
+  // capability_entries: this field isn't rendered anywhere in this file today,
+  // but the "candidate-profiles" read endpoint sent it raw to every approved
+  // employer view before the generation-time/API-gate fixes existed, so
+  // existing stored rows can carry PII regardless of when they were generated.
+  useEffect(() => {
+    const entries = profile.capabilityEntries ?? [];
+    if (entries.length === 0) return;
+    const violations = scanCapabilityEntries(entries);
+    if (violations.length > 0) {
+      console.error("[EmployerFindApplicants] capability_entries failed identity guard at render time", {
+        candidateId: applicantId,
+        violations
+      });
+      logError({
+        route: "EmployerFindApplicants",
+        errorMessage: `Stored capability_entries failed identity guard: ${violations.length} entry field(s) flagged`,
+        errorType: "privacy_violation",
+        severity: "high",
+        userId: applicantId,
+        metadata: { violations }
+      });
+    }
+  }, [applicantId, profile.capabilityEntries]);
 
   function sendEmployerMessage(text: string) {
     if (!employerAccount) {

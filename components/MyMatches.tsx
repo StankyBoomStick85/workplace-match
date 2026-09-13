@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { attemptPreferredContact } from "../lib/contactPreferences";
 import { logAdminEvent } from "../lib/adminEvents";
 import { logError } from "../lib/logError";
-import { scanEmployerFacingText, formatViolations } from "../lib/employerTextGuard";
+import { scanEmployerFacingText, formatViolations, scanCapabilityEntries } from "../lib/employerTextGuard";
 import { addMatchThreadMessage, refreshMatchThreadMessages, type MatchMessage, type MatchThreadContext } from "../lib/matchMessages";
 import { calculateSkillMatch, getApplicantMatchSignals } from "../lib/skillMatch";
 import {
@@ -149,6 +149,34 @@ export function MyMatches({ role }: { role: Role }) {
             logError({
               route: "MyMatches",
               errorMessage: `Stored employer_summary failed identity guard: ${formatViolations(violations)}`,
+              errorType: "privacy_violation",
+              severity: "high",
+              userId: record.match.candidateId,
+              metadata: { violations }
+            });
+          }
+        }
+      }
+
+      // Same defense-in-depth as the employer_summary check above, for
+      // capability_entries: this field isn't rendered anywhere in this file
+      // today, but the "candidate-profiles" read endpoint sent it raw to every
+      // approved employer view before the generation-time/API-gate fixes
+      // existed, so existing stored rows can carry PII regardless of when
+      // they were generated.
+      if (role === "employer") {
+        for (const record of nextMatches) {
+          const entries = record.candidateProfile?.capabilityEntries ?? [];
+          if (entries.length === 0) continue;
+          const violations = scanCapabilityEntries(entries);
+          if (violations.length > 0) {
+            console.error("[MyMatches] capability_entries failed identity guard at render time", {
+              candidateId: record.match.candidateId,
+              violations
+            });
+            logError({
+              route: "MyMatches",
+              errorMessage: `Stored capability_entries failed identity guard: ${violations.length} entry field(s) flagged`,
               errorType: "privacy_violation",
               severity: "high",
               userId: record.match.candidateId,

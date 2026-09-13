@@ -71,7 +71,10 @@ export async function GET(request: Request) {
     if (resource === "candidate-profiles") {
       const { data, error } = await adminClient.from("candidate_profiles").select("*");
       if (error) throw error;
-      const aiFields = ["capability_summary", "recommended_position", "entry_point", "future_positions", "employer_summary", "alternate_paths"];
+      // capability_entries was missing from this list - the same AI-generated-content
+      // gate every sibling field gets, so it was reaching an employer's browser raw
+      // (unfiltered, pre-approval) via this endpoint regardless of is_approved.
+      const aiFields = ["capability_summary", "capability_entries", "recommended_position", "entry_point", "future_positions", "employer_summary", "alternate_paths"];
       const gated = (data ?? []).map((row: Record<string, unknown>) => {
         if (!row.is_approved) {
           const stripped = { ...row };

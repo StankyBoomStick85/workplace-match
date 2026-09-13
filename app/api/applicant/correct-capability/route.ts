@@ -14,7 +14,7 @@ import {
   type StoredDoc,
   type Step3Result
 } from "@/lib/capabilityPipeline";
-import { scanEmployerFacingText, reportTextGuardViolation } from "@/lib/employerTextGuard";
+import { scanEmployerFacingText, reportTextGuardViolation, scanCapabilityEntries } from "@/lib/employerTextGuard";
 import { reportGenerationFailure } from "@/lib/generationAlerts";
 import { sendEmail } from "@/lib/email";
 
@@ -304,6 +304,38 @@ export async function POST(request: Request) {
   if ("recommended_position" in redacted) recommendedPosition = redacted.recommended_position;
   if ("entry_point" in redacted) entryPoint = redacted.entry_point;
   if ("future_positions" in redacted) futurePositions = redacted.future_positions;
+
+  // capability_entries is checked separately and ABORTS rather than redacting
+  // and saving like the four fields above - it's an array of {name,
+  // description} entries, not one block of text, and it reaches an employer
+  // today (see the aiFields fix in api/mvp/read/route.ts), so a violation here
+  // gets the same fail-loudly treatment generate-capability-finalize uses for
+  // its guard_redaction_abort, not this route's softer per-field redact-and-save.
+  const capabilityEntryViolations = scanCapabilityEntries(capabilityEntries, { knownFullName });
+  if (capabilityEntryViolations.length > 0) {
+    await reportGenerationFailure({
+      adminClient,
+      sendEmailFn: sendEmail,
+      route: "correct-capability",
+      errorType: "guard_redaction_abort",
+      message: "Text guard flagged capability_entries; aborted before write",
+      userId: user.id,
+      severity: "high",
+      metadata: {
+        capabilityEntryCount: capabilityEntries.length,
+        capabilityEntryViolations: capabilityEntryViolations.map((v) => ({
+          index: v.index,
+          field: v.field,
+          textPreview: (v.field === "name" ? capabilityEntries[v.index]?.name : capabilityEntries[v.index]?.description)?.slice(0, 500),
+          violations: v.violations
+        }))
+      }
+    });
+    return NextResponse.json(
+      { error: "Failed to generate your corrected profile. Please try again." },
+      { status: 500 }
+    );
+  }
 
   // Tier 1 never changes grouping, so pending_evidence_groups is left exactly as it
   // was for the next correction to reuse.

@@ -603,6 +603,52 @@ export function isEmployerFacingTextSafe(text: string, options?: { knownFullName
   return scanEmployerFacingText(text, options).length === 0;
 }
 
+// A capability_entries violation, one per offending name/description within a
+// specific entry. "index" is the entry's position in the array, not a string
+// offset - callers needing the in-text offset use violations[].index as usual.
+export type CapabilityEntryTextViolation = {
+  index: number;
+  field: "name" | "description";
+  violations: TextGuardViolation[];
+};
+
+// Structurally typed on the two fields actually scanned (not CapabilityEntry
+// itself) so this stays usable from any caller - server route or client
+// component - without importing the generation-pipeline type just for this.
+// Scans every entry regardless of earlier hits: one pass surfaces every
+// offending entry/field at once instead of catching them one at a time across
+// repeated runs (the same reasoning as the rest of this module - see the
+// header comment).
+export function scanCapabilityEntries(
+  entries: Array<{ name: string; description: string }>,
+  options?: { knownFullName?: string | null }
+): CapabilityEntryTextViolation[] {
+  const results: CapabilityEntryTextViolation[] = [];
+  entries.forEach((entry, index) => {
+    const nameViolations = scanEmployerFacingText(entry.name, options);
+    if (nameViolations.length > 0) {
+      results.push({ index, field: "name", violations: nameViolations });
+    }
+    const descriptionViolations = scanEmployerFacingText(entry.description, options);
+    if (descriptionViolations.length > 0) {
+      results.push({ index, field: "description", violations: descriptionViolations });
+    }
+  });
+  return results;
+}
+
+// Whole-block check, deliberately not per-entry filtering: a violation in one
+// entry is treated the same way a violation in any other guarded field is -
+// the whole block is unsafe to show, not just the offending entry. See the
+// capability_entries guard-coverage change for why per-entry suppression was
+// considered and rejected.
+export function isCapabilityEntriesSafe(
+  entries: Array<{ name: string; description: string }>,
+  options?: { knownFullName?: string | null }
+): boolean {
+  return scanCapabilityEntries(entries, options).length === 0;
+}
+
 export function formatViolations(violations: TextGuardViolation[]): string {
   return violations.map((violation) => `${violation.category}:"${violation.match}"`).join(", ");
 }
@@ -656,7 +702,7 @@ export async function reportTextGuardViolation({
 
   try {
     await sendEmailFn({
-      to: "joel@workplacematchapp.com",
+      to: "joel@workplace-match.com",
       subject: `WPM Alert - candidate identity guard blocked ${field}`,
       html: `<p><b>Route:</b> ${route}</p><p><b>Field:</b> ${field}</p><p><b>User:</b> ${userId}</p><p><b>Violations:</b> ${summary}</p>`,
       text: `Route: ${route}\nField: ${field}\nUser: ${userId}\nViolations: ${summary}`
