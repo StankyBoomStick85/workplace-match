@@ -61,28 +61,50 @@ export async function GET(request: Request) {
     }
 
     if (resource === "candidate-profile") {
-      const userId = requestUrl.searchParams.get("userId") || user?.id;
-      if (!userId) return NextResponse.json({ data: null });
-      const { data, error } = await adminClient.from("candidate_profiles").select("*").eq("user_id", userId).maybeSingle();
+      // Self-view only: this is how a candidate sees their OWN full record,
+      // identity fields included - that's correct here, but only for the
+      // authenticated owner of that record. A caller-supplied userId is never
+      // honored: doing so previously made this an unauthenticated full-profile
+      // lookup by UUID (name, phone, street address, everything) for anyone who
+      // could guess or obtain a candidate's id. Every call site in this app
+      // already either omits userId or passes the caller's own id, so nothing
+      // legitimate depended on the query-param override - closing it costs no
+      // real functionality.
+      if (!user) return NextResponse.json({ data: null });
+      const { data, error } = await adminClient.from("candidate_profiles").select("*").eq("user_id", user.id).maybeSingle();
       if (error) throw error;
       return NextResponse.json({ data });
     }
 
     if (resource === "candidate-profiles") {
-      const { data, error } = await adminClient.from("candidate_profiles").select("*");
+      // ALLOWLIST, not denylist: only columns an employer may legitimately
+      // receive are named here. A new column added to candidate_profiles is
+      // invisible through this endpoint by default - it has to be added here
+      // deliberately, not merely left off some other list (that's exactly how
+      // display_name and capability_entries both reached an employer's browser
+      // raw before this change - select("*") ships everything unless someone
+      // remembers to name it on a denylist). is_approved is selected only to
+      // decide the gate below; it is never included in the response, because
+      // no consumer reads it client-side - the gate has always been enforced
+      // server-side only.
+      const { data, error } = await adminClient
+        .from("candidate_profiles")
+        .select("user_id, zip_code, job_types, work_preference, capability_tags, experience_level, employer_summary, capability_entries, is_approved");
       if (error) throw error;
-      // capability_entries was missing from this list - the same AI-generated-content
-      // gate every sibling field gets, so it was reaching an employer's browser raw
-      // (unfiltered, pre-approval) via this endpoint regardless of is_approved.
-      const aiFields = ["capability_summary", "capability_entries", "recommended_position", "entry_point", "future_positions", "employer_summary", "alternate_paths"];
-      const gated = (data ?? []).map((row: Record<string, unknown>) => {
-        if (!row.is_approved) {
-          const stripped = { ...row };
-          for (const f of aiFields) stripped[f] = null;
-          return stripped;
-        }
-        return row;
-      });
+      const gated = (data ?? []).map((row: Record<string, unknown>) => ({
+        user_id: row.user_id,
+        zip_code: row.zip_code,
+        job_types: row.job_types,
+        work_preference: row.work_preference,
+        capability_tags: row.capability_tags,
+        experience_level: row.experience_level,
+        // AI-generated content is withheld until a human approves it - same
+        // policy this table's other AI fields have always had, just now scoped
+        // to the only two AI fields an employer can see here at all, instead of
+        // a list that had to be kept in sync with every field that must NOT be.
+        employer_summary: row.is_approved ? row.employer_summary : null,
+        capability_entries: row.is_approved ? row.capability_entries : null
+      }));
       return NextResponse.json({ data: gated });
     }
 
