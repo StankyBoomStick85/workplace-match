@@ -205,9 +205,6 @@ function JobCard({
           <button type="button" className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">
             Message
           </button>
-          <button type="button" className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">
-            Schedule Conversation
-          </button>
         </div>
       ) : null}
     </article>

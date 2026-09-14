@@ -6,8 +6,6 @@ import { Circle, MapContainer, Marker, Polygon, Popup, TileLayer, ZoomControl, u
 import {
   addInterestReceivedNotification,
   addMatchFoundNotification,
-  addNewMessageNotification,
-  addScheduleRequestNotification,
   type ContactMethod
 } from "../lib/contactPreferences";
 import {
@@ -23,6 +21,7 @@ import type { CapabilityEntry } from "../lib/capabilityPipeline";
 import {
   addInterest as addSupabaseInterest,
   addMutualMatch as addSupabaseMutualMatch,
+  addNotificationByUserId,
   getAllApplicantProfiles,
   getApplicantInterests,
   getCurrentMvpUser,
@@ -41,7 +40,6 @@ type EmployerAccount = {
   displayName?: string;
   phone?: string;
   preferredContactMethods?: ContactMethod[];
-  availabilityWindows?: string[];
 };
 
 type JobListing = {
@@ -66,12 +64,11 @@ type JobListing = {
 
 type applicantProfile = {
   userId?: string;
-  // candidateEmail is intentionally kept for internal notification routing
-  // only (addNewMessageNotification/addScheduleRequestNotification recipient
-  // lookups) - it must never be rendered. fullName is deliberately NOT part
-  // of this type: this platform never discloses candidate identity to an
-  // employer, at any tier, so there is nothing to accidentally read.
-  candidateEmail?: string;
+  // fullName and candidateEmail are deliberately NOT part of this type: this
+  // platform never discloses candidate identity to an employer, at any tier,
+  // and messaging notifications are now resolved by user id (see
+  // addNotificationByUserId), so there is nothing left that needs an email
+  // address here at all.
   zipCode?: string;
   desiredJobType?: string;
   workPreference?: string;
@@ -1229,7 +1226,6 @@ function ApplicantMatchPopup({
   hideHeader?: boolean;
 }) {
   const [dismissedMutualActionJobIds, setDismissedMutualActionJobIds] = useState<string[]>([]);
-  const ApplicantAccount = findCandidateAccount(applicant.profile);
   const orderedJobMatches = focusedJobId
     ? [...applicant.jobMatches].sort((first, second) => {
         if (first.job.id === focusedJobId) {
@@ -1296,7 +1292,6 @@ function ApplicantMatchPopup({
                 applicantId={applicant.id}
                 profile={applicant.profile}
                 employerAccount={employerAccount}
-                ApplicantAccount={ApplicantAccount}
                 onDismiss={() =>
                   setDismissedMutualActionJobIds((current) =>
                     current.includes(job.id) ? current : [...current, job.id]
@@ -1317,21 +1312,17 @@ function EmployerMutualMatchActions({
   applicantId,
   profile,
   employerAccount,
-  ApplicantAccount,
   onDismiss
 }: {
   job: JobListing;
   applicantId: string;
   profile: applicantProfile;
   employerAccount: EmployerAccount | null;
-  ApplicantAccount: ApplicantAccount | null;
   onDismiss: () => void;
 }) {
   const [isMessagingOpen, setIsMessagingOpen] = useState(false);
-  const [isSchedulingOpen, setIsSchedulingOpen] = useState(false);
   const [messages, setMessages] = useState<MatchMessage[]>([]);
   const [messageText, setMessageText] = useState("");
-  const [selectedTime, setSelectedTime] = useState(employerAccount?.availabilityWindows?.[0] ?? "");
   // match_messages.employer_id is a uuid FK - must be the real auth user id,
   // never an email (job.employerEmail is a display string, not a uuid).
   const thread: MatchThreadContext = {
@@ -1400,45 +1391,23 @@ function EmployerMutualMatchActions({
     const message = addMatchThreadMessage({
       ...thread,
       senderRole: "employer",
-      senderEmail: employerAccount.email,
       text
     });
 
-    if (!message || !ApplicantAccount?.email) {
+    if (!message) {
       return;
     }
 
-    addNewMessageNotification({
-      recipientEmail: ApplicantAccount.email,
-      senderEmail: employerAccount.email,
+    // In-app only: the bell notification is resolved by the candidate's real
+    // user id (applicantId), never by email - messaging never stores,
+    // exposes, or sends an email address anywhere in this flow.
+    addNotificationByUserId({
+      recipientUserId: applicantId,
+      type: "new_message",
+      title: "New Message",
+      message: `New message about ${job.title}.`,
       jobId: job.id,
-      jobTitle: job.title,
-      message: `New message about ${job.title}.`
-    });
-  }
-
-  function sendScheduleNotifications(message: string, dedupeKey?: string) {
-    if (!employerAccount) {
-      return;
-    }
-
-    if (ApplicantAccount?.email) {
-      addScheduleRequestNotification({
-        recipientEmail: ApplicantAccount.email,
-        senderEmail: employerAccount.email,
-        jobId: job.id,
-        jobTitle: job.title,
-        message,
-        dedupeKey: dedupeKey ? `${dedupeKey}:candidate` : undefined
-      });
-    }
-    addScheduleRequestNotification({
-      recipientEmail: employerAccount.email,
-      senderEmail: ApplicantAccount?.email ?? applicantId,
-      jobId: job.id,
-      jobTitle: job.title,
-      message,
-      dedupeKey: dedupeKey ? `${dedupeKey}:employer` : undefined
+      jobTitle: job.title
     });
   }
 
@@ -1459,10 +1428,6 @@ function EmployerMutualMatchActions({
     // are identifying) - match_messages is the only sanctioned contact
     // channel post-match.
     sendEmployerMessage("Let's schedule a time to connect about this match.");
-    sendScheduleNotifications(
-      "Schedule conversation requested for a mutual match.",
-      `schedule-request:${job.id}:${applicantId}`
-    );
     onDismiss();
   }
 
@@ -1474,24 +1439,6 @@ function EmployerMutualMatchActions({
     sendEmployerMessage(messageText);
     setMessageText("");
     setMessages(getMatchThreadMessages(thread));
-  }
-
-  function scheduleConversation() {
-    if (!selectedTime.trim()) {
-      return;
-    }
-
-    logAdminEvent({
-      type: "schedule_requested",
-      userRole: "employer",
-      jobId: job.id,
-      applicantId,
-      employerId: employerAccount?.email ?? job.employerEmail
-    });
-    sendEmployerMessage(`Scheduled for ${selectedTime.trim()}`);
-    sendScheduleNotifications(`Conversation scheduled for ${selectedTime.trim()}`);
-    setMessages(getMatchThreadMessages(thread));
-    setIsSchedulingOpen(false);
   }
 
   return (
@@ -1543,13 +1490,6 @@ function EmployerMutualMatchActions({
         >
           Message
         </button>
-        <button
-          type="button"
-          onClick={() => setIsSchedulingOpen((current) => !current)}
-          className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-xs font-semibold text-zinc-900 transition hover:bg-zinc-50"
-        >
-          Schedule Conversation
-        </button>
       </div>
       {isMessagingOpen ? (
         <div className="space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2">
@@ -1579,34 +1519,6 @@ function EmployerMutualMatchActions({
           >
             Send message
           </button>
-        </div>
-      ) : null}
-      {isSchedulingOpen ? (
-        <div className="space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2">
-          {employerAccount?.availabilityWindows?.length ? (
-            <>
-              <select
-                value={selectedTime}
-                onChange={(event) => setSelectedTime(event.target.value)}
-                className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
-              >
-                {employerAccount.availabilityWindows.map((window) => (
-                  <option key={window} value={window}>
-                    {window}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={scheduleConversation}
-                className="w-full rounded-md bg-red-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-red-950"
-              >
-                Confirm time
-              </button>
-            </>
-          ) : (
-            <p className="text-xs leading-5 text-zinc-600">Add availability in Account Settings first.</p>
-          )}
         </div>
       ) : null}
     </div>
@@ -1712,10 +1624,6 @@ function RecenterMap({ center }: { center: Coordinates }) {
 
 function readEmployerInterests() {
   return [] as EmployerInterest[];
-}
-
-function findCandidateAccount(profile: applicantProfile) {
-  return profile.candidateEmail ? { email: profile.candidateEmail } : null;
 }
 
 function readCandidateAccounts() {

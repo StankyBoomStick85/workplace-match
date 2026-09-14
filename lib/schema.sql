@@ -99,6 +99,10 @@ create table if not exists public.match_messages (
   employer_id uuid not null references public.users(id) on delete cascade,
   job_id uuid references public.job_posts(id) on delete cascade,
   sender_role text not null check (sender_role in ('applicant', 'employer')),
+  -- Deprecated: a pre-auth-era leftover. The sender is already identifiable from
+  -- applicant_id/employer_id (both uuid not null) + sender_role - no application
+  -- code writes or reads this column anymore. Left in place (nulled, not dropped)
+  -- rather than migrated away.
   sender_email text,
   text text not null,
   created_at timestamptz not null default now()

@@ -302,9 +302,12 @@ export async function GET(request: Request) {
       const employerId = requestUrl.searchParams.get("employerId") ?? "";
       const jobId = requestUrl.searchParams.get("jobId") ?? "";
       if (!applicantId || !employerId || !jobId) return NextResponse.json({ data: [] });
+      // Explicit allowlist, not select("*") - sender_email must never appear in
+      // a client payload (see the sender_email removal): a thread is already
+      // identifiable from applicant_id/employer_id/job_id + sender_role.
       const { data, error } = await adminClient
         .from("match_messages")
-        .select("*")
+        .select("id, applicant_id, employer_id, job_id, sender_role, text, created_at")
         .eq("applicant_id", applicantId)
         .eq("employer_id", employerId)
         .eq("job_id", jobId)

@@ -9,7 +9,6 @@ export type MatchMessage = {
   employerId: string;
   jobId: string;
   senderRole: MatchMessageSender;
-  senderEmail: string;
   text: string;
   createdAt: string;
 };
@@ -47,12 +46,14 @@ export function addMatchThreadMessage(message: Omit<MatchMessage, "id" | "create
   };
   const updatedMessages = [...readMatchMessages(), nextMessage];
   messageCache = updatedMessages;
+  // sender_email deliberately omitted - messaging is entirely internal to the
+  // platform; the sender is already identifiable from applicant_id/employer_id
+  // (both uuid not null) + sender_role, and no email address is ever written here.
   supabase.from("match_messages").insert({
     applicant_id: message.applicantId,
     employer_id: message.employerId,
     job_id: message.jobId,
     sender_role: message.senderRole,
-    sender_email: message.senderEmail,
     text: trimmedText
   }).then(({ error }) => {
     if (error) {
@@ -92,7 +93,6 @@ export async function refreshMatchThreadMessages(thread: MatchThreadContext) {
     employerId: message.employer_id,
     jobId: message.job_id,
     senderRole: message.sender_role,
-    senderEmail: message.sender_email ?? "",
     text: message.text ?? "",
     createdAt: message.created_at
   })) as MatchMessage[];

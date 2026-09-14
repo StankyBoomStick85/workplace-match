@@ -107,21 +107,11 @@ export function addNewMatchNotification(notification: Omit<ContactNotification, 
   });
 }
 
-export function addNewMessageNotification(notification: Omit<ContactNotification, "id" | "createdAt" | "status" | "type" | "title">) {
-  return addContactNotification({
-    ...notification,
-    type: "new_message",
-    title: "New Message"
-  });
-}
-
-export function addScheduleRequestNotification(notification: Omit<ContactNotification, "id" | "createdAt" | "status" | "type" | "title">) {
-  return addContactNotification({
-    ...notification,
-    type: "schedule_request",
-    title: "Schedule Request"
-  });
-}
+// addNewMessageNotification and addScheduleRequestNotification were removed:
+// message notifications are now sent via addNotificationByUserId (resolved by
+// real user id, never by email) at every call site, and the schedule-request
+// feature they served was removed entirely - messaging never stores, exposes,
+// or sends an email address anywhere in that flow.
 
 // Fires on a FIRST-SIDED interest (not just mutual match), so the recipient
 // learns someone is interested and can look and reciprocate. Delivered by the

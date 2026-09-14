@@ -592,7 +592,6 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
                 <div className="mt-4 flex flex-wrap gap-2">
                   <button type="button" className="rounded-md bg-green-700 px-3 py-2 text-sm font-semibold text-white">Reach Out</button>
                   <button type="button" className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">Message</button>
-                  <button type="button" className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">Schedule Conversation</button>
                 </div>
               </article>
             ))}

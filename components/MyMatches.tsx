@@ -9,6 +9,7 @@ import { scanEmployerFacingText, formatViolations, scanCapabilityEntries } from 
 import { addMatchThreadMessage, refreshMatchThreadMessages, type MatchMessage, type MatchThreadContext } from "../lib/matchMessages";
 import { calculateSkillMatch, getApplicantMatchSignals } from "../lib/skillMatch";
 import {
+  addNotificationByUserId,
   getAllApplicantProfiles,
   getAllJobs,
   getApplicantInterests,
@@ -48,7 +49,6 @@ type PendingInterestRecord = {
 export function MyMatches({ role }: { role: Role }) {
   const searchParams = useSearchParams();
   const [userId, setUserId] = useState("");
-  const [accountEmail, setAccountEmail] = useState("");
   const [matches, setMatches] = useState<MatchRecord[]>([]);
   const [pendingInterests, setPendingInterests] = useState<PendingInterestRecord[]>([]);
   const [expandedMatchKey, setExpandedMatchKey] = useState("");
@@ -129,7 +129,6 @@ export function MyMatches({ role }: { role: Role }) {
         .filter(Boolean) as MatchRecord[];
 
       setUserId(user.id);
-      setAccountEmail(user.email);
       setMatches(nextMatches);
 
       // Defense in depth: catches an employer_summary row that was generated
@@ -229,11 +228,19 @@ export function MyMatches({ role }: { role: Role }) {
       const message = addMatchThreadMessage({
         ...getThread(record),
         senderRole: "employer",
-        senderEmail: accountEmail,
         text: "Let's schedule a time to connect about this match."
       });
       if (message) {
         setThreadMessages((current) => ({ ...current, [record.key]: [...(current[record.key] ?? []), message] }));
+        // In-app only: resolved by the candidate's real user id, never by email.
+        addNotificationByUserId({
+          recipientUserId: record.match.candidateId,
+          type: "new_message",
+          title: "New Message",
+          message: `New message about ${record.job.title}.`,
+          jobId: record.job.id,
+          jobTitle: record.job.title
+        });
       }
       setOpenMessageKey(record.key);
     } else {
@@ -282,7 +289,6 @@ export function MyMatches({ role }: { role: Role }) {
     const message = addMatchThreadMessage({
       ...getThread(record),
       senderRole: role === "employer" ? "employer" : "applicant",
-      senderEmail: accountEmail,
       text
     });
 
@@ -292,6 +298,16 @@ export function MyMatches({ role }: { role: Role }) {
 
     setThreadMessages((current) => ({ ...current, [record.key]: [...(current[record.key] ?? []), message] }));
     setMessageDrafts((current) => ({ ...current, [record.key]: "" }));
+
+    // In-app only: resolved by the recipient's real user id, never by email.
+    addNotificationByUserId({
+      recipientUserId: role === "employer" ? record.match.candidateId : record.match.employerId,
+      type: "new_message",
+      title: "New Message",
+      message: `New message about ${record.job.title}.`,
+      jobId: record.job.id,
+      jobTitle: record.job.title
+    });
   }
 
   async function removeMatchInterest(record: MatchRecord) {
@@ -395,7 +411,6 @@ export function MyMatches({ role }: { role: Role }) {
                         <div className="flex flex-wrap gap-2">
                           <button type="button" onClick={() => reachOut(record)} className="rounded-md bg-green-700 px-3 py-2 text-sm font-semibold text-white">Reach Out</button>
                           <button type="button" onClick={() => toggleMessaging(record)} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">Message</button>
-                          <button type="button" className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">Schedule Conversation</button>
                           <button type="button" onClick={() => setPendingRemoveInterest(record)} className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">Remove Interest</button>
                         </div>
                         {openMessageKey === record.key ? (

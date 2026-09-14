@@ -6,8 +6,6 @@ import { Circle, MapContainer, Marker, Polygon, Popup, TileLayer, ZoomControl, u
 import {
   addInterestReceivedNotification,
   addMatchFoundNotification,
-  addNewMessageNotification,
-  addScheduleRequestNotification,
   attemptPreferredContact,
   type ContactMethod
 } from "../lib/contactPreferences";
@@ -23,6 +21,7 @@ import { isGigJob } from "../lib/jobCategories";
 import {
   addInterest as addSupabaseInterest,
   addMutualMatch as addSupabaseMutualMatch,
+  addNotificationByUserId,
   getAllJobs,
   getApplicantInterests,
   getApplicantProfile,
@@ -156,7 +155,6 @@ type EmployerAccount = {
   companyName?: string;
   phone?: string;
   preferredContactMethods?: ContactMethod[];
-  availabilityWindows?: string[];
 };
 type Coordinates = [number, number];
 type ApplicantMapLocationResolution = {
@@ -1346,43 +1344,23 @@ export function ApplicantJobsMap() {
     const message = addMatchThreadMessage({
       ...getMatchThread(job),
       senderRole: "applicant",
-      senderEmail: account.email,
       text
     });
 
-    if (!message) {
+    if (!message || !job.employerId) {
       return;
     }
 
-    addNewMessageNotification({
-      recipientEmail: job.employerEmail,
-      senderEmail: account.email,
+    // In-app only: the bell notification is resolved by the employer's real
+    // user id (job.employerId), never by email - messaging never stores,
+    // exposes, or sends an email address anywhere in this flow.
+    addNotificationByUserId({
+      recipientUserId: job.employerId,
+      type: "new_message",
+      title: "New Message",
+      message: `New message about ${job.title}.`,
       jobId: job.id,
-      jobTitle: job.title,
-      message: `New message about ${job.title}.`
-    });
-  }
-
-  function sendScheduleRequestNotifications(job: JobListing, message: string, dedupeKey?: string) {
-    if (!account) {
-      return;
-    }
-
-    addScheduleRequestNotification({
-      recipientEmail: job.employerEmail,
-      senderEmail: account.email,
-      jobId: job.id,
-      jobTitle: job.title,
-      message,
-      dedupeKey: dedupeKey ? `${dedupeKey}:employer` : undefined
-    });
-    addScheduleRequestNotification({
-      recipientEmail: account.email,
-      senderEmail: job.employerEmail,
-      jobId: job.id,
-      jobTitle: job.title,
-      message,
-      dedupeKey: dedupeKey ? `${dedupeKey}:applicant` : undefined
+      jobTitle: job.title
     });
   }
 
@@ -1396,49 +1374,24 @@ export function ApplicantJobsMap() {
     });
     reachOutToEmployer(job);
     sendApplicantMessage(job, "Let's schedule a time to connect about this match.");
-    sendScheduleRequestNotifications(
-      job,
-      "Schedule conversation requested for a mutual match.",
-      `schedule-request:${job.id}:${candidateId}`
-    );
-  }
-
-  function handleApplicantSchedule(job: JobListing, selectedTime: string) {
-    if (!selectedTime.trim()) {
-      return;
-    }
-
-    const message = `Scheduled for ${selectedTime.trim()}`;
-    logAdminEvent({
-      type: "schedule_requested",
-      userRole: "candidate",
-      jobId: job.id,
-      applicantId: candidateId,
-      employerId: job.employerEmail
-    });
-    sendApplicantMessage(job, message);
-    sendScheduleRequestNotifications(job, `Conversation scheduled for ${selectedTime.trim()}`);
   }
 
   function renderJobDetail(job: JobListing, onClosePanel?: () => void) {
     const { matchPercent, interestState, companyName, commuteEstimate } = getJobPopupData(job);
     const requiredSkills = parseFlexibleSkills(job.requiredSkills);
     const preferredSkills = parseFlexibleSkills(job.preferredSkills);
-    const employerAccount = findEmployerAccount(job.employerEmail);
     const thread = getMatchThread(job);
     const actionBlock =
       interestState === "mutual_match" ? (
         onClosePanel ? (
           <CandidateMutualMatchActions
             thread={thread}
-            availabilityWindows={employerAccount?.availabilityWindows ?? []}
             onReachOut={() => {
               handleApplicantReachOut(job);
               onClosePanel();
             }}
             onReachOutLater={onClosePanel}
             onSendMessage={(text) => sendApplicantMessage(job, text)}
-            onSchedule={(selectedTime) => handleApplicantSchedule(job, selectedTime)}
             onRemoveInterest={() => {
               toggleApplicantInterest(job, matchPercent);
               onClosePanel();
@@ -1447,10 +1400,8 @@ export function ApplicantJobsMap() {
         ) : (
           <CandidateMutualMatchPopup
             thread={thread}
-            availabilityWindows={employerAccount?.availabilityWindows ?? []}
             onReachOut={() => handleApplicantReachOut(job)}
             onSendMessage={(text) => sendApplicantMessage(job, text)}
-            onSchedule={(selectedTime) => handleApplicantSchedule(job, selectedTime)}
             onRemoveInterest={() => toggleApplicantInterest(job, matchPercent)}
           />
         )
@@ -3046,17 +2997,13 @@ function MatchPopup({ onClose, onReachOut }: { onClose: () => void; onReachOut?:
 
 function CandidateMutualMatchPopup({
   thread,
-  availabilityWindows,
   onReachOut,
   onSendMessage,
-  onSchedule,
   onRemoveInterest
 }: {
   thread: MatchThreadContext;
-  availabilityWindows: string[];
   onReachOut: () => void;
   onSendMessage: (text: string) => void;
-  onSchedule: (selectedTime: string) => void;
   onRemoveInterest: () => void;
 }) {
   const map = useMap();
@@ -3064,14 +3011,12 @@ function CandidateMutualMatchPopup({
   return (
     <CandidateMutualMatchActions
       thread={thread}
-      availabilityWindows={availabilityWindows}
       onReachOut={() => {
         onReachOut();
         map.closePopup();
       }}
       onReachOutLater={() => map.closePopup()}
       onSendMessage={onSendMessage}
-      onSchedule={onSchedule}
       onRemoveInterest={() => {
         onRemoveInterest();
         map.closePopup();
@@ -3082,26 +3027,20 @@ function CandidateMutualMatchPopup({
 
 function CandidateMutualMatchActions({
   thread,
-  availabilityWindows,
   onReachOut,
   onReachOutLater,
   onSendMessage,
-  onSchedule,
   onRemoveInterest
 }: {
   thread: MatchThreadContext;
-  availabilityWindows: string[];
   onReachOut: () => void;
   onReachOutLater: () => void;
   onSendMessage: (text: string) => void;
-  onSchedule: (selectedTime: string) => void;
   onRemoveInterest: () => void;
 }) {
   const [isMessagingOpen, setIsMessagingOpen] = useState(false);
-  const [isSchedulingOpen, setIsSchedulingOpen] = useState(false);
   const [messages, setMessages] = useState<MatchMessage[]>([]);
   const [messageText, setMessageText] = useState("");
-  const [selectedTime, setSelectedTime] = useState(availabilityWindows[0] ?? "");
 
   useEffect(() => {
     setMessages(getMatchThreadMessages(thread));
@@ -3115,16 +3054,6 @@ function CandidateMutualMatchActions({
     onSendMessage(messageText);
     setMessageText("");
     setMessages(getMatchThreadMessages(thread));
-  }
-
-  function scheduleConversation() {
-    if (!selectedTime.trim()) {
-      return;
-    }
-
-    onSchedule(selectedTime);
-    setMessages(getMatchThreadMessages(thread));
-    setIsSchedulingOpen(false);
   }
 
   return (
@@ -3183,41 +3112,6 @@ function CandidateMutualMatchActions({
           >
             Send message
           </button>
-        </div>
-      ) : null}
-      <button
-        type="button"
-        onClick={() => setIsSchedulingOpen((current) => !current)}
-        className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
-      >
-        Schedule Conversation
-      </button>
-      {isSchedulingOpen ? (
-        <div className="space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2">
-          {availabilityWindows.length > 0 ? (
-            <>
-              <select
-                value={selectedTime}
-                onChange={(event) => setSelectedTime(event.target.value)}
-                className="w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
-              >
-                {availabilityWindows.map((window) => (
-                  <option key={window} value={window}>
-                    {window}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={scheduleConversation}
-                className="w-full rounded-md bg-red-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-red-950"
-              >
-                Confirm time
-              </button>
-            </>
-          ) : (
-            <p className="text-xs leading-5 text-zinc-600">No employer availability has been added yet.</p>
-          )}
         </div>
       ) : null}
       <button
@@ -3371,7 +3265,7 @@ function FreehandSearchAreaTool({
 }
 
 function findEmployerAccount(email: string) {
-  return { email, availabilityWindows: [] };
+  return { email };
 }
 
 function getEmployerCreatedJobs(jobs: JobListing[]) {
