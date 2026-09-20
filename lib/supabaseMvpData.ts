@@ -424,6 +424,12 @@ export async function addNotificationByUserId(notification: {
     });
     return { error: error.message };
   }
+  // Mirrors addContactNotification()'s post-write dispatch (lib/contactPreferences.ts)
+  // so any NotificationBell mounted in this tab refreshes immediately instead of
+  // only on next mount/page load.
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("workplace-match-notifications-updated"));
+  }
   return { error: null };
 }
 

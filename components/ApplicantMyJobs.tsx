@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { addMatchThreadMessage, refreshMatchThreadMessages, type MatchMessage, type MatchThreadContext } from "../lib/matchMessages";
 import {
+  addNotificationByUserId,
   getAllJobs,
   getApplicantInterests,
   getCurrentMvpUser,
@@ -19,6 +21,10 @@ export function ApplicantMyJobs() {
   const [interestedEntries, setInterestedEntries] = useState<InterestedEntry[]>([]);
   const [employerInterestedEntries, setEmployerInterestedEntries] = useState<InterestedEntry[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const [candidateId, setCandidateId] = useState("");
+  const [openMessageJobId, setOpenMessageJobId] = useState("");
+  const [threadMessages, setThreadMessages] = useState<Record<string, MatchMessage[]>>({});
+  const [messageDrafts, setMessageDrafts] = useState<Record<string, string>>({});
 
   useEffect(() => {
     async function load() {
@@ -58,6 +64,7 @@ export function ApplicantMyJobs() {
         .map((i) => ({ job: jobs.find((j) => j.id === i.jobId) }))
         .filter((r): r is InterestedEntry => Boolean(r.job));
 
+      setCandidateId(user.id);
       setMatchedEntries(nextMatchedEntries);
       setInterestedEntries(nextInterestedEntries);
       setEmployerInterestedEntries(nextEmployerInterestedEntries);
@@ -65,6 +72,58 @@ export function ApplicantMyJobs() {
     }
     load();
   }, []);
+
+  function getThread(entry: MatchedEntry): MatchThreadContext {
+    return {
+      applicantId: candidateId,
+      employerId: entry.match.employerId,
+      jobId: entry.job.id
+    };
+  }
+
+  async function toggleMessaging(entry: MatchedEntry) {
+    if (openMessageJobId === entry.job.id) {
+      setOpenMessageJobId("");
+      return;
+    }
+
+    setOpenMessageJobId(entry.job.id);
+    const messages = await refreshMatchThreadMessages(getThread(entry));
+    setThreadMessages((current) => ({ ...current, [entry.job.id]: messages }));
+  }
+
+  function sendMessage(entry: MatchedEntry) {
+    const text = (messageDrafts[entry.job.id] ?? "").trim();
+    if (!text) {
+      return;
+    }
+
+    const message = addMatchThreadMessage({
+      ...getThread(entry),
+      senderRole: "applicant",
+      text
+    });
+
+    if (!message) {
+      return;
+    }
+
+    setThreadMessages((current) => ({
+      ...current,
+      [entry.job.id]: [...(current[entry.job.id] ?? []), message]
+    }));
+    setMessageDrafts((current) => ({ ...current, [entry.job.id]: "" }));
+
+    // In-app only: resolved by the employer's real user id, never by email.
+    addNotificationByUserId({
+      recipientUserId: entry.match.employerId,
+      type: "new_message",
+      title: "New Message",
+      message: `New message about ${entry.job.title}.`,
+      jobId: entry.job.id,
+      jobTitle: entry.job.title
+    });
+  }
 
   if (!isReady) {
     return (
@@ -97,7 +156,18 @@ export function ApplicantMyJobs() {
               {matchedEntries.length > 0 ? (
                 <div className="mt-4 space-y-4">
                   {matchedEntries.map((entry) => (
-                    <JobCard key={entry.job.id} job={entry.job} badge={<MatchBadge percent={entry.match.matchPercent} />} isMutual />
+                    <JobCard
+                      key={entry.job.id}
+                      job={entry.job}
+                      badge={<MatchBadge percent={entry.match.matchPercent} />}
+                      isMutual
+                      isMessagingOpen={openMessageJobId === entry.job.id}
+                      messages={threadMessages[entry.job.id] ?? []}
+                      messageDraft={messageDrafts[entry.job.id] ?? ""}
+                      onToggleMessaging={() => toggleMessaging(entry)}
+                      onDraftChange={(value) => setMessageDrafts((current) => ({ ...current, [entry.job.id]: value }))}
+                      onSendMessage={() => sendMessage(entry)}
+                    />
                   ))}
                 </div>
               ) : (
@@ -170,11 +240,23 @@ function EmployerInterestedBadge() {
 function JobCard({
   job,
   badge,
-  isMutual = false
+  isMutual = false,
+  isMessagingOpen = false,
+  messages = [],
+  messageDraft = "",
+  onToggleMessaging,
+  onDraftChange,
+  onSendMessage
 }: {
   job: MvpJobListing;
   badge: React.ReactNode;
   isMutual?: boolean;
+  isMessagingOpen?: boolean;
+  messages?: MatchMessage[];
+  messageDraft?: string;
+  onToggleMessaging?: () => void;
+  onDraftChange?: (value: string) => void;
+  onSendMessage?: () => void;
 }) {
   return (
     <article
@@ -202,8 +284,42 @@ function JobCard({
           <button type="button" className="rounded-md bg-green-700 px-3 py-2 text-sm font-semibold text-white">
             Reach Out
           </button>
-          <button type="button" className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">
+          <button
+            type="button"
+            onClick={onToggleMessaging}
+            className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700"
+          >
             Message
+          </button>
+        </div>
+      ) : null}
+      {isMutual && isMessagingOpen ? (
+        <div className="mt-3 space-y-2 rounded-md border border-gray-200 bg-gray-50 p-3">
+          <div className="max-h-40 space-y-1 overflow-y-auto text-sm text-zinc-700">
+            {messages.length > 0 ? (
+              messages.map((message) => (
+                <p key={message.id} className="rounded bg-white px-2 py-1">
+                  <span className="font-semibold">{message.senderRole === "applicant" ? "You" : "Them"}:</span>{" "}
+                  {message.text}
+                </p>
+              ))
+            ) : (
+              <p>No messages yet.</p>
+            )}
+          </div>
+          <textarea
+            value={messageDraft}
+            onChange={(event) => onDraftChange?.(event.target.value)}
+            rows={2}
+            className="field"
+            placeholder="Write a message..."
+          />
+          <button
+            type="button"
+            onClick={onSendMessage}
+            className="w-full rounded-md bg-red-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
+          >
+            Send message
           </button>
         </div>
       ) : null}
