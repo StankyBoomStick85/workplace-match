@@ -18,6 +18,7 @@ import {
   type MatchThreadContext
 } from "../lib/matchMessages";
 import { useMatchThreadRealtime } from "../lib/useMatchThreadRealtime";
+import { useAutoScrollToBottom } from "../lib/useAutoScrollToBottom";
 import { logAdminEvent } from "../lib/adminEvents";
 import { logError } from "../lib/logError";
 import { scanEmployerFacingText, formatViolations, scanCapabilityEntries } from "../lib/employerTextGuard";
@@ -1346,6 +1347,8 @@ function EmployerMutualMatchActions({
     setMessages((current) => (current.some((existing) => existing.id === message.id) ? current : [...current, message]));
   });
 
+  const scrollRef = useAutoScrollToBottom(`${isMessagingOpen}:${messages.length}`);
+
   // Defense in depth: catches an employer_summary row that was generated
   // before the identity-guard fix and still has PII baked into its stored
   // text (fixing the render path doesn't fix content already in the DB).
@@ -1504,7 +1507,7 @@ function EmployerMutualMatchActions({
       </div>
       {isMessagingOpen ? (
         <div className="space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2">
-          <div className="max-h-28 space-y-1 overflow-y-auto text-xs text-zinc-700">
+          <div ref={scrollRef} className="max-h-28 space-y-1 overflow-y-auto text-xs text-zinc-700">
             {messages.length > 0 ? (
               messages.map((message) => (
                 <p key={message.id} className="rounded bg-white px-2 py-1">

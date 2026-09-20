@@ -15,6 +15,7 @@ import {
   type MatchThreadContext
 } from "../lib/matchMessages";
 import { useMatchThreadRealtime } from "../lib/useMatchThreadRealtime";
+import { useAutoScrollToBottom } from "../lib/useAutoScrollToBottom";
 import { calculateSkillMatch, getApplicantMatchSignals } from "../lib/skillMatch";
 import {
   addNotificationByUserId,
@@ -312,6 +313,13 @@ export function MyMatches({ role }: { role: Role }) {
     });
   });
 
+  // Trigger changes on open, on send (threadMessages updates immediately via
+  // the optimistic append), and on realtime arrival (same state update) - all
+  // three funnel through this one dependency.
+  const scrollRef = useAutoScrollToBottom(
+    `${openMessageKey}:${(threadMessages[openMessageKey] ?? []).length}`
+  );
+
   async function toggleMessaging(record: MatchRecord) {
     if (openMessageKey === record.key) {
       setOpenMessageKey("");
@@ -460,7 +468,7 @@ export function MyMatches({ role }: { role: Role }) {
                         </div>
                         {openMessageKey === record.key ? (
                           <div className="space-y-2 rounded-md border border-gray-200 bg-gray-50 p-3">
-                            <div className="max-h-40 space-y-1 overflow-y-auto text-sm text-zinc-700">
+                            <div ref={scrollRef} className="max-h-40 space-y-1 overflow-y-auto text-sm text-zinc-700">
                               {(threadMessages[record.key] ?? []).length > 0 ? (
                                 (threadMessages[record.key] ?? []).map((message) => (
                                   <p key={message.id} className="rounded bg-white px-2 py-1">

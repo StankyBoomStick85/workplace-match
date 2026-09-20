@@ -87,19 +87,43 @@ export function NotificationBell({
       return;
     }
 
-    const channel = supabase
-      .channel(`notifications:${recipientUserId}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${recipientUserId}` },
-        () => {
-          refreshContactNotifications(recipientEmail).then(setNotifications);
-        }
-      )
-      .subscribe();
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    const channelName = `notifications:${recipientUserId}`;
+
+    // See the matching comment in lib/useMatchThreadRealtime.ts - RLS-protected
+    // postgres_changes needs the JWT on the socket before subscribing, or the
+    // channel reports SUBSCRIBED but never delivers anything.
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (cancelled) {
+        return;
+      }
+      if (!session) {
+        console.warn("[NotificationBell] No auth session - skipping realtime subscribe", { channelName });
+        return;
+      }
+      supabase.realtime.setAuth(session.access_token);
+
+      channel = supabase
+        .channel(channelName)
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${recipientUserId}` },
+          (payload) => {
+            console.log("[NotificationBell] payload received", { channelName, payload });
+            refreshContactNotifications(recipientEmail).then(setNotifications);
+          }
+        )
+        .subscribe((status, err) => {
+          console.log("[NotificationBell] status", { channelName, status, err: err?.message });
+        });
+    });
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
     };
   }, [recipientUserId, recipientEmail]);
 

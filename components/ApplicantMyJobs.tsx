@@ -10,6 +10,7 @@ import {
   type MatchThreadContext
 } from "../lib/matchMessages";
 import { useMatchThreadRealtime } from "../lib/useMatchThreadRealtime";
+import { useAutoScrollToBottom } from "../lib/useAutoScrollToBottom";
 import {
   addNotificationByUserId,
   getAllJobs,
@@ -298,6 +299,8 @@ function JobCard({
   onDraftChange?: (value: string) => void;
   onSendMessage?: () => void;
 }) {
+  const scrollRef = useAutoScrollToBottom(`${isMessagingOpen}:${messages.length}`);
+
   return (
     <article
       className={`rounded-lg border p-5 ${
@@ -335,7 +338,7 @@ function JobCard({
       ) : null}
       {isMutual && isMessagingOpen ? (
         <div className="mt-3 space-y-2 rounded-md border border-gray-200 bg-gray-50 p-3">
-          <div className="max-h-40 space-y-1 overflow-y-auto text-sm text-zinc-700">
+          <div ref={scrollRef} className="max-h-40 space-y-1 overflow-y-auto text-sm text-zinc-700">
             {messages.length > 0 ? (
               messages.map((message) => (
                 <p key={message.id} className="rounded bg-white px-2 py-1">

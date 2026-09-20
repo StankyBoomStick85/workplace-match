@@ -19,6 +19,7 @@ import {
   type MatchThreadContext
 } from "../lib/matchMessages";
 import { useMatchThreadRealtime } from "../lib/useMatchThreadRealtime";
+import { useAutoScrollToBottom } from "../lib/useAutoScrollToBottom";
 import { logAdminEvent } from "../lib/adminEvents";
 import { logError } from "../lib/logError";
 import { isGigJob } from "../lib/jobCategories";
@@ -3057,6 +3058,8 @@ function CandidateMutualMatchActions({
     setMessages((current) => (current.some((existing) => existing.id === message.id) ? current : [...current, message]));
   });
 
+  const scrollRef = useAutoScrollToBottom(`${isMessagingOpen}:${messages.length}`);
+
   function sendMessage() {
     if (!messageText.trim()) {
       return;
@@ -3097,7 +3100,7 @@ function CandidateMutualMatchActions({
       </button>
       {isMessagingOpen ? (
         <div className="space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2">
-          <div className="max-h-28 space-y-1 overflow-y-auto text-xs text-zinc-700">
+          <div ref={scrollRef} className="max-h-28 space-y-1 overflow-y-auto text-xs text-zinc-700">
             {messages.length > 0 ? (
               messages.map((message) => (
                 <p key={message.id} className="rounded bg-white px-2 py-1">
