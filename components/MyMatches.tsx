@@ -6,7 +6,15 @@ import { attemptPreferredContact } from "../lib/contactPreferences";
 import { logAdminEvent } from "../lib/adminEvents";
 import { logError } from "../lib/logError";
 import { scanEmployerFacingText, formatViolations, scanCapabilityEntries } from "../lib/employerTextGuard";
-import { addMatchThreadMessage, refreshMatchThreadMessages, type MatchMessage, type MatchThreadContext } from "../lib/matchMessages";
+import {
+  addMatchThreadMessage,
+  formatMessageTimestamp,
+  getMessageButtonLabel,
+  refreshMatchThreadMessages,
+  type MatchMessage,
+  type MatchThreadContext
+} from "../lib/matchMessages";
+import { useMatchThreadRealtime } from "../lib/useMatchThreadRealtime";
 import { calculateSkillMatch, getApplicantMatchSignals } from "../lib/skillMatch";
 import {
   addNotificationByUserId,
@@ -130,6 +138,26 @@ export function MyMatches({ role }: { role: Role }) {
 
       setUserId(user.id);
       setMatches(nextMatches);
+
+      // Eagerly load each thread's message history (not just on open) so the
+      // "Message"/"Messages" button label reflects real history from the
+      // start, instead of only flipping after the user opens a thread once.
+      const threadResults = await Promise.all(
+        nextMatches.map(async (record) => ({
+          key: record.key,
+          messages: await refreshMatchThreadMessages({
+            applicantId: record.match.candidateId,
+            employerId: record.match.employerId,
+            jobId: record.job.id
+          })
+        }))
+      );
+      setThreadMessages(
+        threadResults.reduce<Record<string, MatchMessage[]>>((acc, result) => {
+          acc[result.key] = result.messages;
+          return acc;
+        }, {})
+      );
 
       // Defense in depth: catches an employer_summary row that was generated
       // before the identity-guard fix and still has PII baked into its
@@ -268,6 +296,21 @@ export function MyMatches({ role }: { role: Role }) {
       jobId: record.job.id
     };
   }
+
+  const openRecord = matches.find((record) => record.key === openMessageKey) ?? null;
+
+  // Only the currently open thread subscribes - passing null while nothing's
+  // open (and on every thread switch) unsubscribes the previous one.
+  useMatchThreadRealtime(openRecord ? getThread(openRecord) : null, (message) => {
+    if (!openRecord) return;
+    setThreadMessages((current) => {
+      const existing = current[openRecord.key] ?? [];
+      if (existing.some((existingMessage) => existingMessage.id === message.id)) {
+        return current;
+      }
+      return { ...current, [openRecord.key]: [...existing, message] };
+    });
+  });
 
   async function toggleMessaging(record: MatchRecord) {
     if (openMessageKey === record.key) {
@@ -410,7 +453,9 @@ export function MyMatches({ role }: { role: Role }) {
                         </div>
                         <div className="flex flex-wrap gap-2">
                           <button type="button" onClick={() => reachOut(record)} className="rounded-md bg-green-700 px-3 py-2 text-sm font-semibold text-white">Reach Out</button>
-                          <button type="button" onClick={() => toggleMessaging(record)} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">Message</button>
+                          <button type="button" onClick={() => toggleMessaging(record)} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">
+                            {getMessageButtonLabel((threadMessages[record.key] ?? []).length > 0)}
+                          </button>
                           <button type="button" onClick={() => setPendingRemoveInterest(record)} className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">Remove Interest</button>
                         </div>
                         {openMessageKey === record.key ? (
@@ -423,6 +468,9 @@ export function MyMatches({ role }: { role: Role }) {
                                       {(message.senderRole === "employer") === (role === "employer") ? "You" : "Them"}:
                                     </span>{" "}
                                     {message.text}
+                                    <span className="ml-1.5 text-xs font-normal text-zinc-400">
+                                      {formatMessageTimestamp(message.createdAt)}
+                                    </span>
                                   </p>
                                 ))
                               ) : (

@@ -1,7 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { addMatchThreadMessage, refreshMatchThreadMessages, type MatchMessage, type MatchThreadContext } from "../lib/matchMessages";
+import {
+  addMatchThreadMessage,
+  formatMessageTimestamp,
+  getMessageButtonLabel,
+  refreshMatchThreadMessages,
+  type MatchMessage,
+  type MatchThreadContext
+} from "../lib/matchMessages";
+import { useMatchThreadRealtime } from "../lib/useMatchThreadRealtime";
 import {
   addNotificationByUserId,
   getAllJobs,
@@ -69,6 +77,25 @@ export function ApplicantMyJobs() {
       setInterestedEntries(nextInterestedEntries);
       setEmployerInterestedEntries(nextEmployerInterestedEntries);
       setIsReady(true);
+
+      // Eagerly load each matched thread's history so the "Message"/"Messages"
+      // label reflects real history immediately, not just after opening it once.
+      const threadResults = await Promise.all(
+        nextMatchedEntries.map(async (entry) => ({
+          jobId: entry.job.id,
+          messages: await refreshMatchThreadMessages({
+            applicantId: user.id,
+            employerId: entry.match.employerId,
+            jobId: entry.job.id
+          })
+        }))
+      );
+      setThreadMessages(
+        threadResults.reduce<Record<string, MatchMessage[]>>((acc, result) => {
+          acc[result.jobId] = result.messages;
+          return acc;
+        }, {})
+      );
     }
     load();
   }, []);
@@ -80,6 +107,19 @@ export function ApplicantMyJobs() {
       jobId: entry.job.id
     };
   }
+
+  const openEntry = matchedEntries.find((entry) => entry.job.id === openMessageJobId) ?? null;
+
+  useMatchThreadRealtime(openEntry ? getThread(openEntry) : null, (message) => {
+    if (!openEntry) return;
+    setThreadMessages((current) => {
+      const existing = current[openEntry.job.id] ?? [];
+      if (existing.some((existingMessage) => existingMessage.id === message.id)) {
+        return current;
+      }
+      return { ...current, [openEntry.job.id]: [...existing, message] };
+    });
+  });
 
   async function toggleMessaging(entry: MatchedEntry) {
     if (openMessageJobId === entry.job.id) {
@@ -289,7 +329,7 @@ function JobCard({
             onClick={onToggleMessaging}
             className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700"
           >
-            Message
+            {getMessageButtonLabel(messages.length > 0)}
           </button>
         </div>
       ) : null}
@@ -301,6 +341,7 @@ function JobCard({
                 <p key={message.id} className="rounded bg-white px-2 py-1">
                   <span className="font-semibold">{message.senderRole === "applicant" ? "You" : "Them"}:</span>{" "}
                   {message.text}
+                  <span className="ml-1.5 text-xs font-normal text-zinc-400">{formatMessageTimestamp(message.createdAt)}</span>
                 </p>
               ))
             ) : (

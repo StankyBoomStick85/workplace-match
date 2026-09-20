@@ -2,6 +2,8 @@ import type { LocalAccount } from "./localAccounts";
 import {
   addNotification,
   addNotificationByUserId,
+  deleteNotificationById,
+  markNotificationReadById,
   markNotificationsReadForEmail,
   readNotificationsForEmail
 } from "./supabaseMvpData";
@@ -212,6 +214,26 @@ export function markNotificationsRead(recipientEmail: string) {
 export async function refreshContactNotifications(recipientEmail: string) {
   notificationCache = await readNotificationsForEmail(recipientEmail);
   return getNotificationsForRecipient(recipientEmail);
+}
+
+// Marks one notification read (clicking it counts) without touching the rest
+// of the list, so an unread notification stays unread until it's actually
+// looked at - opening the bell no longer marks everything read on its own.
+export function markSingleNotificationRead(id: string) {
+  notificationCache = notificationCache.map((notification) =>
+    notification.id === id ? { ...notification, status: "read" as const } : notification
+  );
+  markNotificationReadById(id);
+  return notificationCache;
+}
+
+// Dismiss removes the notification entirely (see deleteNotificationById for
+// why this deletes rather than flags) - the caller re-filters to its own
+// recipientEmail the same way markNotificationsRead()'s callers already do.
+export function dismissNotification(id: string) {
+  notificationCache = notificationCache.filter((notification) => notification.id !== id);
+  deleteNotificationById(id);
+  return notificationCache;
 }
 
 function isContactMethod(value: unknown): value is ContactMethod {

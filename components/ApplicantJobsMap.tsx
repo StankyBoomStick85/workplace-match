@@ -11,10 +11,14 @@ import {
 } from "../lib/contactPreferences";
 import {
   addMatchThreadMessage,
+  formatMessageTimestamp,
   getMatchThreadMessages,
+  getMessageButtonLabel,
+  refreshMatchThreadMessages,
   type MatchMessage,
   type MatchThreadContext
 } from "../lib/matchMessages";
+import { useMatchThreadRealtime } from "../lib/useMatchThreadRealtime";
 import { logAdminEvent } from "../lib/adminEvents";
 import { logError } from "../lib/logError";
 import { isGigJob } from "../lib/jobCategories";
@@ -3043,8 +3047,15 @@ function CandidateMutualMatchActions({
   const [messageText, setMessageText] = useState("");
 
   useEffect(() => {
-    setMessages(getMatchThreadMessages(thread));
+    refreshMatchThreadMessages(thread).then(setMessages);
   }, [thread.applicantId, thread.employerId, thread.jobId]);
+
+  // Subscribes only while this panel is open; closing or switching threads
+  // (thread identity changes) tears the subscription down via the hook's own
+  // cleanup.
+  useMatchThreadRealtime(isMessagingOpen ? thread : null, (message) => {
+    setMessages((current) => (current.some((existing) => existing.id === message.id) ? current : [...current, message]));
+  });
 
   function sendMessage() {
     if (!messageText.trim()) {
@@ -3082,7 +3093,7 @@ function CandidateMutualMatchActions({
         onClick={() => setIsMessagingOpen((current) => !current)}
         className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
       >
-        Message
+        {getMessageButtonLabel(messages.length > 0)}
       </button>
       {isMessagingOpen ? (
         <div className="space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2">
@@ -3092,6 +3103,7 @@ function CandidateMutualMatchActions({
                 <p key={message.id} className="rounded bg-white px-2 py-1">
                   <span className="font-semibold">{message.senderRole === "applicant" ? "You" : "Employer"}:</span>{" "}
                   {message.text}
+                  <span className="ml-1.5 text-xs font-normal text-zinc-400">{formatMessageTimestamp(message.createdAt)}</span>
                 </p>
               ))
             ) : (

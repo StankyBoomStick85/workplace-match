@@ -442,6 +442,36 @@ export async function markNotificationsReadForEmail(email: string) {
   return readNotificationsForEmail(email);
 }
 
+export async function markNotificationReadById(id: string): Promise<{ error: string | null }> {
+  const { error } = await supabase.from("notifications").update({ read: true }).eq("id", id);
+  if (error) {
+    console.error("[markNotificationReadById] Failed to mark notification read", { id, error: error.message });
+    return { error: error.message };
+  }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("workplace-match-notifications-updated"));
+  }
+  return { error: null };
+}
+
+// Dismiss deletes the row rather than adding a "dismissed" flag: the table
+// only has a `read` boolean today, so a soft-dismiss would need a schema
+// migration for a single explicit user action (as opposed to `read`, which
+// the UI already sets automatically as a side effect of viewing). Deleting
+// needs no schema change and matches what "clear/dismiss" means to a user -
+// this notification is gone, not just acknowledged.
+export async function deleteNotificationById(id: string): Promise<{ error: string | null }> {
+  const { error } = await supabase.from("notifications").delete().eq("id", id);
+  if (error) {
+    console.error("[deleteNotificationById] Failed to delete notification", { id, error: error.message });
+    return { error: error.message };
+  }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("workplace-match-notifications-updated"));
+  }
+  return { error: null };
+}
+
 export async function getUserByEmail(email: string) {
   const normalizedEmail = email.trim().toLowerCase();
   if (!normalizedEmail) {

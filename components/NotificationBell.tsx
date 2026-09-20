@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  getNotificationsForRecipient,
+  dismissNotification,
   markNotificationsRead,
+  markSingleNotificationRead,
   refreshContactNotifications,
   type ContactNotification
 } from "../lib/contactPreferences";
@@ -26,7 +27,13 @@ function saveStoredAlerts(alerts: string[]) {
   } catch {}
 }
 
-export function NotificationBell({ recipientEmail }: { recipientEmail: string }) {
+export function NotificationBell({
+  recipientEmail,
+  recipientUserId
+}: {
+  recipientEmail: string;
+  recipientUserId?: string;
+}) {
   const [notifications, setNotifications] = useState<ContactNotification[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [extractAlerts, setExtractAlerts] = useState<string[]>(() => {
@@ -34,9 +41,14 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
     return loadStoredAlerts();
   });
   const containerRef = useRef<HTMLDivElement>(null);
-  const unreadCount =
-    notifications.filter((notification) => notification.status === "unread").length +
-    extractAlerts.length;
+  const unreadNotificationCount = notifications.filter((notification) => notification.status === "unread").length;
+  const unreadCount = unreadNotificationCount + extractAlerts.length;
+
+  function scopeToRecipient(list: ContactNotification[]) {
+    return list.filter(
+      (notification) => notification.recipientEmail.trim().toLowerCase() === recipientEmail.trim().toLowerCase()
+    );
+  }
 
   useEffect(() => {
     refreshNotifications();
@@ -66,6 +78,31 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
     }
   }, [recipientEmail]);
 
+  // Cross-session live updates: the in-tab "workplace-match-notifications-updated"
+  // event above only reaches this bell when THIS tab triggered the change (e.g.
+  // this user sent a message). A notification written by the OTHER party in a
+  // different browser/session needs Realtime to arrive without a page reload.
+  useEffect(() => {
+    if (!recipientUserId) {
+      return;
+    }
+
+    const channel = supabase
+      .channel(`notifications:${recipientUserId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${recipientUserId}` },
+        () => {
+          refreshContactNotifications(recipientEmail).then(setNotifications);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [recipientUserId, recipientEmail]);
+
   useEffect(() => {
     if (!isOpen) return;
     function handleClickOutside(e: MouseEvent) {
@@ -78,14 +115,16 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
   }, [isOpen]);
 
   function toggleNotifications() {
-    const nextIsOpen = !isOpen;
-    setIsOpen(nextIsOpen);
+    setIsOpen((current) => !current);
+  }
 
-    if (nextIsOpen && unreadCount > 0) {
-      setNotifications(markNotificationsRead(recipientEmail).filter(
-        (notification) => notification.recipientEmail.trim().toLowerCase() === recipientEmail.trim().toLowerCase()
-      ));
-    }
+  function markAllRead() {
+    setNotifications(scopeToRecipient(markNotificationsRead(recipientEmail)));
+  }
+
+  function handleDismiss(id: string, event: React.MouseEvent) {
+    event.stopPropagation();
+    setNotifications(scopeToRecipient(dismissNotification(id)));
   }
 
   function dismissExtractAlert(index: number) {
@@ -98,6 +137,9 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
 
   async function openNotification(notification: ContactNotification) {
     setIsOpen(false);
+    if (notification.status === "unread") {
+      setNotifications(scopeToRecipient(markSingleNotificationRead(notification.id)));
+    }
     const { data: { user } } = await supabase.auth.getUser();
     const response = user ? await fetch("/api/user/me") : null;
     const userRecord = response?.ok ? await response.json() : null;
@@ -187,7 +229,14 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
 
       {isOpen ? (
         <div className="absolute right-0 top-full z-[1200] mt-2 w-80 rounded-lg border border-gray-200 bg-white p-3 text-left shadow-soft">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-800">Notifications</p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-800">Notifications</p>
+            {unreadNotificationCount > 0 ? (
+              <button type="button" onClick={markAllRead} className="text-xs font-semibold text-red-700 transition hover:underline">
+                Mark all read
+              </button>
+            ) : null}
+          </div>
           <div className="mt-3 max-h-80 overflow-y-auto">
             {extractAlerts.length === 0 && notifications.length === 0 ? (
               <p className="rounded-md border border-dashed border-gray-300 bg-gray-50 p-3 text-sm text-zinc-600">
@@ -216,20 +265,40 @@ export function NotificationBell({ recipientEmail }: { recipientEmail: string })
                     </button>
                   </div>
                 ))}
-                {notifications.map((notification) => (
-                  <button
-                    key={notification.id}
-                    type="button"
-                    onClick={() => openNotification(notification)}
-                    className="w-full rounded-md border border-gray-200 bg-gray-50 p-3 text-left transition hover:bg-white"
-                  >
-                    <span className="block text-sm font-bold text-zinc-950">
-                      {notification.title || (notification.type === "new_match" ? "New Match" : "Notification")}
-                    </span>
-                    <span className="mt-1 block text-sm leading-5 text-zinc-600">{notification.message}</span>
-                    <span className="mt-1 block text-xs font-semibold text-zinc-500">{notification.jobTitle}</span>
-                  </button>
-                ))}
+                {notifications.map((notification) => {
+                  const isUnread = notification.status === "unread";
+                  return (
+                    <div
+                      key={notification.id}
+                      className={`flex items-start justify-between gap-2 rounded-md border p-3 transition ${
+                        isUnread ? "border-red-200 bg-red-50 hover:bg-red-100/60" : "border-gray-200 bg-gray-50 hover:bg-white"
+                      }`}
+                    >
+                      <button type="button" onClick={() => openNotification(notification)} className="min-w-0 flex-1 text-left">
+                        <span className="flex items-center gap-1.5">
+                          {isUnread ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-700" aria-hidden="true" /> : null}
+                          <span className={`block text-sm ${isUnread ? "font-bold text-zinc-950" : "font-semibold text-zinc-500"}`}>
+                            {notification.title || (notification.type === "new_match" ? "New Match" : "Notification")}
+                          </span>
+                        </span>
+                        <span className={`mt-1 block text-sm leading-5 ${isUnread ? "text-zinc-700" : "text-zinc-500"}`}>
+                          {notification.message}
+                        </span>
+                        <span className="mt-1 block text-xs font-semibold text-zinc-400">{notification.jobTitle}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => handleDismiss(notification.id, event)}
+                        aria-label="Dismiss notification"
+                        className="shrink-0 text-zinc-400 transition hover:text-red-700"
+                      >
+                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

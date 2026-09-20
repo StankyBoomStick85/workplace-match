@@ -21,6 +21,7 @@ export function Header() {
   const pathname = usePathname();
   const [activeRole, setActiveRole] = useState<Role | null>(null);
   const [activeEmail, setActiveEmail] = useState("");
+  const [activeUserId, setActiveUserId] = useState("");
   const [navItems, setNavItems] = useState<NavItem[]>(getLoggedOutNav());
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -48,6 +49,7 @@ export function Header() {
         if (!isMounted) return;
         setActiveRole(null);
         setActiveEmail("");
+        setActiveUserId("");
         setNavItems(getLoggedOutNav());
         return;
       }
@@ -60,6 +62,7 @@ export function Header() {
       if (!isMounted) return;
       setActiveRole(role);
       setActiveEmail(role ? user.email ?? "" : "");
+      setActiveUserId(role ? user.id : "");
       setNavItems(role ? getRoleAwareNav(role, label, avatarUrl, user.id) : getLoggedOutNav());
     }
   }, [pathname]);
@@ -99,7 +102,7 @@ export function Header() {
           ))}
           {activeRole ? (
             <>
-              {activeEmail ? <NotificationBell recipientEmail={activeEmail} /> : null}
+              {activeEmail ? <NotificationBell recipientEmail={activeEmail} recipientUserId={activeUserId} /> : null}
               <SettingsModal role={activeRole} />
             </>
           ) : null}
@@ -132,7 +135,7 @@ export function Header() {
             ))}
             {activeRole ? (
               <div className="flex items-center gap-2 py-3">
-                {activeEmail ? <NotificationBell recipientEmail={activeEmail} /> : null}
+                {activeEmail ? <NotificationBell recipientEmail={activeEmail} recipientUserId={activeUserId} /> : null}
                 <SettingsModal role={activeRole} />
               </div>
             ) : null}
