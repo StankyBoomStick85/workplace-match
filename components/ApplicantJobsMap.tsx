@@ -2863,10 +2863,17 @@ export function ApplicantJobsMap() {
                 {locationFilterKey ? (
                   <div className="flex items-center justify-between gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2">
                     <p className="text-xs font-semibold text-red-900">Showing jobs at this map location only</p>
+                    {/* bg-white/95, not bg-white - same black-on-black
+                        collision as the employer skill chips: this button is
+                        a descendant of the bg-red-50 banner above, so
+                        html.dark .bg-red-50 * forces its text dark while
+                        html.dark .bg-white separately forces plain bg-white
+                        near-black. The opacity suffix is a distinct class the
+                        .bg-white selector doesn't match. */}
                     <button
                       type="button"
                       onClick={() => setLocationFilterKey("")}
-                      className="shrink-0 rounded-md border border-red-300 bg-white px-2 py-1 text-xs font-bold text-red-800 transition hover:bg-red-50"
+                      className="shrink-0 rounded-md border border-red-300 bg-white/95 px-2 py-1 text-xs font-bold text-red-800 transition hover:bg-red-50"
                     >
                       Show all jobs
                     </button>

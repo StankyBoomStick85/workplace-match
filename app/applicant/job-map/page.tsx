@@ -8,7 +8,7 @@ const ApplicantJobsMap = dynamic(
     ssr: false,
     loading: () => (
       <div className="fixed inset-0 z-40 flex h-screen w-screen items-center justify-center bg-[#eef3ef]">
-        <p className="text-sm text-zinc-600">Loading jobs map...</p>
+        <p className="text-sm text-zinc-600">Loading Find Jobs...</p>
       </div>
     )
   }

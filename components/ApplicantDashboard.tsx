@@ -338,7 +338,7 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
             </div>
             <div className="flex flex-wrap gap-3">
               <Link href="/applicant/job-map" className="rounded-md bg-red-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-950">
-                Job Map
+                Find Jobs
               </Link>
               {isEditing ? (
                 <button key="save" type="submit" className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-gray-50">
@@ -357,8 +357,15 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
             <h2 className="text-xl font-bold text-zinc-950">Upload your resume to pre-fill your profile</h2>
             <p className="mt-1 text-sm leading-6 text-zinc-600">Drop one document and see jobs you qualify for instantly. The more you upload, the more accurate your matches become.</p>
 
+            {/* bg-white/95 below (opacity variant), not bg-white: this list sits
+                inside a bg-red-50 card, and html.dark .bg-red-50 * forces every
+                descendant's text color while html.dark .bg-white separately
+                forces plain bg-white to a near-black background - same
+                black-on-black collision fixed on the employer skill chips.
+                The opacity suffix compiles to a distinct class the .bg-white
+                selector doesn't match, so it stays light. */}
             {documentMeta.length > 0 ? (
-              <ul className="mt-4 divide-y divide-red-100 rounded-md border border-red-200 bg-white">
+              <ul className="mt-4 divide-y divide-red-100 rounded-md border border-red-200 bg-white/95">
                 {documentMeta.map((doc) => (
                   <li key={doc.id} className="flex items-center justify-between gap-4 px-4 py-3">
                     <div className="min-w-0">
@@ -567,7 +574,7 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
 
         {matchedJobs.length === 0 && !isEditing ? (
           <p className="mt-6 text-sm text-zinc-600">
-            Nothing here yet. Start exploring the Job Map and click interest on roles that fit.
+            Nothing here yet. Start exploring Find Jobs and click interest on roles that fit.
           </p>
         ) : null}
 

@@ -375,7 +375,7 @@ export function ApplicantMyJobs() {
         <h1 className="text-3xl font-bold text-zinc-950">My Jobs</h1>
         {!hasAnyEntries ? (
           <p className="mt-6 text-sm text-zinc-600">
-            Nothing here yet. Start exploring the Job Map and heart roles that fit.
+            Nothing here yet. Start exploring Find Jobs and heart roles that fit.
           </p>
         ) : (
           <div className="mt-6 space-y-8">
@@ -401,7 +401,7 @@ export function ApplicantMyJobs() {
                 </div>
               ) : (
                 <p className="mt-3 text-sm text-zinc-600">
-                  Nothing saved yet. Heart a job on the Job Map to save it here.
+                  Nothing saved yet. Heart a job on Find Jobs to save it here.
                 </p>
               )}
             </div>

@@ -159,7 +159,7 @@ function getRoleAwareNav(role: Role, label: string, avatarUrl = "", userId = "")
   return [
     { href: "/applicant/profile", label: label || "Profile", avatarUrl },
     { href: "/applicant/my-jobs", label: "My Jobs" },
-    { href: "/applicant/job-map", label: "Job Map" }
+    { href: "/applicant/job-map", label: "Find Jobs" }
   ];
 }
 

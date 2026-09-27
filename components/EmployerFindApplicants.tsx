@@ -1106,7 +1106,12 @@ function MapSurface({
               : createMatchIcon(group.selectedJobMatchPercent, getApplicantSummaryInterestState(group.applicants[0]))
           }
         >
-          <Popup maxWidth={420}>
+          {/* maxHeight makes Leaflet scroll .leaflet-popup-content internally
+              instead of growing it to full content height - a long capability
+              summary was making the popup thousands of pixels tall, and
+              Leaflet's autoPan (on by default) was panning the map hundreds
+              of miles to fit that box on screen. */}
+          <Popup maxWidth={420} maxHeight={360}>
             {group.applicants.length > 1 ? (
               <ApplicantLocationGroupPopup
                 group={group}
@@ -1319,16 +1324,29 @@ function ApplicantMatchPopup({
         </p>
       ) : (
       <div className="space-y-2">
-        {orderedJobMatches.map(({ job, match, interestState }) => (
+        {orderedJobMatches.map(({ job, match, interestState }) => {
+          // The focused job is the one the employer actually has selected -
+          // same job the list row's badge scores. Point this row at that same
+          // AI score (employer_match_scores via applicant.selectedJobMatchPercent)
+          // instead of the old calculateSkillMatch engine, which is what was
+          // showing 0% here even after the list row moved to AI scoring.
+          // Other jobs in this candidate's breakdown have no AI score
+          // available (scoring only ever covers the selected job) and still
+          // show the old engine's number - see the report on this pass for why.
+          const isFocusedJob = job.id === focusedJobId;
+          const displayPercent = isFocusedJob ? applicant.selectedJobMatchPercent : match.percentage;
+          return (
           <div key={job.id} className="rounded-md border border-gray-200 bg-white p-3">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold text-zinc-950">{job.title}</p>
                 <p className="mt-1 text-xs leading-5 text-zinc-600">{formatJobLocation(job)}</p>
               </div>
-              <span className="shrink-0 rounded-full bg-red-900 px-2.5 py-1 text-sm font-bold text-white">
-                {match.percentage}%
-              </span>
+              {displayPercent !== null ? (
+                <span className="shrink-0 rounded-full bg-red-900 px-2.5 py-1 text-sm font-bold text-white">
+                  {displayPercent}%
+                </span>
+              ) : null}
             </div>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
@@ -1366,7 +1384,8 @@ function ApplicantMatchPopup({
               />
             ) : null}
           </div>
-        ))}
+          );
+        })}
       </div>
       )}
     </div>
@@ -1535,7 +1554,14 @@ function EmployerMutualMatchActions({
         {profile.topSkills?.length ? (
           <div className="flex flex-wrap gap-1.5">
             {profile.topSkills.map((skill) => (
-              <span key={skill} className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-zinc-700">
+              // bg-red-100 (not bg-white) deliberately: in dark mode, globals.css
+              // forces `color` to near-black on every descendant of this
+              // bg-red-50 wrapper (html.dark .bg-red-50 *), while bg-white is
+              // separately forced to a near-black background (html.dark
+              // .bg-white) - combined, that produced black text on a black
+              // chip. bg-red-100 has no dark-mode background override, so the
+              // forced-dark text always sits on a light chip.
+              <span key={skill} className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800">
                 {skill}
               </span>
             ))}
