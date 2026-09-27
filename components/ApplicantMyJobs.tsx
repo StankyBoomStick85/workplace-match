@@ -1,5 +1,6 @@
 "use client";
 
+import { ChevronDown } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
@@ -14,6 +15,7 @@ import { useMatchThreadRealtime } from "../lib/useMatchThreadRealtime";
 import { useAutoScrollToBottom } from "../lib/useAutoScrollToBottom";
 import {
   addNotificationByUserId,
+  getAllEmployerProfiles,
   getAllJobs,
   getApplicantInterests,
   getCurrentMvpUser,
@@ -36,6 +38,13 @@ export function ApplicantMyJobs() {
   const [openMessageJobId, setOpenMessageJobId] = useState("");
   const [threadMessages, setThreadMessages] = useState<Record<string, MatchMessage[]>>({});
   const [messageDrafts, setMessageDrafts] = useState<Record<string, string>>({});
+  // Independent per-card toggles, not an accordion: unlike a single message
+  // thread (only one open at a time makes sense - see openMessageJobId),
+  // someone comparing job cards - pay, schedule, description - benefits from
+  // having more than one open side by side. Collapsed by default so several
+  // matches fit on screen at once.
+  const [expandedJobIds, setExpandedJobIds] = useState<Set<string>>(new Set());
+  const [companyNames, setCompanyNames] = useState<Record<string, string>>({});
 
   useEffect(() => {
     async function load() {
@@ -45,12 +54,20 @@ export function ApplicantMyJobs() {
         return;
       }
 
-      const [jobs, matches, interests, employerInterests] = await Promise.all([
+      const [jobs, matches, interests, employerInterests, employerProfiles] = await Promise.all([
         getAllJobs(),
         getMutualMatches(),
         getApplicantInterests(),
-        getEmployerInterests()
+        getEmployerInterests(),
+        getAllEmployerProfiles()
       ]);
+
+      setCompanyNames(
+        employerProfiles.reduce<Record<string, string>>((acc, profile) => {
+          acc[profile.userId] = profile.companyName || "Employer";
+          return acc;
+        }, {})
+      );
 
       const userMatches = matches.filter((m) => m.candidateId === user.id);
       const matchedJobIds = new Set(userMatches.map((m) => m.jobId));
@@ -124,8 +141,21 @@ export function ApplicantMyJobs() {
     });
   });
 
+  function toggleExpanded(jobId: string) {
+    setExpandedJobIds((current) => {
+      const next = new Set(current);
+      if (next.has(jobId)) {
+        next.delete(jobId);
+      } else {
+        next.add(jobId);
+      }
+      return next;
+    });
+  }
+
   async function openMessaging(entry: MatchedEntry) {
     setOpenMessageJobId(entry.job.id);
+    setExpandedJobIds((current) => new Set(current).add(entry.job.id));
     const messages = await refreshMatchThreadMessages(getThread(entry));
     setThreadMessages((current) => ({ ...current, [entry.job.id]: messages }));
   }
@@ -234,8 +264,11 @@ export function ApplicantMyJobs() {
                     <JobCard
                       key={entry.job.id}
                       job={entry.job}
+                      companyName={companyNames[entry.job.employerId] ?? "Employer"}
                       badge={<MatchBadge percent={entry.match.matchPercent} />}
                       isMutual
+                      isExpanded={expandedJobIds.has(entry.job.id)}
+                      onToggleExpanded={() => toggleExpanded(entry.job.id)}
                       isMessagingOpen={openMessageJobId === entry.job.id}
                       messages={threadMessages[entry.job.id] ?? []}
                       messageDraft={messageDrafts[entry.job.id] ?? ""}
@@ -260,7 +293,14 @@ export function ApplicantMyJobs() {
               {employerInterestedEntries.length > 0 ? (
                 <div className="mt-4 space-y-4">
                   {employerInterestedEntries.map((entry) => (
-                    <JobCard key={entry.job.id} job={entry.job} badge={<EmployerInterestedBadge />} />
+                    <JobCard
+                      key={entry.job.id}
+                      job={entry.job}
+                      companyName={companyNames[entry.job.employerId] ?? "Employer"}
+                      badge={<EmployerInterestedBadge />}
+                      isExpanded={expandedJobIds.has(entry.job.id)}
+                      onToggleExpanded={() => toggleExpanded(entry.job.id)}
+                    />
                   ))}
                 </div>
               ) : (
@@ -275,7 +315,14 @@ export function ApplicantMyJobs() {
               {interestedEntries.length > 0 ? (
                 <div className="mt-4 space-y-4">
                   {interestedEntries.map((entry) => (
-                    <JobCard key={entry.job.id} job={entry.job} badge={<InterestedBadge />} />
+                    <JobCard
+                      key={entry.job.id}
+                      job={entry.job}
+                      companyName={companyNames[entry.job.employerId] ?? "Employer"}
+                      badge={<InterestedBadge />}
+                      isExpanded={expandedJobIds.has(entry.job.id)}
+                      onToggleExpanded={() => toggleExpanded(entry.job.id)}
+                    />
                   ))}
                 </div>
               ) : (
@@ -314,8 +361,11 @@ function EmployerInterestedBadge() {
 
 function JobCard({
   job,
+  companyName,
   badge,
   isMutual = false,
+  isExpanded = false,
+  onToggleExpanded,
   isMessagingOpen = false,
   messages = [],
   messageDraft = "",
@@ -324,8 +374,11 @@ function JobCard({
   onSendMessage
 }: {
   job: MvpJobListing;
+  companyName: string;
   badge: React.ReactNode;
   isMutual?: boolean;
+  isExpanded?: boolean;
+  onToggleExpanded?: () => void;
   isMessagingOpen?: boolean;
   messages?: MatchMessage[];
   messageDraft?: string;
@@ -337,78 +390,91 @@ function JobCard({
 
   return (
     <article
-      className={`rounded-lg border p-5 ${
-        isMutual ? "border-red-200 bg-red-50/40" : "border-gray-200 bg-white"
-      }`}
+      className={`rounded-lg border ${isMutual ? "border-red-200 bg-red-50/40" : "border-gray-200 bg-white"}`}
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-lg font-bold text-zinc-950">{job.title}</h3>
-          <p className="mt-1 text-sm text-zinc-600">
+      <button
+        type="button"
+        onClick={onToggleExpanded}
+        className="flex w-full flex-wrap items-start justify-between gap-3 p-5 text-left"
+      >
+        <div className="min-w-0">
+          <h3 className="truncate text-lg font-bold text-zinc-950">{job.title}</h3>
+          <p className="mt-1 truncate text-sm text-zinc-600">{companyName}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {badge}
+          <ChevronDown
+            className={`h-5 w-5 text-zinc-400 transition-transform ${isExpanded ? "rotate-180" : ""}`}
+            aria-hidden="true"
+          />
+        </div>
+      </button>
+      {isExpanded ? (
+        <div className="px-5 pb-5">
+          <p className="text-sm text-zinc-600">
             {[job.locationCity, job.locationState, job.locationZip].filter(Boolean).join(", ")}
           </p>
-        </div>
-        {badge}
-      </div>
-      <div className="mt-4 grid gap-3 text-sm md:grid-cols-3">
-        <InfoCard label="Pay range" value={job.payRange || "Not listed"} />
-        <InfoCard label="Job type" value={job.jobType || "Not listed"} />
-        <InfoCard label="Schedule" value={job.schedule || "Not listed"} />
-      </div>
-      <p className="mt-4 text-sm leading-6 text-zinc-700">{job.description}</p>
-      {isMutual ? (
-        <div className="mt-4 flex flex-wrap gap-2">
-          <button type="button" className="rounded-md bg-green-700 px-3 py-2 text-sm font-semibold text-white">
-            Reach Out
-          </button>
-          <button
-            type="button"
-            onClick={onToggleMessaging}
-            className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700"
-          >
-            {getMessageButtonLabel(messages.length > 0)}
-          </button>
-        </div>
-      ) : null}
-      {isMutual && isMessagingOpen ? (
-        <div className="mt-3 space-y-2 rounded-md border border-gray-200 bg-gray-50 p-3">
-          <div ref={scrollRef} className="max-h-40 space-y-1.5 overflow-y-auto text-sm">
-            {messages.length > 0 ? (
-              messages.map((message) => {
-                const isOwn = message.senderRole === "applicant";
-                return (
-                  <div key={message.id} className={`flex ${isOwn ? "justify-end" : "justify-start"}`}>
-                    <div
-                      className={`max-w-[80%] rounded-lg px-2.5 py-1.5 ${
-                        isOwn ? "bg-red-900 text-white" : "border border-gray-200 bg-white text-zinc-900"
-                      }`}
-                    >
-                      <p className="whitespace-pre-wrap break-words">{message.text}</p>
-                      <p className={`mt-0.5 text-[10px] ${isOwn ? "text-red-200" : "text-zinc-400"}`}>
-                        {formatMessageTimestamp(message.createdAt)}
-                      </p>
-                    </div>
-                  </div>
-                );
-              })
-            ) : (
-              <p className="text-zinc-700">No messages yet.</p>
-            )}
+          <div className="mt-4 grid gap-3 text-sm md:grid-cols-3">
+            <InfoCard label="Pay range" value={job.payRange || "Not listed"} />
+            <InfoCard label="Job type" value={job.jobType || "Not listed"} />
+            <InfoCard label="Schedule" value={job.schedule || "Not listed"} />
           </div>
-          <textarea
-            value={messageDraft}
-            onChange={(event) => onDraftChange?.(event.target.value)}
-            rows={2}
-            className="field"
-            placeholder="Write a message..."
-          />
-          <button
-            type="button"
-            onClick={onSendMessage}
-            className="w-full rounded-md bg-red-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
-          >
-            Send message
-          </button>
+          <p className="mt-4 text-sm leading-6 text-zinc-700">{job.description}</p>
+          {isMutual ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button type="button" className="rounded-md bg-green-700 px-3 py-2 text-sm font-semibold text-white">
+                Reach Out
+              </button>
+              <button
+                type="button"
+                onClick={onToggleMessaging}
+                className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700"
+              >
+                {getMessageButtonLabel(messages.length > 0)}
+              </button>
+            </div>
+          ) : null}
+          {isMutual && isMessagingOpen ? (
+            <div className="mt-3 space-y-2 rounded-md border border-gray-200 bg-gray-50 p-3">
+              <div ref={scrollRef} className="max-h-40 space-y-1.5 overflow-y-auto text-sm">
+                {messages.length > 0 ? (
+                  messages.map((message) => {
+                    const isOwn = message.senderRole === "applicant";
+                    return (
+                      <div key={message.id} className={`flex ${isOwn ? "justify-end" : "justify-start"}`}>
+                        <div
+                          className={`max-w-[80%] rounded-lg px-2.5 py-1.5 ${
+                            isOwn ? "bg-red-900 text-white" : "border border-gray-200 bg-white text-zinc-900"
+                          }`}
+                        >
+                          <p className="whitespace-pre-wrap break-words">{message.text}</p>
+                          <p className={`mt-0.5 text-[10px] ${isOwn ? "text-red-200" : "text-zinc-400"}`}>
+                            {formatMessageTimestamp(message.createdAt)}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <p className="text-zinc-700">No messages yet.</p>
+                )}
+              </div>
+              <textarea
+                value={messageDraft}
+                onChange={(event) => onDraftChange?.(event.target.value)}
+                rows={2}
+                className="field"
+                placeholder="Write a message..."
+              />
+              <button
+                type="button"
+                onClick={onSendMessage}
+                className="w-full rounded-md bg-red-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-950"
+              >
+                Send message
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </article>
