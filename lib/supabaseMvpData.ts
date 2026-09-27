@@ -83,7 +83,9 @@ export type MvpMatch = {
   employerId: string;
   jobId: string;
   candidateId: string;
-  matchPercent: number;
+  // null when the row genuinely has no score (both score and capability_match
+  // are nullable with no default - see mapMatch()) - never coerced to 0.
+  matchPercent: number | null;
   createdAt: string;
   status: "mutual_match";
   notificationStatus: {
@@ -598,11 +600,17 @@ function mapJob(data: any): MvpJobListing {
 }
 
 function mapMatch(data: any): MvpMatch {
+  // Both columns are nullable with no default (lib/schema.sql) - a row that
+  // predates consistent dual-writes, or was written by some other path, can
+  // genuinely have neither set. That must read as "unscored" (null), not as
+  // a computed 0 - `?? 0` here would be indistinguishable from a real zero
+  // to every consumer downstream.
+  const rawScore = data.score ?? data.capability_match ?? null;
   return {
     candidateId: data.candidate_id,
     employerId: data.employer_id,
     jobId: data.job_id,
-    matchPercent: Math.round(Number(data.score ?? data.capability_match ?? 0)),
+    matchPercent: rawScore === null ? null : Math.round(Number(rawScore)),
     createdAt: data.created_at ?? "",
     status: "mutual_match",
     notificationStatus: {

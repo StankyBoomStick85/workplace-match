@@ -144,7 +144,10 @@ export async function POST(request: Request) {
       job_id: job.id,
       source: "wpm",
       title: job.title ?? "",
-      description: ((job.summary as string) ?? "").slice(0, 200),
+      // Full text, not truncated - matches job-gap-analysis/route.ts, which
+      // already sends the untruncated summary/description. A required skill
+      // mentioned after character 200 was previously invisible to this scorer.
+      description: (job.summary as string) ?? "",
       required_capabilities: (job.required_capabilities as string[]) ?? [],
       pay_min: job.pay_min ?? null,
       pay_max: job.pay_max ?? null,
@@ -159,7 +162,8 @@ export async function POST(request: Request) {
       job_id: job.id,
       source: "adzuna",
       title: job.title ?? "",
-      description: ((job.description as string) ?? "").slice(0, 200),
+      // Full text, not truncated - see the matching comment on the WPM branch above.
+      description: (job.description as string) ?? "",
       required_capabilities: [],
       pay_min: job.salary_min ?? null,
       pay_max: job.salary_max ?? null,

@@ -119,7 +119,12 @@ type ApplicantMatchSummary = {
   position: Coordinates;
   locationLabel: string;
   jobMatches: ApplicantJobMatch[];
-  bestMatchPercent: number | null;
+  // The score for the job currently selected in the job-listing dropdown -
+  // deliberately NOT "best score across all of this employer's jobs" (that
+  // was the bug: a candidate's best-fitting posting, not the one the
+  // employer is actually looking at, showed on every badge). null when no
+  // job is selected, or when the selected job isn't in jobMatches.
+  selectedJobMatchPercent: number | null;
   hasMatchData: boolean;
 };
 
@@ -128,7 +133,7 @@ type ApplicantLocationGroup = {
   position: Coordinates;
   locationLabel: string;
   applicants: ApplicantMatchSummary[];
-  bestMatchPercent: number | null;
+  selectedJobMatchPercent: number | null;
 };
 
 type FindApplicantsViewMode = "list" | "map";
@@ -326,6 +331,7 @@ export function EmployerFindApplicants() {
         }))
         .sort((first, second) => second.match.percentage - first.match.percentage);
       const hasMatchData = jobMatches.length > 0;
+      const selectedJobMatch = selectedJobId ? jobMatches.find((jobMatch) => jobMatch.job.id === selectedJobId) : undefined;
 
       summaries.push({
         id: applicantRecordId,
@@ -333,13 +339,13 @@ export function EmployerFindApplicants() {
         position,
         locationLabel: formatApplicantLocation(profile),
         jobMatches,
-        bestMatchPercent: hasMatchData ? jobMatches[0].match.percentage : null,
+        selectedJobMatchPercent: selectedJobMatch ? selectedJobMatch.match.percentage : null,
         hasMatchData
       });
 
       return summaries;
     }, []);
-  }, [account, applicantProfiles, jobs, interests, applicantInterests, mutualMatches]);
+  }, [account, applicantProfiles, jobs, interests, applicantInterests, mutualMatches, selectedJobId]);
 
   const applicantGroups = useMemo(
     () => groupApplicantsByLocation(applicantSummaries),
@@ -869,7 +875,7 @@ function ApplicantListView({
   const sortedApplicants = useMemo(
     () =>
       [...applicantSummaries].sort(
-        (first, second) => (second.bestMatchPercent ?? -1) - (first.bestMatchPercent ?? -1)
+        (first, second) => (second.selectedJobMatchPercent ?? -1) - (first.selectedJobMatchPercent ?? -1)
       ),
     [applicantSummaries]
   );
@@ -910,9 +916,9 @@ function ApplicantListView({
                     MATCH
                   </span>
                 ) : null}
-                {applicant.bestMatchPercent !== null ? (
+                {applicant.selectedJobMatchPercent !== null ? (
                   <span className="rounded-full bg-red-900 px-2.5 py-1 text-sm font-bold text-white">
-                    {applicant.bestMatchPercent}%
+                    {applicant.selectedJobMatchPercent}%
                   </span>
                 ) : null}
               </span>
@@ -972,8 +978,8 @@ function MapSurface({
       return {
         ...group,
         applicants: visibleApplicants,
-        bestMatchPercent: visibleApplicants.reduce<number | null>(
-          (best, applicant) => combineBestMatchPercent(best, applicant.bestMatchPercent),
+        selectedJobMatchPercent: visibleApplicants.reduce<number | null>(
+          (best, applicant) => combineBestMatchPercent(best, applicant.selectedJobMatchPercent),
           null
         )
       };
@@ -1042,7 +1048,7 @@ function MapSurface({
           icon={
             group.applicants.length > 1
               ? createApplicantCountIcon(group.applicants.length, getApplicantGroupInterestState(group))
-              : createMatchIcon(group.bestMatchPercent, getApplicantSummaryInterestState(group.applicants[0]))
+              : createMatchIcon(group.selectedJobMatchPercent, getApplicantSummaryInterestState(group.applicants[0]))
           }
         >
           <Popup maxWidth={420}>
@@ -1201,9 +1207,9 @@ function ApplicantLocationGroupPopup({
                     MATCH
                   </span>
                 ) : null}
-                {applicant.bestMatchPercent !== null ? (
+                {applicant.selectedJobMatchPercent !== null ? (
                   <span className="rounded-full bg-red-900 px-2.5 py-1 text-sm font-bold text-white">
-                    {applicant.bestMatchPercent}%
+                    {applicant.selectedJobMatchPercent}%
                   </span>
                 ) : null}
               </span>
@@ -2139,7 +2145,7 @@ function groupApplicantsByLocation(applicants: ApplicantMatchSummary[]) {
 
     if (existingGroup) {
       existingGroup.applicants.push(applicant);
-      existingGroup.bestMatchPercent = combineBestMatchPercent(existingGroup.bestMatchPercent, applicant.bestMatchPercent);
+      existingGroup.selectedJobMatchPercent = combineBestMatchPercent(existingGroup.selectedJobMatchPercent, applicant.selectedJobMatchPercent);
       return;
     }
 
@@ -2148,14 +2154,14 @@ function groupApplicantsByLocation(applicants: ApplicantMatchSummary[]) {
       position: applicant.position,
       locationLabel: applicant.locationLabel,
       applicants: [applicant],
-      bestMatchPercent: applicant.bestMatchPercent
+      selectedJobMatchPercent: applicant.selectedJobMatchPercent
     });
   });
 
   return Array.from(groups.values()).map((group) => ({
     ...group,
     applicants: group.applicants.sort(
-      (first, second) => (second.bestMatchPercent ?? -1) - (first.bestMatchPercent ?? -1)
+      (first, second) => (second.selectedJobMatchPercent ?? -1) - (first.selectedJobMatchPercent ?? -1)
     )
   }));
 }

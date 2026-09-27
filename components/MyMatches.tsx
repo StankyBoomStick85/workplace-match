@@ -416,7 +416,11 @@ export function MyMatches({ role }: { role: Role }) {
                       className="flex w-full items-center justify-between gap-3 bg-white p-4 text-left transition hover:bg-gray-50"
                     >
                       <span className="font-bold text-zinc-950">{record.job.title}</span>
-                      <span className="rounded-full bg-red-900 px-3 py-1 text-xs font-bold text-white">{record.match.matchPercent}%</span>
+                      {record.match.matchPercent !== null ? (
+                        <span className="rounded-full bg-red-900 px-3 py-1 text-xs font-bold text-white">{record.match.matchPercent}%</span>
+                      ) : (
+                        <span className="text-xs font-semibold text-zinc-400">Not yet scored</span>
+                      )}
                     </button>
                     {isExpanded ? (
                       <div className="space-y-4 p-4">

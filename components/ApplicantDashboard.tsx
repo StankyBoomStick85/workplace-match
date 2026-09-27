@@ -581,7 +581,11 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
                     <h3 className="text-lg font-bold text-zinc-950">{job.title}</h3>
                     <p className="mt-1 text-sm text-zinc-600">{[job.locationCity, job.locationState, job.locationZip].filter(Boolean).join(", ")}</p>
                   </div>
-                  <span className="rounded-full bg-red-900 px-3 py-1 text-xs font-bold text-white">{match.matchPercent}%</span>
+                  {match.matchPercent !== null ? (
+                    <span className="rounded-full bg-red-900 px-3 py-1 text-xs font-bold text-white">{match.matchPercent}%</span>
+                  ) : (
+                    <span className="text-xs font-semibold text-zinc-400">Not yet scored</span>
+                  )}
                 </div>
                 <div className="mt-4 grid gap-3 text-sm md:grid-cols-3">
                   <DashboardCard label="Pay range" value={job.payRange || "Not listed"} />

@@ -58,7 +58,7 @@ type InterestRecord = {
   employerId: string;
   jobId: string;
   candidateId: string;
-  matchPercent?: number;
+  matchPercent?: number | null;
 };
 
 type NotificationRecord = {
