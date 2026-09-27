@@ -31,6 +31,7 @@ import {
   type MvpSavedExternalJob
 } from "../lib/supabaseMvpData";
 import { RemoveInterestConfirmationModal } from "./RemoveInterestConfirmationModal";
+import { CollapsibleText } from "./CollapsibleText";
 
 type MatchedEntry = { job: MvpJobListing; match: MvpMatch };
 type WpmInterestEntry = { job: MvpJobListing; interest: MvpInterest };
@@ -533,7 +534,7 @@ function SavedJobCard({
             <InfoCard label="Job type" value={item.jobType} />
             <InfoCard label="Schedule" value={item.schedule} />
           </div>
-          {item.description ? <p className="mt-4 text-sm leading-6 text-zinc-700">{item.description}</p> : null}
+          {item.description ? <div className="mt-4"><CollapsibleText text={item.description} /></div> : null}
 
           {item.isExternal ? (
             <div className="mt-4">
@@ -649,7 +650,7 @@ function EmployerInterestCard({
             <InfoCard label="Job type" value={job.jobType || "Not listed"} />
             <InfoCard label="Schedule" value={job.schedule || "Not listed"} />
           </div>
-          <p className="mt-4 text-sm leading-6 text-zinc-700">{job.description}</p>
+          {job.description ? <div className="mt-4"><CollapsibleText text={job.description} /></div> : null}
         </div>
       ) : null}
     </article>

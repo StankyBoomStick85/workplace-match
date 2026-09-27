@@ -8,17 +8,6 @@ import {
   addMatchFoundNotification,
   type ContactMethod
 } from "../lib/contactPreferences";
-import {
-  addMatchThreadMessage,
-  formatMessageTimestamp,
-  getMatchThreadMessages,
-  getMessageButtonLabel,
-  refreshMatchThreadMessages,
-  type MatchMessage,
-  type MatchThreadContext
-} from "../lib/matchMessages";
-import { useMatchThreadRealtime } from "../lib/useMatchThreadRealtime";
-import { useAutoScrollToBottom } from "../lib/useAutoScrollToBottom";
 import { logAdminEvent } from "../lib/adminEvents";
 import { logError } from "../lib/logError";
 import { scanEmployerFacingText, formatViolations, scanCapabilityEntries } from "../lib/employerTextGuard";
@@ -26,7 +15,6 @@ import type { CapabilityEntry } from "../lib/capabilityPipeline";
 import {
   addInterest as addSupabaseInterest,
   addMutualMatch as addSupabaseMutualMatch,
-  addNotificationByUserId,
   getAllApplicantProfiles,
   getApplicantInterests,
   getCurrentMvpUser,
@@ -37,6 +25,9 @@ import {
 } from "../lib/supabaseMvpData";
 import { RemoveInterestConfirmationModal } from "./RemoveInterestConfirmationModal";
 import { HeartToggleButton } from "./HeartToggleButton";
+import { EmployerSummaryContent } from "./EmployerSummaryContent";
+import { CapabilityEntryChips } from "./CapabilityEntryChips";
+import { CollapsibleText } from "./CollapsibleText";
 
 type EmployerAccount = {
   id?: string;
@@ -82,12 +73,20 @@ type applicantProfile = {
   // file may ever render to an employer. capabilitySummary above is the
   // candidate's own draft and may contain PII - never render it here.
   employerSummary?: string;
-  // Structured per-capability entries. NOT currently rendered anywhere in this
-  // file - present so the render-time guard below can watch it the same way
-  // employer_summary is watched. If a future change ever displays these, it
-  // MUST gate through isCapabilityEntriesSafe first, exactly like
-  // employerSummary is gated at its render site below.
+  // Structured per-capability entries - the PUBLIC-layer, AI-derived,
+  // verification-tagged replacement for showing raw topSkills chips directly
+  // (see CapabilityEntryChips). Rendered via CapabilityEntryChips, which
+  // gates through isCapabilityEntriesSafe itself - never render these
+  // directly without that gate.
   capabilityEntries?: CapabilityEntry[];
+  // topSkills (capability_tags) is EVIDENCE, not PUBLIC: a free-text field the
+  // candidate types on their own profile form, never scanned by the identity
+  // guard. It stays in this type only because calculateSkillMatch still uses
+  // it as a scoring input (see getApplicantMatchSignals below) - it must
+  // never be rendered directly to an employer again. experienceLevel is the
+  // same shape of problem (a self-selected tier, no evidence behind it) and
+  // is kept for the same scoring-only reason - see the removed render site's
+  // comment for why no derived label replaces it.
   topSkills?: string[];
   experienceLevel?: string;
   educationLevel?: string;
@@ -1296,7 +1295,6 @@ function ApplicantMatchPopup({
   variant?: "popup" | "panel";
   hideHeader?: boolean;
 }) {
-  const [dismissedMutualActionJobIds, setDismissedMutualActionJobIds] = useState<string[]>([]);
   const orderedJobMatches = focusedJobId
     ? [...applicant.jobMatches].sort((first, second) => {
         if (first.job.id === focusedJobId) {
@@ -1370,18 +1368,8 @@ function ApplicantMatchPopup({
                 size="sm"
               />
             </div>
-            {interestState === "mutual_match" && !dismissedMutualActionJobIds.includes(job.id) ? (
-              <EmployerMutualMatchActions
-                job={job}
-                applicantId={applicant.id}
-                profile={applicant.profile}
-                employerAccount={employerAccount}
-                onDismiss={() =>
-                  setDismissedMutualActionJobIds((current) =>
-                    current.includes(job.id) ? current : [...current, job.id]
-                  )
-                }
-              />
+            {interestState === "mutual_match" ? (
+              <EmployerMutualMatchActions applicantId={applicant.id} profile={applicant.profile} />
             ) : null}
           </div>
           );
@@ -1393,42 +1381,12 @@ function ApplicantMatchPopup({
 }
 
 function EmployerMutualMatchActions({
-  job,
   applicantId,
-  profile,
-  employerAccount,
-  onDismiss
+  profile
 }: {
-  job: JobListing;
   applicantId: string;
   profile: applicantProfile;
-  employerAccount: EmployerAccount | null;
-  onDismiss: () => void;
 }) {
-  const [isMessagingOpen, setIsMessagingOpen] = useState(false);
-  const [messages, setMessages] = useState<MatchMessage[]>([]);
-  const [messageText, setMessageText] = useState("");
-  // match_messages.employer_id is a uuid FK - must be the real auth user id,
-  // never an email (job.employerEmail is a display string, not a uuid).
-  const thread: MatchThreadContext = {
-    applicantId,
-    employerId: employerAccount?.id ?? job.employerId ?? "",
-    jobId: job.id
-  };
-
-  useEffect(() => {
-    refreshMatchThreadMessages(thread).then(setMessages);
-  }, [thread.applicantId, thread.employerId, thread.jobId]);
-
-  // Subscribes only while this panel is open; closing or switching threads
-  // (thread identity changes) tears the subscription down via the hook's own
-  // cleanup.
-  useMatchThreadRealtime(isMessagingOpen ? thread : null, (message) => {
-    setMessages((current) => (current.some((existing) => existing.id === message.id) ? current : [...current, message]));
-  });
-
-  const scrollRef = useAutoScrollToBottom(`${isMessagingOpen}:${messages.length}`);
-
   // Defense in depth: catches an employer_summary row that was generated
   // before the identity-guard fix and still has PII baked into its stored
   // text (fixing the render path doesn't fix content already in the DB).
@@ -1477,68 +1435,6 @@ function EmployerMutualMatchActions({
     }
   }, [applicantId, profile.capabilityEntries]);
 
-  function sendEmployerMessage(text: string) {
-    if (!employerAccount) {
-      return;
-    }
-
-    const message = addMatchThreadMessage({
-      ...thread,
-      senderRole: "employer",
-      text
-    });
-
-    if (!message) {
-      return;
-    }
-
-    // In-app only: the bell notification is resolved by the candidate's real
-    // user id (applicantId), never by email - messaging never stores,
-    // exposes, or sends an email address anywhere in this flow.
-    // candidateId/employerId are included so the notification's click-through
-    // can deep-link straight to this exact thread.
-    addNotificationByUserId({
-      recipientUserId: applicantId,
-      type: "new_message",
-      title: "New Message",
-      message: `New message about ${job.title}.`,
-      jobId: job.id,
-      jobTitle: job.title,
-      candidateId: applicantId,
-      employerId: thread.employerId
-    });
-  }
-
-  function reachOut() {
-    if (!employerAccount) {
-      return;
-    }
-
-    logAdminEvent({
-      type: "reach_out_clicked",
-      userRole: "employer",
-      jobId: job.id,
-      applicantId,
-      employerId: employerAccount.email
-    });
-    // Never hand the candidate's actual email/phone to the employer's device
-    // (a mailto:/sms:/tel: navigation would expose it, and email addresses
-    // are identifying) - match_messages is the only sanctioned contact
-    // channel post-match.
-    sendEmployerMessage("Let's schedule a time to connect about this match.");
-    onDismiss();
-  }
-
-  function sendMessage() {
-    if (!messageText.trim()) {
-      return;
-    }
-
-    sendEmployerMessage(messageText);
-    setMessageText("");
-    setMessages(getMatchThreadMessages(thread));
-  }
-
   return (
     <div className="mt-3 space-y-2 border-t border-gray-100 pt-3">
       {/* Mutual match unlocks fuller CAPABILITY detail only - never identity.
@@ -1546,97 +1442,34 @@ function EmployerMutualMatchActions({
           branch, rank, clearance, dates/year counts, publications, or
           locations served to an employer, at any tier. employerSummary is
           the only summary field this block may render - it is generated
-          specifically to be capability-only and pronoun-neutral. */}
+          specifically to be capability-only and pronoun-neutral.
+          No action buttons here - the heart toggle above (on the job row) is
+          the only control on this surface; messaging lives on the Matches
+          page, not Find Applicants. */}
       <div className="space-y-1.5 rounded-md border border-red-100 bg-red-50 p-3">
         <p className="text-xs font-semibold uppercase tracking-[0.12em] text-red-800">Mutual match unlocked</p>
         <p className="text-sm font-bold text-zinc-950">Matched candidate</p>
-        {profile.experienceLevel ? <p className="text-xs text-zinc-600">{profile.experienceLevel}</p> : null}
-        {profile.topSkills?.length ? (
-          <div className="flex flex-wrap gap-1.5">
-            {profile.topSkills.map((skill) => (
-              // bg-red-100 (not bg-white) deliberately: in dark mode, globals.css
-              // forces `color` to near-black on every descendant of this
-              // bg-red-50 wrapper (html.dark .bg-red-50 *), while bg-white is
-              // separately forced to a near-black background (html.dark
-              // .bg-white) - combined, that produced black text on a black
-              // chip. bg-red-100 has no dark-mode background override, so the
-              // forced-dark text always sits on a light chip.
-              <span key={skill} className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800">
-                {skill}
-              </span>
-            ))}
-          </div>
-        ) : null}
+        {/* experienceLevel is deliberately not shown here: it's a self-selected
+            tier with no evidence behind it, and the recommended-role framing
+            inside employerSummary already communicates seniority with actual
+            reasoning attached - a bare tier label would be exactly the kind of
+            unverified self-assertion this platform exists to move past.
+            capability_entries (not raw topSkills) below for the same reason -
+            see CapabilityEntryChips for the provenance rationale. Chip
+            backgrounds are bg-red-900/bg-red-100 (not bg-white/bg-gray-*)
+            deliberately: in dark mode, globals.css forces `color` to
+            near-black on every descendant of this bg-red-50 wrapper, while
+            bg-white/bg-gray-* are separately forced to a near-black
+            background - combined, that produces black text on a black chip.
+            Neither red shade has a dark-mode override, so this is safe
+            regardless of nesting. */}
+        <CapabilityEntryChips entries={profile.capabilityEntries} />
         {profile.employerSummary && scanEmployerFacingText(profile.employerSummary).length === 0 ? (
-          <p className="text-sm leading-6 text-zinc-700">{profile.employerSummary}</p>
+          <EmployerSummaryContent text={profile.employerSummary} />
         ) : (
           <p className="text-xs text-zinc-500">Capability summary unavailable - pending review.</p>
         )}
       </div>
-      <div className="grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          onClick={reachOut}
-          className="rounded-md bg-green-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-green-800"
-        >
-          Reach Out
-        </button>
-        <button
-          type="button"
-          onClick={onDismiss}
-          className="rounded-md border border-zinc-300 bg-zinc-100 px-3 py-2 text-xs font-semibold text-zinc-800 transition hover:bg-zinc-200"
-        >
-          Do Later
-        </button>
-        <button
-          type="button"
-          onClick={() => setIsMessagingOpen((current) => !current)}
-          className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-xs font-semibold text-zinc-900 transition hover:bg-zinc-50"
-        >
-          {getMessageButtonLabel(messages.length > 0)}
-        </button>
-      </div>
-      {isMessagingOpen ? (
-        <div className="space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2">
-          <div ref={scrollRef} className="max-h-28 space-y-1.5 overflow-y-auto text-xs">
-            {messages.length > 0 ? (
-              messages.map((message) => {
-                const isOwn = message.senderRole === "employer";
-                return (
-                  <div key={message.id} className={`flex ${isOwn ? "justify-end" : "justify-start"}`}>
-                    <div
-                      className={`max-w-[85%] rounded-lg px-2 py-1 ${
-                        isOwn ? "bg-red-900 text-white" : "border border-gray-200 bg-white text-zinc-900"
-                      }`}
-                    >
-                      <p className="whitespace-pre-wrap break-words">{message.text}</p>
-                      <p className={`mt-0.5 text-[10px] ${isOwn ? "text-red-200" : "text-zinc-400"}`}>
-                        {formatMessageTimestamp(message.createdAt)}
-                      </p>
-                    </div>
-                  </div>
-                );
-              })
-            ) : (
-              <p className="text-zinc-700">No messages yet.</p>
-            )}
-          </div>
-          <textarea
-            value={messageText}
-            onChange={(event) => setMessageText(event.target.value)}
-            rows={2}
-            className="w-full rounded-md border border-gray-300 px-2 py-1 text-sm"
-            placeholder="Write a message..."
-          />
-          <button
-            type="button"
-            onClick={sendMessage}
-            className="w-full rounded-md bg-red-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-red-950"
-          >
-            Send message
-          </button>
-        </div>
-      ) : null}
     </div>
   );
 }

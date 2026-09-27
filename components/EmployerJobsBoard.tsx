@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { formatStoredPayRange } from "../lib/payFormatting";
 import { supabase } from "../lib/supabase";
+import { CollapsibleText } from "./CollapsibleText";
 
 type EmployerAccount = {
   id: string;
@@ -187,7 +188,7 @@ export function EmployerJobsBoard() {
                         </div>
                       ) : null}
 
-                      <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-zinc-700">{job.description}</p>
+                      {job.description ? <div className="mt-4"><CollapsibleText text={job.description} /></div> : null}
 
                       <div className="mt-4 flex gap-2">
                         <Link

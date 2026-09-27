@@ -1199,12 +1199,46 @@ export type EmployerSummaryInput = {
   isAlternateSummary: boolean;
 };
 
-export function buildEmployerSummaryUserPrompt(input: EmployerSummaryInput): string {
-  const leadIn = input.isAlternateSummary
-    ? `Lead with the strengths that make this candidate competitive for a broader set of roles than their most recent title suggests - name those roles explicitly. Use their most direct experience as supporting detail in the second half.\n\nStructure the summary in three parts:\n1. What this person can do right now and what specific role they are best suited for today - use a real job title, not a tier label\n2. Whether a specific, nameable gap exists (a particular certification or tool) and what it would take to close it - omit this part entirely if there is no specific gap\n3. Where this person can realistically grow within your organization or industry given their trajectory`
-    : `Structure the summary in three parts:\n1. What this person can do right now and what specific role they are best suited for today - use a real job title, not a tier label\n2. Whether a specific, nameable gap exists (a particular certification or tool) and what it would take to close it - omit this part entirely if there is no specific gap\n3. Where this person can realistically grow within your organization or industry given their trajectory`;
+// Structured, not narrative: an employer scanning this needs an answer in
+// seconds, not a 200-300 word paragraph to read start to finish. Four fixed,
+// labeled sections (## HEADING, same convention buildStep4Prompt already uses
+// and extractSection already parses) - a one-line fit statement, a short
+// bullet list of concrete strengths, a one-line growth statement, and an
+// optional one-line gap. This is a formatting/output-shape change only: every
+// anonymity, framing, and gap-specificity rule below is unchanged from the
+// paragraph version.
+const EMPLOYER_SUMMARY_LEAD_IN_STANDARD = `Structure your answer as exactly these sections, using the "##" heading format shown - do not add extra sections, do not add a title, do not add any text before the first heading or after the last section:
 
-  return `Based on the following candidate profile sections, write a compelling employer-facing paragraph of 200-300 words (up to 1,500 characters) for a hiring manager. This platform never discloses candidate identity to an employer, at any tier - describe capability only. If a motivated reader could identify a specific individual from your output, the output is wrong.
+## BEST_FIT
+One sentence: what this person can do right now and the specific role they are best suited for today. Use a real job title, not a tier label.
+
+## STRENGTHS
+Three to five short bullet points (each one line, starting with "- "), in the plain-text scale/scope language already allowed below (team size, budget, scope of responsibility). Each bullet is one concrete, verifiable capability - not a restatement of the fit sentence above.
+
+## GROWTH
+One to two sentences: where this person can realistically grow within your organization or industry given their trajectory.
+
+## GAP
+Only include this section if a genuine, specific, nameable gap exists (see the gap rule below). One sentence naming it and what it would take to close it. If there is no such gap, omit the "## GAP" heading and this section entirely - do not write "no gaps identified" or similar.`;
+
+const EMPLOYER_SUMMARY_LEAD_IN_ALTERNATE = `Structure your answer as exactly these sections, using the "##" heading format shown - do not add extra sections, do not add a title, do not add any text before the first heading or after the last section:
+
+## BEST_FIT
+One sentence naming the specific role this candidate is best suited for today, leading with the strengths that make them competitive for a broader set of roles than their most recent title suggests - name those roles explicitly rather than defaulting to their most direct experience.
+
+## STRENGTHS
+Three to five short bullet points (each one line, starting with "- "), in the plain-text scale/scope language already allowed below (team size, budget, scope of responsibility). Lead with the transferable strengths that support the broader role set from BEST_FIT; use their most direct experience as supporting bullets, not the lead.
+
+## GROWTH
+One to two sentences: where this person can realistically grow within your organization or industry given their trajectory.
+
+## GAP
+Only include this section if a genuine, specific, nameable gap exists (see the gap rule below). One sentence naming it and what it would take to close it. If there is no such gap, omit the "## GAP" heading and this section entirely - do not write "no gaps identified" or similar.`;
+
+export function buildEmployerSummaryUserPrompt(input: EmployerSummaryInput): string {
+  const leadIn = input.isAlternateSummary ? EMPLOYER_SUMMARY_LEAD_IN_ALTERNATE : EMPLOYER_SUMMARY_LEAD_IN_STANDARD;
+
+  return `Based on the following candidate profile sections, write a structured, scannable employer-facing capability summary for a hiring manager - short labeled sections a hiring manager can scan in seconds, not a narrative paragraph. This platform never discloses candidate identity to an employer, at any tier - describe capability only. If a motivated reader could identify a specific individual from your output, the output is wrong.
 
 Write about a capable professional applying for a job, and describe what they have done and can do as accomplished fact. Do not frame the candidate as coming from outside ordinary work, entering or breaking into a sector, transitioning, adjusting, acclimating, or bridging into anything, and do not describe their experience as needing translation or conversion - it is simply their experience. Do not use the words "civilian" or "military" anywhere in the output, and do not use any wording that implies the candidate has to earn their way into normal employment or prove they can do work they have already done.
 
@@ -1232,4 +1266,46 @@ ${input.recommendedPosition}
 
 ENTRY POINT:
 ${input.entryPoint}`;
+}
+
+export type ParsedEmployerSummary = {
+  bestFit: string;
+  strengths: string[];
+  growth: string;
+  gap: string | null;
+};
+
+// Parses the ## BEST_FIT / ## STRENGTHS / ## GROWTH / ## GAP format
+// buildEmployerSummaryUserPrompt now asks for, using the same extractSection
+// helper the Step 4 sections already rely on. Returns null for anything that
+// doesn't match - specifically every employer_summary row generated before
+// this change, which is a plain paragraph with no "## BEST_FIT" heading at
+// all. Callers must fall back to rendering the raw text as a paragraph when
+// this returns null; see the regeneration note this shipped with for why
+// existing rows are not migrated.
+export function parseEmployerSummary(text: string): ParsedEmployerSummary | null {
+  if (!text || !text.includes("## BEST_FIT")) {
+    return null;
+  }
+
+  const bestFit = extractSection(text, "BEST_FIT", "STRENGTHS").trim();
+  const strengthsBlock = extractSection(text, "STRENGTHS", "GROWTH");
+  const growth = extractSection(text, "GROWTH", "GAP").trim();
+  const gapRaw = extractSection(text, "GAP").trim();
+
+  const strengths = strengthsBlock
+    .split("\n")
+    .map((line) => line.trim().replace(/^[-*]\s*/, ""))
+    .filter(Boolean);
+
+  if (!bestFit || strengths.length === 0 || !growth) {
+    return null;
+  }
+
+  return {
+    bestFit,
+    strengths,
+    growth,
+    gap: gapRaw || null
+  };
 }

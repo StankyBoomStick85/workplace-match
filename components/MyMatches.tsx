@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { attemptPreferredContact } from "../lib/contactPreferences";
 import { logAdminEvent } from "../lib/adminEvents";
 import { logError } from "../lib/logError";
-import { scanEmployerFacingText, formatViolations, scanCapabilityEntries } from "../lib/employerTextGuard";
+import { scanEmployerFacingText, formatViolations, scanCapabilityEntries, isCapabilityEntriesSafe } from "../lib/employerTextGuard";
 import {
   addMatchThreadMessage,
   formatMessageTimestamp,
@@ -17,6 +17,7 @@ import {
 import { useMatchThreadRealtime } from "../lib/useMatchThreadRealtime";
 import { useAutoScrollToBottom } from "../lib/useAutoScrollToBottom";
 import { calculateSkillMatch, getApplicantMatchSignals } from "../lib/skillMatch";
+import type { CapabilityEntry } from "../lib/capabilityPipeline";
 import {
   addNotificationByUserId,
   getAllApplicantProfiles,
@@ -31,6 +32,8 @@ import {
   type MvpMatch
 } from "../lib/supabaseMvpData";
 import { RemoveInterestConfirmationModal } from "./RemoveInterestConfirmationModal";
+import { EmployerSummaryContent } from "./EmployerSummaryContent";
+import { CapabilityEntryChips } from "./CapabilityEntryChips";
 
 type Role = "candidate" | "employer";
 type MatchRecord = {
@@ -43,15 +46,16 @@ type MatchRecord = {
 // Employer-only: a candidate who has expressed interest in one of this
 // employer's jobs, but there's no mutual match yet. Privacy: only fields
 // already visible pre-mutual-match on Find Applicants are read here -
-// zipCode, topSkills, experienceLevel, a computed match % - fullName and
-// candidateEmail are deliberately never read into this record at all, so
-// there's nothing to accidentally render.
+// zipCode, capabilityEntries (PUBLIC, AI-derived - see CapabilityEntryChips),
+// a computed match % - fullName and candidateEmail are deliberately never
+// read into this record at all, so there's nothing to accidentally render.
+// No experienceLevel: a self-selected tier with no evidence behind it is not
+// shown to an employer at any stage, matched or not.
 type PendingInterestRecord = {
   key: string;
   job: MvpJobListing;
   zipCode: string;
-  topSkills: string[];
-  experienceLevel: string;
+  capabilityEntries: CapabilityEntry[];
   matchPercent: number;
 };
 
@@ -243,8 +247,7 @@ export function MyMatches({ role }: { role: Role }) {
                 key: `${interest.employerId}:${interest.jobId}:${interest.candidateId}`,
                 job,
                 zipCode: candidateProfile?.zipCode || "",
-                topSkills: candidateProfile?.topSkills ?? [],
-                experienceLevel: candidateProfile?.experienceLevel || "",
+                capabilityEntries: candidateProfile?.capabilityEntries ?? [],
                 matchPercent
               };
             })
@@ -438,7 +441,9 @@ export function MyMatches({ role }: { role: Role }) {
                               <p className="mt-1 text-sm font-bold text-zinc-950">Matched candidate</p>
                               {record.candidateProfile?.employerSummary &&
                               scanEmployerFacingText(record.candidateProfile.employerSummary).length === 0 ? (
-                                <p className="mt-1 text-sm leading-6 text-zinc-700">{record.candidateProfile.employerSummary}</p>
+                                <div className="mt-1">
+                                  <EmployerSummaryContent text={record.candidateProfile.employerSummary} />
+                                </div>
                               ) : (
                                 <p className="mt-1 text-sm text-zinc-500">Capability summary unavailable - pending review.</p>
                               )}
@@ -450,13 +455,15 @@ export function MyMatches({ role }: { role: Role }) {
                               </div>
                               <div className="rounded-md border border-gray-200 bg-white p-3">
                                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Skills</p>
-                                {record.candidateProfile?.topSkills?.length ? (
-                                  <div className="mt-1 flex flex-wrap gap-1.5">
-                                    {record.candidateProfile.topSkills.map((skill) => (
-                                      <span key={skill} className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-zinc-700">
-                                        {skill}
-                                      </span>
-                                    ))}
+                                {/* capability_entries (AI-derived, verification-tagged), not raw
+                                    topSkills - topSkills is a free-text field the candidate types
+                                    on their own profile form, never scanned, and was showing the
+                                    six self-entered signup skills verbatim here. See
+                                    CapabilityEntryChips for the provenance rationale. */}
+                                {record.candidateProfile?.capabilityEntries?.length &&
+                                isCapabilityEntriesSafe(record.candidateProfile.capabilityEntries) ? (
+                                  <div className="mt-1">
+                                    <CapabilityEntryChips entries={record.candidateProfile.capabilityEntries} />
                                   </div>
                                 ) : (
                                   <p className="mt-1 text-sm text-zinc-600">Not listed</p>
@@ -574,19 +581,14 @@ export function MyMatches({ role }: { role: Role }) {
                       </button>
                       {isExpanded ? (
                         <div className="space-y-3 p-4">
-                          <div className="grid gap-3 text-sm md:grid-cols-2">
+                          <div className="grid gap-3 text-sm">
                             <Detail label="Applicant area" value={record.zipCode || "Generalized ZIP area"} />
-                            <Detail label="Experience level" value={record.experienceLevel || "Not listed"} />
                           </div>
-                          {record.topSkills.length > 0 ? (
+                          {record.capabilityEntries.length > 0 && isCapabilityEntriesSafe(record.capabilityEntries) ? (
                             <div>
                               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Skills</p>
-                              <div className="mt-2 flex flex-wrap gap-2">
-                                {record.topSkills.map((skill) => (
-                                  <span key={skill} className="rounded-full border border-gray-200 bg-white px-3 py-1 text-xs font-semibold text-zinc-700">
-                                    {skill}
-                                  </span>
-                                ))}
+                              <div className="mt-2">
+                                <CapabilityEntryChips entries={record.capabilityEntries} />
                               </div>
                             </div>
                           ) : null}

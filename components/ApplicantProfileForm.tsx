@@ -2,6 +2,7 @@
 
 import { useState, useEffect, type FormEvent } from "react";
 import { supabase } from "../lib/supabase";
+import { EmployerSummaryContent } from "./EmployerSummaryContent";
 
 const PROFILE_PICTURE_BUCKET = "profile-pictures";
 const DOCUMENTS_BUCKET = "candidate-documents";
@@ -1302,7 +1303,14 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
                   </div>
 
                   {activePathTab === "primary" ? (
-                    <GeneratedSection title="Employer-Facing Summary" content={profile.employerSummary} />
+                    <div>
+                      <h3 className="text-sm font-semibold text-zinc-900">Employer-Facing Summary</h3>
+                      <div className="mt-2 rounded-md border border-gray-200 bg-gray-50 p-4">
+                        {profile.employerSummary ? (
+                          <EmployerSummaryContent text={profile.employerSummary} collapsible={false} />
+                        ) : null}
+                      </div>
+                    </div>
                   ) : (
                     <div>
                       {isGeneratingAlternate ? (

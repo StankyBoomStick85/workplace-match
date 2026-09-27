@@ -38,6 +38,7 @@ import {
 import { supabase } from "../lib/supabase";
 import { RemoveInterestConfirmationModal } from "./RemoveInterestConfirmationModal";
 import { HeartToggleButton } from "./HeartToggleButton";
+import { CollapsibleText } from "./CollapsibleText";
 
 type ApplicantAccount = {
   id?: string;
@@ -1504,9 +1505,9 @@ export function ApplicantJobsMap() {
         {job.description ? (
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Description</p>
-            <p className="mt-2 max-h-28 max-w-xs overflow-y-auto rounded-md border border-gray-200 bg-gray-50 p-3 text-sm leading-5 text-zinc-700">
-              {job.description}
-            </p>
+            <div className="mt-2 max-w-xs rounded-md border border-gray-200 bg-gray-50 p-3">
+              <CollapsibleText text={job.description} className="text-sm leading-5 text-zinc-700" />
+            </div>
           </div>
         ) : null}
 
@@ -1571,9 +1572,9 @@ export function ApplicantJobsMap() {
         {entry.description ? (
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Description</p>
-            <p className="mt-2 max-h-28 max-w-xs overflow-y-auto rounded-md border border-gray-200 bg-gray-50 p-3 text-sm leading-5 text-zinc-700">
-              {entry.description}
-            </p>
+            <div className="mt-2 max-w-xs rounded-md border border-gray-200 bg-gray-50 p-3">
+              <CollapsibleText text={entry.description} className="text-sm leading-5 text-zinc-700" />
+            </div>
           </div>
         ) : null}
 
@@ -1667,9 +1668,9 @@ export function ApplicantJobsMap() {
         ) : null}
         {job.job_type ? <p className="text-xs text-zinc-500">{job.job_type}</p> : null}
         {job.description ? (
-          <p className="max-h-20 overflow-y-auto rounded border border-gray-200 bg-gray-50 px-2 py-1.5 text-xs leading-5 text-zinc-600">
-            {job.description}
-          </p>
+          <div className="rounded border border-gray-200 bg-gray-50 px-2 py-1.5">
+            <CollapsibleText text={job.description} className="text-xs leading-5 text-zinc-600" />
+          </div>
         ) : null}
         <div className="flex items-center gap-2 pt-1">
           <a
