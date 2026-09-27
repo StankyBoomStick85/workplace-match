@@ -149,6 +149,65 @@ export async function getAllEmployerProfiles() {
   return data.map(mapEmployerProfile);
 }
 
+export type MvpSavedExternalJob = {
+  jobId: string;
+  jobSource: string;
+  title: string;
+  company: string;
+  location: string;
+  salaryMin: number | null;
+  salaryMax: number | null;
+  url: string;
+  savedAt: string;
+};
+
+export async function getSavedExternalJobs(candidateId: string) {
+  const data = await fetchMvpData<any[]>("saved-jobs", { candidateId });
+  return data.map((row) => ({
+    jobId: row.job_id,
+    jobSource: row.job_source,
+    title: row.job_title ?? "",
+    company: row.company ?? "",
+    location: row.location ?? "",
+    salaryMin: row.salary_min ?? null,
+    salaryMax: row.salary_max ?? null,
+    url: row.url ?? "",
+    savedAt: row.saved_at ?? ""
+  })) as MvpSavedExternalJob[];
+}
+
+// Unheart for an external listing - deletes the saved_jobs row. Same
+// operation handleSaveExternalJob() already performs when un-saving from the
+// Job Map (components/ApplicantJobsMap.tsx); this just makes it callable from
+// My Jobs too, through the same anon-key client + RLS policy, not a new
+// write path.
+export async function deleteSavedExternalJob(candidateId: string, jobId: string): Promise<{ error: string | null }> {
+  const { error } = await supabase.from("saved_jobs").delete().eq("candidate_id", candidateId).eq("job_id", jobId);
+  if (error) {
+    console.error("[deleteSavedExternalJob] Failed to remove saved job", { candidateId, jobId, error: error.message });
+    return { error: error.message };
+  }
+  return { error: null };
+}
+
+// Career-mode match_scores for a set of job ids - read-only, never triggers
+// scoring. A jobId absent from the response simply hasn't been scored yet
+// (or its score expired) - callers should treat that as "not yet scored",
+// not "zero".
+export async function getCandidateMatchScores(candidateId: string, jobIds: string[]) {
+  if (jobIds.length === 0) {
+    return {} as Record<string, number>;
+  }
+  const data = await fetchMvpData<Array<{ job_id: string; score: number }>>("candidate-match-scores", {
+    candidateId,
+    jobIds: jobIds.join(",")
+  });
+  return data.reduce<Record<string, number>>((acc, row) => {
+    acc[row.job_id] = row.score;
+    return acc;
+  }, {});
+}
+
 export async function getAllJobs() {
   const data = await fetchMvpData<any[]>("jobs");
   return data.map(mapJob);

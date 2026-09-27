@@ -1231,10 +1231,15 @@ export function ApplicantJobsMap() {
       await supabase.from("saved_jobs").delete().eq("candidate_id", account.id).eq("job_id", job.id);
       setSavedExternalJobIds((prev) => { const next = new Set(prev); next.delete(job.id); return next; });
     } else {
+      // job.source is the real origin ("adzuna" | "muse" | "usajobs") already
+      // carried on every ExternalJob - previously hardcoded to "adzuna" here
+      // regardless of source. Requires the saved_jobs.job_source CHECK
+      // constraint to allow "muse"/"usajobs" (see the migration reported
+      // alongside this fix) before this can write anything but "adzuna".
       await supabase.from("saved_jobs").upsert({
         candidate_id: account.id,
         job_id: job.id,
-        job_source: "adzuna",
+        job_source: job.source,
         job_title: job.title,
         company: job.company,
         location: job.location,

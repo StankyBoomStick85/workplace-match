@@ -174,6 +174,43 @@ export async function GET(request: Request) {
       return NextResponse.json({ data: counts });
     }
 
+    if (resource === "saved-jobs") {
+      // Candidate's saved external listings - the other half of "My Jobs"
+      // alongside interests/matches (WPM). Stored fields only (job_title,
+      // company, location, salary_min, salary_max, url) - never re-resolved
+      // against the live listing.
+      const candidateId = requestUrl.searchParams.get("candidateId") ?? "";
+      if (!candidateId) return NextResponse.json({ data: [] });
+      const { data, error } = await adminClient
+        .from("saved_jobs")
+        .select("job_id, job_source, job_title, company, location, salary_min, salary_max, url, saved_at")
+        .eq("candidate_id", candidateId)
+        .order("saved_at", { ascending: false });
+      if (error) throw error;
+      return NextResponse.json({ data: data ?? [] });
+    }
+
+    if (resource === "candidate-match-scores") {
+      // Career-mode match_scores for a candidate's own saved jobs (WPM and
+      // external alike) - read-only, never triggers scoring. jobIds is a
+      // comma-separated list. A jobId with no row is simply absent from the
+      // response (not yet scored, or the score expired).
+      const candidateId = requestUrl.searchParams.get("candidateId") ?? "";
+      const jobIdsParam = requestUrl.searchParams.get("jobIds") ?? "";
+      const jobIds = jobIdsParam.split(",").map((id) => id.trim()).filter(Boolean);
+      if (!candidateId || jobIds.length === 0) return NextResponse.json({ data: [] });
+
+      const { data, error } = await adminClient
+        .from("match_scores")
+        .select("job_id, score")
+        .eq("candidate_id", candidateId)
+        .eq("scoring_mode", "career")
+        .in("job_id", jobIds)
+        .gt("expires_at", new Date().toISOString());
+      if (error) throw error;
+      return NextResponse.json({ data: data ?? [] });
+    }
+
     if (resource === "job") {
       const jobId = requestUrl.searchParams.get("jobId");
       const employerId = requestUrl.searchParams.get("employerId") || user?.id;
