@@ -960,6 +960,10 @@ export function buildStep3Prompt(evidenceGroups: EvidenceGroup[], correctionInst
 EVIDENCE GROUPS:
 ${JSON.stringify(evidenceGroups, null, 2)}
 
+CRITICAL ANONYMITY RULE: This platform never discloses candidate identity to an employer, at any tier. Refer to them only as "this candidate" or using they/them/their pronouns - never he/him, she/her, or any gendered term, and never their name or initials. Never name a past employer, unit, command, branch of service, or rank. Never state exact dates, years of service, tenure length, or age. Never name a specific country, region, or named operation/deployment. Never mention a publication or other named authored work. Security clearance is the one exception: if it applies, state it as a capability fact ("holds an active security clearance," or the specific level if given) and never name who granted, sponsored, or investigated it. The candidate's identity must remain fully hidden at all times - describe capability only, never who they are or where/when they did it. This applies to BOTH the capability name and the description of every single entry - the evidence groups above may themselves contain identifying detail (organization names, dates, locations, rank); your output must not, no matter how specific the source material is.
+
+Do not frame the candidate as coming from outside ordinary work, or as entering a new sector, transitioning, adjusting, acclimating, or bridging into anything, and do not describe their experience as needing translation or conversion - it is simply their experience. Do not use the words "civilian" or "military" anywhere in your output, and do not use any wording that implies the candidate must earn their way into normal employment or prove they can do work they have already done.
+
 Your ONLY jobs are:
 1. Write a plain-business-language capability NAME and DESCRIPTION for each group.
 2. Order entries: leadership/management/people-development first, technical/operational/domain-specific second, education/certifications/credentials last.
@@ -967,8 +971,8 @@ Your ONLY jobs are:
 
 Naming rules:
 - Names must be immediately understandable to a general business audience with no specialized background.
-- NO duty titles, school names, coded specialty designators, "Jumpmaster," "insertion," "joint fires," "signature reduction," or any term whose meaning depends on knowing a specific occupational, trade, or industry context in the NAME. These belong in the description as supporting evidence.
-- Descriptions may include specific roles, organizations, schools, and contexts.
+- NO duty titles, school names, coded specialty designators, "Jumpmaster," "insertion," "joint fires," "signature reduction," or any term whose meaning depends on knowing a specific occupational, trade, or industry context in the NAME. These belong in the description as supporting evidence, described generically per the rules above - not named.
+- Descriptions carry the SCALE and NATURE of what was done - team size, budget, scope of responsibility, complexity, outcome - never who did it, where, or when. Do not name a specific organization, school, unit, command, country, region, or operation, and do not state a rank, branch, or date/tenure figure, even as supporting context for the name.
 - Do NOT re-decide grouping or verification — use exactly the groups and verificationStatus values provided.
 - Do NOT limit the count. Every group gets its own entry.
 - Do NOT split or merge groups.
