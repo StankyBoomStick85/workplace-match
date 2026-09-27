@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   addMatchThreadMessage,
@@ -26,6 +27,7 @@ type MatchedEntry = { job: MvpJobListing; match: MvpMatch };
 type InterestedEntry = { job: MvpJobListing };
 
 export function ApplicantMyJobs() {
+  const searchParams = useSearchParams();
   const [matchedEntries, setMatchedEntries] = useState<MatchedEntry[]>([]);
   const [interestedEntries, setInterestedEntries] = useState<InterestedEntry[]>([]);
   const [employerInterestedEntries, setEmployerInterestedEntries] = useState<InterestedEntry[]>([]);
@@ -122,16 +124,44 @@ export function ApplicantMyJobs() {
     });
   });
 
+  async function openMessaging(entry: MatchedEntry) {
+    setOpenMessageJobId(entry.job.id);
+    const messages = await refreshMatchThreadMessages(getThread(entry));
+    setThreadMessages((current) => ({ ...current, [entry.job.id]: messages }));
+  }
+
   async function toggleMessaging(entry: MatchedEntry) {
     if (openMessageJobId === entry.job.id) {
       setOpenMessageJobId("");
       return;
     }
 
-    setOpenMessageJobId(entry.job.id);
-    const messages = await refreshMatchThreadMessages(getThread(entry));
-    setThreadMessages((current) => ({ ...current, [entry.job.id]: messages }));
+    await openMessaging(entry);
   }
+
+  // Notification click-through: a new_message notification deep-links here
+  // with matchJobId + openThread=1 so that job's thread is already open,
+  // rather than landing on a bare list the candidate has to search.
+  useEffect(() => {
+    focusFromLocation();
+    window.addEventListener("workplace-match-focus-match", focusFromLocation);
+    return () => window.removeEventListener("workplace-match-focus-match", focusFromLocation);
+
+    function focusFromLocation() {
+      const params = new URLSearchParams(window.location.search);
+      const matchJobId = params.get("matchJobId");
+      const shouldOpenThread = params.get("openThread") === "1";
+      if (!matchJobId || !shouldOpenThread) {
+        return;
+      }
+
+      const entry = matchedEntries.find((candidateEntry) => candidateEntry.job.id === matchJobId);
+      if (entry) {
+        openMessaging(entry);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchedEntries, searchParams]);
 
   function sendMessage(entry: MatchedEntry) {
     const text = (messageDrafts[entry.job.id] ?? "").trim();
@@ -156,13 +186,17 @@ export function ApplicantMyJobs() {
     setMessageDrafts((current) => ({ ...current, [entry.job.id]: "" }));
 
     // In-app only: resolved by the employer's real user id, never by email.
+    // candidateId/employerId let the notification's click-through deep-link
+    // straight to this exact thread.
     addNotificationByUserId({
       recipientUserId: entry.match.employerId,
       type: "new_message",
       title: "New Message",
       message: `New message about ${entry.job.title}.`,
       jobId: entry.job.id,
-      jobTitle: entry.job.title
+      jobTitle: entry.job.title,
+      candidateId,
+      employerId: entry.match.employerId
     });
   }
 
@@ -338,17 +372,27 @@ function JobCard({
       ) : null}
       {isMutual && isMessagingOpen ? (
         <div className="mt-3 space-y-2 rounded-md border border-gray-200 bg-gray-50 p-3">
-          <div ref={scrollRef} className="max-h-40 space-y-1 overflow-y-auto text-sm text-zinc-700">
+          <div ref={scrollRef} className="max-h-40 space-y-1.5 overflow-y-auto text-sm">
             {messages.length > 0 ? (
-              messages.map((message) => (
-                <p key={message.id} className="rounded bg-white px-2 py-1">
-                  <span className="font-semibold">{message.senderRole === "applicant" ? "You" : "Them"}:</span>{" "}
-                  {message.text}
-                  <span className="ml-1.5 text-xs font-normal text-zinc-400">{formatMessageTimestamp(message.createdAt)}</span>
-                </p>
-              ))
+              messages.map((message) => {
+                const isOwn = message.senderRole === "applicant";
+                return (
+                  <div key={message.id} className={`flex ${isOwn ? "justify-end" : "justify-start"}`}>
+                    <div
+                      className={`max-w-[80%] rounded-lg px-2.5 py-1.5 ${
+                        isOwn ? "bg-red-900 text-white" : "border border-gray-200 bg-white text-zinc-900"
+                      }`}
+                    >
+                      <p className="whitespace-pre-wrap break-words">{message.text}</p>
+                      <p className={`mt-0.5 text-[10px] ${isOwn ? "text-red-200" : "text-zinc-400"}`}>
+                        {formatMessageTimestamp(message.createdAt)}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })
             ) : (
-              <p>No messages yet.</p>
+              <p className="text-zinc-700">No messages yet.</p>
             )}
           </div>
           <textarea

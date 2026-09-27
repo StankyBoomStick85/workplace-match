@@ -1359,13 +1359,18 @@ export function ApplicantJobsMap() {
     // In-app only: the bell notification is resolved by the employer's real
     // user id (job.employerId), never by email - messaging never stores,
     // exposes, or sends an email address anywhere in this flow.
+    // candidateId/employerId are included so the notification's click-through
+    // can deep-link straight to this exact thread (jobId alone is ambiguous
+    // once a user has more than one active thread on a job).
     addNotificationByUserId({
       recipientUserId: job.employerId,
       type: "new_message",
       title: "New Message",
       message: `New message about ${job.title}.`,
       jobId: job.id,
-      jobTitle: job.title
+      jobTitle: job.title,
+      candidateId,
+      employerId: job.employerId
     });
   }
 
@@ -3100,17 +3105,27 @@ function CandidateMutualMatchActions({
       </button>
       {isMessagingOpen ? (
         <div className="space-y-2 rounded-md border border-gray-200 bg-gray-50 p-2">
-          <div ref={scrollRef} className="max-h-28 space-y-1 overflow-y-auto text-xs text-zinc-700">
+          <div ref={scrollRef} className="max-h-28 space-y-1.5 overflow-y-auto text-xs">
             {messages.length > 0 ? (
-              messages.map((message) => (
-                <p key={message.id} className="rounded bg-white px-2 py-1">
-                  <span className="font-semibold">{message.senderRole === "applicant" ? "You" : "Employer"}:</span>{" "}
-                  {message.text}
-                  <span className="ml-1.5 text-xs font-normal text-zinc-400">{formatMessageTimestamp(message.createdAt)}</span>
-                </p>
-              ))
+              messages.map((message) => {
+                const isOwn = message.senderRole === "applicant";
+                return (
+                  <div key={message.id} className={`flex ${isOwn ? "justify-end" : "justify-start"}`}>
+                    <div
+                      className={`max-w-[85%] rounded-lg px-2 py-1 ${
+                        isOwn ? "bg-red-900 text-white" : "border border-gray-200 bg-white text-zinc-900"
+                      }`}
+                    >
+                      <p className="whitespace-pre-wrap break-words">{message.text}</p>
+                      <p className={`mt-0.5 text-[10px] ${isOwn ? "text-red-200" : "text-zinc-400"}`}>
+                        {formatMessageTimestamp(message.createdAt)}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })
             ) : (
-              <p>No messages yet.</p>
+              <p className="text-zinc-700">No messages yet.</p>
             )}
           </div>
           <textarea

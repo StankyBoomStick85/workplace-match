@@ -187,6 +187,42 @@ export function NotificationBell({
       return;
     }
 
+    // A message notification deep-links to the exact thread, already open -
+    // jobId alone can't tell threads apart once someone has more than one
+    // active conversation on the same job, so this requires both candidateId
+    // and employerId (see the addNotificationByUserId call sites - every
+    // new_message notification now carries both).
+    if (notification.type === "new_message") {
+      if (!notification.candidateId || !notification.employerId) {
+        console.warn("[NotificationBell] new_message notification missing candidateId/employerId - cannot deep-link", {
+          notificationId: notification.id
+        });
+        return;
+      }
+
+      const messageParams = new URLSearchParams();
+      messageParams.set("matchJobId", notification.jobId);
+      messageParams.set("candidateId", notification.candidateId);
+      messageParams.set("employerId", notification.employerId);
+      messageParams.set("openThread", "1");
+
+      // Employer lands on Matches with that candidate's thread open; a
+      // candidate lands on My Jobs (not Job Map) with that job's thread open.
+      const messageNextPath =
+        activeRole === "employer"
+          ? `/employer/matches?${messageParams.toString()}`
+          : `/applicant/my-jobs?${messageParams.toString()}`;
+
+      if (window.location.pathname === messageNextPath.split("?")[0]) {
+        window.history.replaceState(null, "", messageNextPath);
+        window.dispatchEvent(new CustomEvent("workplace-match-focus-match", { detail: Object.fromEntries(messageParams) }));
+        return;
+      }
+
+      window.location.href = messageNextPath;
+      return;
+    }
+
     if (notification.type !== "new_match" && notification.type !== "interest_received") {
       return;
     }

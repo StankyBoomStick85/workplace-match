@@ -81,6 +81,7 @@ export function MyMatches({ role }: { role: Role }) {
       const params = new URLSearchParams(window.location.search);
       const matchJobId = params.get("matchJobId");
       const candidateIdParam = params.get("candidateId");
+      const shouldOpenThread = params.get("openThread") === "1";
       if (!matchJobId) {
         return;
       }
@@ -90,6 +91,11 @@ export function MyMatches({ role }: { role: Role }) {
       );
       if (matchedRecord) {
         setExpandedMatchKey(matchedRecord.key);
+        // A new_message notification deep-links here with openThread=1 so the
+        // thread is already open, not just the record expanded.
+        if (shouldOpenThread) {
+          openMessaging(matchedRecord);
+        }
         return;
       }
 
@@ -261,14 +267,18 @@ export function MyMatches({ role }: { role: Role }) {
       });
       if (message) {
         setThreadMessages((current) => ({ ...current, [record.key]: [...(current[record.key] ?? []), message] }));
-        // In-app only: resolved by the candidate's real user id, never by email.
+        // In-app only: resolved by the candidate's real user id, never by
+        // email. candidateId/employerId let the notification's click-through
+        // deep-link straight to this exact thread.
         addNotificationByUserId({
           recipientUserId: record.match.candidateId,
           type: "new_message",
           title: "New Message",
           message: `New message about ${record.job.title}.`,
           jobId: record.job.id,
-          jobTitle: record.job.title
+          jobTitle: record.job.title,
+          candidateId: record.match.candidateId,
+          employerId: record.match.employerId
         });
       }
       setOpenMessageKey(record.key);
@@ -320,15 +330,19 @@ export function MyMatches({ role }: { role: Role }) {
     `${openMessageKey}:${(threadMessages[openMessageKey] ?? []).length}`
   );
 
+  async function openMessaging(record: MatchRecord) {
+    setOpenMessageKey(record.key);
+    const messages = await refreshMatchThreadMessages(getThread(record));
+    setThreadMessages((current) => ({ ...current, [record.key]: messages }));
+  }
+
   async function toggleMessaging(record: MatchRecord) {
     if (openMessageKey === record.key) {
       setOpenMessageKey("");
       return;
     }
 
-    setOpenMessageKey(record.key);
-    const messages = await refreshMatchThreadMessages(getThread(record));
-    setThreadMessages((current) => ({ ...current, [record.key]: messages }));
+    await openMessaging(record);
   }
 
   function sendMatchMessage(record: MatchRecord) {
@@ -351,13 +365,17 @@ export function MyMatches({ role }: { role: Role }) {
     setMessageDrafts((current) => ({ ...current, [record.key]: "" }));
 
     // In-app only: resolved by the recipient's real user id, never by email.
+    // candidateId/employerId let the notification's click-through deep-link
+    // straight to this exact thread.
     addNotificationByUserId({
       recipientUserId: role === "employer" ? record.match.candidateId : record.match.employerId,
       type: "new_message",
       title: "New Message",
       message: `New message about ${record.job.title}.`,
       jobId: record.job.id,
-      jobTitle: record.job.title
+      jobTitle: record.job.title,
+      candidateId: record.match.candidateId,
+      employerId: record.match.employerId
     });
   }
 
@@ -468,21 +486,27 @@ export function MyMatches({ role }: { role: Role }) {
                         </div>
                         {openMessageKey === record.key ? (
                           <div className="space-y-2 rounded-md border border-gray-200 bg-gray-50 p-3">
-                            <div ref={scrollRef} className="max-h-40 space-y-1 overflow-y-auto text-sm text-zinc-700">
+                            <div ref={scrollRef} className="max-h-40 space-y-1.5 overflow-y-auto text-sm">
                               {(threadMessages[record.key] ?? []).length > 0 ? (
-                                (threadMessages[record.key] ?? []).map((message) => (
-                                  <p key={message.id} className="rounded bg-white px-2 py-1">
-                                    <span className="font-semibold">
-                                      {(message.senderRole === "employer") === (role === "employer") ? "You" : "Them"}:
-                                    </span>{" "}
-                                    {message.text}
-                                    <span className="ml-1.5 text-xs font-normal text-zinc-400">
-                                      {formatMessageTimestamp(message.createdAt)}
-                                    </span>
-                                  </p>
-                                ))
+                                (threadMessages[record.key] ?? []).map((message) => {
+                                  const isOwn = (message.senderRole === "employer") === (role === "employer");
+                                  return (
+                                    <div key={message.id} className={`flex ${isOwn ? "justify-end" : "justify-start"}`}>
+                                      <div
+                                        className={`max-w-[80%] rounded-lg px-2.5 py-1.5 ${
+                                          isOwn ? "bg-red-900 text-white" : "border border-gray-200 bg-white text-zinc-900"
+                                        }`}
+                                      >
+                                        <p className="whitespace-pre-wrap break-words">{message.text}</p>
+                                        <p className={`mt-0.5 text-[10px] ${isOwn ? "text-red-200" : "text-zinc-400"}`}>
+                                          {formatMessageTimestamp(message.createdAt)}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  );
+                                })
                               ) : (
-                                <p>No messages yet.</p>
+                                <p className="text-zinc-700">No messages yet.</p>
                               )}
                             </div>
                             <textarea
