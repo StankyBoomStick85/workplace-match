@@ -225,6 +225,11 @@ export function EmployerFindApplicants() {
   const [focusedApplicantId, setFocusedApplicantId] = useState("");
   const [pendingRemoveInterest, setPendingRemoveInterest] = useState<PendingEmployerInterestRemoval | null>(null);
   const [interestError, setInterestError] = useState("");
+  // AI-scored fit for the CURRENTLY SELECTED job only, keyed by candidate id -
+  // see score-candidates-for-job/route.ts. Reset on every job switch so a
+  // stale score from a previous job can never flash on the new job's cards;
+  // "not present yet" renders as no badge, never a wrong number.
+  const [aiScores, setAiScores] = useState<Record<string, number>>({});
 
   useEffect(() => {
     loadMapData();
@@ -323,6 +328,11 @@ export function EmployerFindApplicants() {
       }
 
       const applicantRecordId = profile.userId;
+      // Still calculateSkillMatch-based, deliberately: this ranks THIS
+      // candidate's fit across the employer's OTHER jobs for the expanded
+      // per-candidate detail view (ApplicantMatchPopup's orderedJobMatches) -
+      // a different question than the main badge below, out of scope for the
+      // AI-scoring pass that badge just moved to.
       const jobMatches = jobs
         .map((job) => ({
           job,
@@ -331,7 +341,6 @@ export function EmployerFindApplicants() {
         }))
         .sort((first, second) => second.match.percentage - first.match.percentage);
       const hasMatchData = jobMatches.length > 0;
-      const selectedJobMatch = selectedJobId ? jobMatches.find((jobMatch) => jobMatch.job.id === selectedJobId) : undefined;
 
       summaries.push({
         id: applicantRecordId,
@@ -339,18 +348,64 @@ export function EmployerFindApplicants() {
         position,
         locationLabel: formatApplicantLocation(profile),
         jobMatches,
-        selectedJobMatchPercent: selectedJobMatch ? selectedJobMatch.match.percentage : null,
+        // AI-scored, for the job currently selected - no calculateSkillMatch
+        // fallback. Showing the old engine's number while the real score
+        // loads would flash exactly the wrong number for exactly the
+        // candidates this replaced it for (a hard 0 above crew level).
+        // Missing from aiScores renders as no badge, per the null guard on
+        // this field everywhere it's read.
+        selectedJobMatchPercent: aiScores[applicantRecordId] ?? null,
         hasMatchData
       });
 
       return summaries;
     }, []);
-  }, [account, applicantProfiles, jobs, interests, applicantInterests, mutualMatches, selectedJobId]);
+  }, [account, applicantProfiles, jobs, interests, applicantInterests, mutualMatches, selectedJobId, aiScores]);
 
   const applicantGroups = useMemo(
     () => groupApplicantsByLocation(applicantSummaries),
     [applicantSummaries]
   );
+
+  const visibleCandidateIdsKey = useMemo(
+    () => applicantSummaries.map((applicant) => applicant.id).sort().join(","),
+    [applicantSummaries]
+  );
+
+  // Lazy, job-scoped AI scoring: fires once per (selected job, candidate set)
+  // combination, not on every render. score-candidates-for-job/route.ts is
+  // itself hash-gated, so a redundant call here is cheap (a network
+  // round-trip, no wasted Claude call) - this key just avoids firing one on
+  // every keystroke/state change unrelated to who's being scored.
+  useEffect(() => {
+    if (!selectedJobId || !visibleCandidateIdsKey) {
+      setAiScores({});
+      return;
+    }
+
+    let cancelled = false;
+    setAiScores({});
+
+    (async () => {
+      try {
+        const response = await fetch("/api/scoring/score-candidates-for-job", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jobId: selectedJobId, candidateIds: visibleCandidateIdsKey.split(",") })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!cancelled && data?.scores) {
+          setAiScores(data.scores as Record<string, number>);
+        }
+      } catch (err) {
+        console.error("[EmployerFindApplicants] score-candidates-for-job fetch failed", err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedJobId, visibleCandidateIdsKey]);
 
   function getApplicantInterestState(candidateId: string, jobId: string): ApplicantInterestState {
     if (!account || !candidateId || !jobId) {
