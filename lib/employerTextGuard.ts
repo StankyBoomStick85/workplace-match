@@ -653,6 +653,74 @@ export function formatViolations(violations: TextGuardViolation[]): string {
   return violations.map((violation) => `${violation.category}:"${violation.match}"`).join(", ");
 }
 
+// Log-only view of a violation: the exact matched string and category plus the
+// text surrounding it, with the match itself bracketed as [[...]]. The bare
+// {category, match, index} tuple is not enough to act on - "military" or
+// "General" can be a real disclosure or a false positive depending entirely on
+// the words around it, and without the context the only way to tell was to
+// re-run the generation and hope to catch it again. Purely descriptive: this
+// never influences what the scan above flags.
+export type TextGuardViolationLogDetail = {
+  category: TextGuardCategory;
+  match: string;
+  index: number;
+  context: string;
+};
+
+export function describeViolationsForLog(
+  text: string,
+  violations: TextGuardViolation[],
+  radius = 80
+): TextGuardViolationLogDetail[] {
+  return violations.map((v) => {
+    const start = Math.max(0, v.index - radius);
+    const end = Math.min(text.length, v.index + v.match.length + radius);
+    const context =
+      (start > 0 ? "…" : "") +
+      text.slice(start, v.index) +
+      "[[" + text.slice(v.index, v.index + v.match.length) + "]]" +
+      text.slice(v.index + v.match.length, end) +
+      (end < text.length ? "…" : "");
+    return { category: v.category, match: v.match, index: v.index, context };
+  });
+}
+
+// One flat row per violation across every guarded field, for the
+// metadata.violations array on guard_redaction_abort rows - flat so it can be
+// queried directly with jsonb_array_elements(metadata->'violations') instead of
+// walking a per-field structure. entryIndex/entryPart are set only for
+// capability_entries violations.
+export type GuardAbortViolationRow = TextGuardViolationLogDetail & {
+  field: string;
+  entryIndex?: number;
+  entryPart?: "name" | "description";
+};
+
+export function buildGuardAbortViolationRows({
+  stringFields,
+  capabilityEntries,
+  capabilityEntryViolations
+}: {
+  stringFields: Array<{ field: string; text: string; violations: TextGuardViolation[] }>;
+  capabilityEntries?: Array<{ name: string; description: string }>;
+  capabilityEntryViolations?: CapabilityEntryTextViolation[];
+}): GuardAbortViolationRow[] {
+  const rows: GuardAbortViolationRow[] = [];
+  for (const f of stringFields) {
+    for (const d of describeViolationsForLog(f.text, f.violations)) {
+      rows.push({ field: f.field, ...d });
+    }
+  }
+  for (const v of capabilityEntryViolations ?? []) {
+    const entry = capabilityEntries?.[v.index];
+    const text = (v.field === "name" ? entry?.name : entry?.description) ?? "";
+    for (const d of describeViolationsForLog(text, v.violations)) {
+      rows.push({ field: "capability_entries", entryIndex: v.index, entryPart: v.field, ...d });
+    }
+  }
+  return rows;
+}
+
 // Loosely typed on purpose: this module has no Supabase dependency of its
 // own, and accepting a minimal structural shape here (rather than importing
 // SupabaseClient) keeps it usable from any server route without coupling to
@@ -684,14 +752,19 @@ export async function reportTextGuardViolation({
   console.error(`[employerTextGuard] ${message}`, { route, field, userId, violations, text });
 
   try {
-    await adminClient.from("error_logs").insert({
+    // supabase-js reports insert failures in the resolved { error }, it does not
+    // throw - the catch below alone would let a rejected insert vanish silently.
+    const result = (await adminClient.from("error_logs").insert({
       route,
       error_message: message,
       error_type: "privacy_violation",
       user_id: userId,
       severity,
-      metadata: { field, violations, textPreview: text.slice(0, 500) }
-    });
+      metadata: { field, violations: describeViolationsForLog(text, violations), textPreview: text.slice(0, 500) }
+    })) as { error?: unknown } | null;
+    if (result?.error) {
+      console.error("[employerTextGuard] error_logs insert rejected", result.error);
+    }
   } catch (err) {
     console.error("[employerTextGuard] Failed to write error_logs row", err);
   }

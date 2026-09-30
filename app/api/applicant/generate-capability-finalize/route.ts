@@ -5,25 +5,108 @@ import { createClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   buildStep3Prompt,
+  buildStep3GuardRetryPrompt,
+  buildGuardRewritePrompt,
   buildStep4Prompt,
   buildEmployerSummaryUserPrompt,
   parseStep3Response,
   extractStep4Sections,
   EMPLOYER_SUMMARY_SYSTEM_PROMPT,
+  STEP3_CATEGORY_RANK,
+  type Step3Category,
   type EvidenceGroup,
   type StoredDoc,
   type CapabilityEntry
 } from "@/lib/capabilityPipeline";
-import { scanEmployerFacingText, reportTextGuardViolation, scanCapabilityEntries } from "@/lib/employerTextGuard";
+import {
+  scanEmployerFacingText,
+  reportTextGuardViolation,
+  scanCapabilityEntries,
+  buildGuardAbortViolationRows,
+  type TextGuardViolation
+} from "@/lib/employerTextGuard";
 import { reportGenerationFailure } from "@/lib/generationAlerts";
+import { createRunContext, runWithGenerationGuard, type GenerationRunContext } from "@/lib/generationRunGuard";
 import { sendEmail } from "@/lib/email";
 import { addNotificationByUserId } from "@/lib/supabaseMvpData";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
+const ROUTE = "generate-capability-finalize";
+const STEP3_MODEL = "claude-sonnet-4-6";
+const STEP3_MAX_TOKENS = 8192;
+
+// Every Step 3 call - the initial naming pass AND the targeted retries - runs
+// over chunks of at most this many groups, in parallel. The 2026-09-30 run sent
+// all 129 groups in one call: it hit max_tokens (8192) after 117 entries, and at
+// the ~41 output tokens/s measured for this prompt that single call alone took
+// ~180s of the 300s maxDuration, leaving no room for a retry plus Step 4 and the
+// employer summary. 25 groups is ~2.5k output tokens (~60s), far below the
+// ceiling, and the chunks run concurrently so Step 3's wall time stays roughly
+// constant as the group count grows (Step 2 already fans its 7 batches out the
+// same way).
+const STEP3_CHUNK_SIZE = 25;
+
+// Elapsed-time cutoffs (from request start) past which a retry is SKIPPED and
+// the run fails with a logged reason, instead of starting work that the 300s
+// maxDuration would kill mid-flight with nothing recorded. Step 4 + the
+// employer summary (~50s together) still have to run after the Step 3 / entry
+// retries.
+const STEP3_RETRY_DEADLINE_MS = 185_000;
+const GUARD_ENTRY_RETRY_DEADLINE_MS = 195_000;
+const GUARD_ENTRY_RETRY_ATTEMPTS = 2;
+const GUARD_FIELD_RETRY_DEADLINE_MS = 255_000;
+
+type ChunkRecord = {
+  chunkIndex: number;
+  groupIds: string[];
+  stopReason: string | null;
+  parsedCount: number;
+  expectedCount: number;
+  missingGroupIds: string[];
+  // Emitted twice (only the first kept) / emitted but not in this chunk (e.g. a
+  // mistyped groupId) - both explain an otherwise puzzling missing group.
+  duplicateGroupIds: string[];
+  unknownGroupIds: string[];
+  error: string | null;
+  elapsedMs: number;
+  outputTokens: number | null;
+  rawLength: number;
+  raw: string;
+};
+
+// A response cut off at max_tokens ends mid-line, and that last partial line
+// still matches the entry regex - its description is simply cut short. Dropping
+// everything after the final newline discards that one partial entry so its
+// group is reported missing (and retried) rather than silently saved truncated.
+function trimTruncatedTail(raw: string): string {
+  const lastNewline = raw.lastIndexOf("\n");
+  return lastNewline === -1 ? "" : raw.slice(0, lastNewline);
+}
+
+// Evenly sized chunks of at most `maxSize` (129 -> 22x5 + 19, not
+// 25x5 + 4), so no single call is the long pole.
+function chunk<T>(items: T[], maxSize: number): T[][] {
+  if (items.length === 0) return [];
+  const count = Math.ceil(items.length / maxSize);
+  const size = Math.ceil(items.length / count);
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+function buildCapabilitySummary(entries: CapabilityEntry[]): string {
+  return entries.map((e) => `**${e.name}** [${e.verificationStatus}]: ${e.description}`).join("\n\n");
+}
+
 export async function POST() {
   const t0 = Date.now();
+  const ctx = createRunContext(ROUTE, t0);
+  return runWithGenerationGuard(ctx, maxDuration, () => finalize(ctx, t0));
+}
+
+async function finalize(ctx: GenerationRunContext, t0: number): Promise<Response> {
   console.log("[generate-capability-finalize][timing] START t0=" + t0);
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -34,6 +117,7 @@ export async function POST() {
     return NextResponse.json({ error: "Server configuration missing." }, { status: 500 });
   }
 
+  ctx.stage = "auth";
   const cookieStore = cookies();
   const authClient = createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
@@ -49,11 +133,33 @@ export async function POST() {
   if (userError || !user) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  ctx.userId = user.id;
 
   const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false }
   });
 
+  // Every FATAL failure goes through this so the run guard knows a record was
+  // actually written. Non-fatal warnings keep calling reportGenerationFailure
+  // directly - they must not mark the run as "failure already logged".
+  const reportFatal = async (args: {
+    errorType: string;
+    message: string;
+    severity?: "high" | "medium";
+    metadata?: Record<string, unknown>;
+  }) => {
+    const ok = await reportGenerationFailure({
+      adminClient,
+      sendEmailFn: sendEmail,
+      route: ROUTE,
+      userId: user.id,
+      ...args,
+      metadata: { stage: ctx.stage, elapsedMs: Date.now() - t0, ...args.metadata }
+    });
+    if (ok) ctx.failureLogged = true;
+  };
+
+  ctx.stage = "load_profile";
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
     .select("display_name, job_types, experience_level, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, capability_generation_status, document_metadata")
@@ -71,6 +177,19 @@ export async function POST() {
   }
 
   if (profile.capability_generation_status !== "groups_ready" || !profile.pending_evidence_groups) {
+    // Previously an unlogged 400 - and the one every "Retry finishing your
+    // profile" click hit after a failed run left the status at
+    // "writing_profile". Reported explicitly (with the status it saw) so a
+    // stuck gate is visible instead of looking like the retry did nothing.
+    await reportFatal({
+      errorType: "finalize_gate_rejected",
+      message: `Finalize rejected: capability_generation_status is "${profile.capability_generation_status}" (needs "groups_ready"), pending_evidence_groups ${profile.pending_evidence_groups ? "present" : "missing"}`,
+      severity: "medium",
+      metadata: {
+        capabilityGenerationStatus: profile.capability_generation_status,
+        hasPendingEvidenceGroups: Boolean(profile.pending_evidence_groups)
+      }
+    });
     return NextResponse.json(
       { error: "No pending evidence groups found. Please run capability generation from the start." },
       { status: 400 }
@@ -80,11 +199,17 @@ export async function POST() {
   // Phase feedback: written after the "groups_ready" gate check above (never
   // before it - overwriting that value before checking it would break the gate)
   // so a client polling this profile mid-request sees the real final stage
-  // running. Overwritten by "complete" before this request returns.
-  await adminClient
+  // running. Overwritten by "complete" on success; on ANY failure the run guard
+  // puts it back to "groups_ready" (pending_evidence_groups is retained), so the
+  // client's retry-finalize path can pass the gate above again.
+  const { error: phaseStatusError } = await adminClient
     .from("candidate_profiles")
     .update({ capability_generation_status: "writing_profile" })
     .eq("user_id", user.id);
+  if (phaseStatusError) {
+    console.error("[generate-capability-finalize] Failed to write writing_profile status", phaseStatusError);
+  }
+  ctx.statusOnFailure = "groups_ready";
 
   const evidenceGroups: EvidenceGroup[] = Array.isArray(profile.pending_evidence_groups)
     ? (profile.pending_evidence_groups as EvidenceGroup[])
@@ -110,177 +235,339 @@ export async function POST() {
     : "Not specified";
 
   const anthropic = new Anthropic({ apiKey });
+  const knownFullName = profile.display_name ?? null;
+
+  // Runs Step 3 over `groups` in parallel chunks, each with its own prompt, and
+  // returns every parsed entry (with its groupId and category tag) plus every
+  // groupId that did not come back. A chunk that throws or truncates degrades
+  // to "its groups are missing" - never to a silently shorter list.
+  const runStep3Chunks = async (
+    groups: EvidenceGroup[],
+    buildPrompt: (chunkGroups: EvidenceGroup[]) => string
+  ): Promise<{
+    entries: CapabilityEntry[];
+    groupIds: string[];
+    categories: Array<Step3Category | null>;
+    missingGroupIds: string[];
+    chunks: ChunkRecord[];
+  }> => {
+    const chunks = chunk(groups, STEP3_CHUNK_SIZE);
+    const records = await Promise.all(
+      chunks.map(async (chunkGroups, chunkIndex) => {
+        const base = { chunkIndex, groupIds: chunkGroups.map((g) => g.groupId), expectedCount: chunkGroups.length };
+        const tChunk = Date.now();
+        try {
+          const response = await anthropic.messages.create({
+            model: STEP3_MODEL,
+            max_tokens: STEP3_MAX_TOKENS,
+            temperature: 0.2,
+            messages: [{ role: "user", content: buildPrompt(chunkGroups) }],
+          });
+          const raw = response.content.find((b) => b.type === "text")?.text ?? "";
+          const parseInput = response.stop_reason === "max_tokens" ? trimTruncatedTail(raw) : raw;
+          const parsed = parseStep3Response(parseInput, chunkGroups, storedDocs);
+          const entries = parsed.kind === "entries" ? parsed.capabilityEntries : parsed.matchedEntries;
+          const groupIds = parsed.kind === "entries" ? parsed.entryGroupIds : parsed.matchedEntryGroupIds;
+          const categories = parsed.kind === "entries" ? parsed.entryCategories : parsed.matchedEntryCategories;
+          const missing = base.groupIds.filter((id) => !groupIds.includes(id));
+          const unknownGroupIds = Array.from(parseInput.matchAll(/^\[([\w-]+)\]/gm), (m) => m[1]).filter((id) => !base.groupIds.includes(id));
+          const record: ChunkRecord = {
+            ...base,
+            stopReason: response.stop_reason,
+            parsedCount: entries.length,
+            missingGroupIds: missing,
+            duplicateGroupIds: parsed.duplicateGroupIds,
+            unknownGroupIds,
+            error: null,
+            elapsedMs: Date.now() - tChunk,
+            outputTokens: response.usage?.output_tokens ?? null,
+            rawLength: raw.length,
+            raw
+          };
+          return { entries, groupIds, categories, record };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error("[generate-capability-finalize] Step 3 chunk " + chunkIndex + " threw", err);
+          const record: ChunkRecord = {
+            ...base,
+            stopReason: null,
+            parsedCount: 0,
+            missingGroupIds: base.groupIds,
+            duplicateGroupIds: [],
+            unknownGroupIds: [],
+            error: message,
+            elapsedMs: Date.now() - tChunk,
+            outputTokens: null,
+            rawLength: 0,
+            raw: ""
+          };
+          return { entries: [] as CapabilityEntry[], groupIds: [] as string[], categories: [] as Array<Step3Category | null>, record };
+        }
+      })
+    );
+    for (const r of records) {
+      console.log(
+        "[generate-capability-finalize][timing] step3 chunk " + r.record.chunkIndex + " delta=" + r.record.elapsedMs + "ms" +
+        " groups=" + r.record.expectedCount + " parsed=" + r.record.parsedCount + " stopReason=" + r.record.stopReason +
+        " outputTokens=" + r.record.outputTokens + (r.record.error ? " error=" + JSON.stringify(r.record.error) : "")
+      );
+    }
+    return {
+      entries: records.flatMap((r) => r.entries),
+      groupIds: records.flatMap((r) => r.groupIds),
+      categories: records.flatMap((r) => r.categories),
+      missingGroupIds: records.flatMap((r) => r.record.missingGroupIds),
+      chunks: records.map((r) => r.record)
+    };
+  };
+  const chunkSummaries = (chunks: ChunkRecord[]) =>
+    chunks.map(({ raw: _raw, ...rest }) => rest);
 
   // --- Step 3: civilian-language naming pass ---
   const t6 = Date.now();
 
   let capabilitySummary = "";
   let capabilityEntries: CapabilityEntry[] = [];
-  let rawStep3Text = "";
-  let step3StopReason: string | null = null;
-  let step3RetryRawText: string | null = null;
-  let step3RetryStopReason: string | null = null;
+  let entryGroupIds: string[] = [];
+  let step3InitialChunks: ChunkRecord[] = [];
+  let step3MissingRetryChunks: ChunkRecord[] = [];
+  const guardEntryRetryChunks: ChunkRecord[] = [];
 
   if (evidenceGroups.length > 0) {
-    let step3Phase: "initial" | "retry" = "initial";
-    try {
-      // max_tokens raised 4096->8192 (matching Step 2's grouping ceiling): with no
-      // description-length cap in buildStep3Prompt, 17+ evidence groups can plausibly
-      // approach 4096 output tokens on their own, and a response cut off mid-line
-      // fails the exact-count check below just like a genuinely malformed one - see
-      // the diagnostic that traced this route's 500s to exactly that failure mode.
-      const step3Response = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 8192,
-        temperature: 0.2,
-        messages: [{ role: "user", content: buildStep3Prompt(evidenceGroups) }],
-      });
+    ctx.stage = "step3_initial";
+    const initial = await runStep3Chunks(evidenceGroups, (g) => buildStep3Prompt(g));
+    step3InitialChunks = initial.chunks;
+    let entries = initial.entries;
+    let groupIds = initial.groupIds;
+    let categories = initial.categories;
 
-      step3StopReason = step3Response.stop_reason;
-      rawStep3Text = step3Response.content.find((b) => b.type === "text")?.text ?? "";
-      const result = parseStep3Response(rawStep3Text, evidenceGroups, storedDocs);
+    const baseMetadata = {
+      groupCount: evidenceGroups.length,
+      chunkSize: STEP3_CHUNK_SIZE,
+      maxTokens: STEP3_MAX_TOKENS,
+      initialChunks: chunkSummaries(initial.chunks),
+      initialParsedCount: entries.length,
+      initialMissingGroupIds: initial.missingGroupIds
+    };
 
-      if (result.kind === "entries") {
-        capabilitySummary = result.capabilitySummary;
-        capabilityEntries = result.capabilityEntries;
-      } else {
-        // Phase 2 always calls buildStep3Prompt without a correction instruction, so
-        // "sentinel" should never happen here - only "count_mismatch" is expected.
-        // A "count_mismatch" on a response that actually finished (stop_reason
-        // "end_turn", not "max_tokens") is a different failure from truncation: the
-        // model completed and simply skipped a handful of groups outright, so the
-        // other entries it did produce are fine - retrying just the missing groupIds
-        // recovers them instead of discarding a complete, mostly-correct response.
-        // Truncation gets no retry: that's a genuinely different problem (see the
-        // group-count-reduction fix, not a naming-pass retry) and retrying the same
-        // over-budget prompt would just truncate again.
-        const canRetry = result.reason === "count_mismatch" && step3StopReason !== "max_tokens";
+    if (initial.missingGroupIds.length > 0) {
+      // Groups missing from the first pass - a chunk that threw, truncated, or
+      // simply skipped some groups on a completed response. All get the same
+      // remedy: one targeted retry of just those groups (the partial trailing
+      // line of a truncated chunk was already dropped, so every entry kept from
+      // the first pass is complete). Truncation used to get no retry at all,
+      // which is exactly how the 2026-09-30 run died.
+      const missingGroups = evidenceGroups.filter((g) => initial.missingGroupIds.includes(g.groupId));
+      const elapsed = Date.now() - t0;
+      console.log(
+        "[generate-capability-finalize] Step 3 first pass missing " + missingGroups.length + " of " +
+        evidenceGroups.length + " group(s) - retrying: " + JSON.stringify(initial.missingGroupIds)
+      );
 
-        if (!canRetry) {
-          await reportGenerationFailure({
-            adminClient,
-            sendEmailFn: sendEmail,
-            route: "generate-capability-finalize",
-            errorType: "step3_failed",
-            message: `Step 3 naming pass output was not fully parseable (reason=${result.reason})`,
-            userId: user.id,
-            severity: "high",
-            metadata: {
-              reason: result.reason,
-              failureMode: step3StopReason === "max_tokens" ? "truncated" : "sentinel",
-              retryAttempted: false,
-              groupCount: evidenceGroups.length,
-              maxTokens: 8192,
-              stopReason: step3StopReason,
-              rawTextLength: result.rawTextLength,
-              parsedCount: result.parsedCount,
-              expectedCount: result.expectedCount,
-              missingGroupIds: result.missingGroupIds
-            },
-          });
-          return NextResponse.json({ error: "Failed to generate capability entries. Please try again." }, { status: 500 });
-        }
-
-        const missingGroups = evidenceGroups.filter((g) => result.missingGroupIds.includes(g.groupId));
-        console.log(
-          "[generate-capability-finalize] Step 3 count_mismatch on a completed response - retrying " +
-          missingGroups.length + " of " + evidenceGroups.length + " group(s): " + JSON.stringify(result.missingGroupIds)
-        );
-
-        step3Phase = "retry";
-        const retryResponse = await anthropic.messages.create({
-          model: "claude-sonnet-4-6",
-          max_tokens: 8192,
-          temperature: 0.2,
-          messages: [{ role: "user", content: buildStep3Prompt(missingGroups) }],
+      if (elapsed > STEP3_RETRY_DEADLINE_MS) {
+        await reportFatal({
+          errorType: "step3_failed",
+          message: `Step 3 naming pass: ${missingGroups.length} group(s) missing and retry skipped - ${Math.round(elapsed / 1000)}s already elapsed, not enough time budget left before maxDuration`,
+          metadata: { reason: "retry_skipped_time_budget", retryAttempted: false, ...baseMetadata },
         });
-        step3RetryStopReason = retryResponse.stop_reason;
-        step3RetryRawText = retryResponse.content.find((b) => b.type === "text")?.text ?? "";
-        const retryResult = parseStep3Response(step3RetryRawText, missingGroups, storedDocs);
-
-        if (retryResult.kind === "entries") {
-          // Concatenated rather than re-interleaved into the original evidenceGroups
-          // order: the first call's entries already follow the leadership/technical/
-          // credentials ordering buildStep3Prompt asked for, and CapabilityEntry
-          // carries no groupId to re-sort by - a handful of recovered entries tacked
-          // on the end is a cosmetic ordering cost, not a correctness one. No entry
-          // is dropped: every group is accounted for across the two calls (this
-          // branch), the report below (retry still short), or the no-retry report
-          // above (truncated/sentinel) - there is no path that silently loses one.
-          capabilityEntries = [...result.matchedEntries, ...retryResult.capabilityEntries];
-          capabilitySummary = capabilityEntries
-            .map((e) => `**${e.name}** [${e.verificationStatus}]: ${e.description}`)
-            .join("\n\n");
-          console.log(
-            "[generate-capability-finalize] Step 3 retry recovered all " + missingGroups.length + " missing group(s)"
-          );
-        } else {
-          // Only ONE retry (constraint D) - a second shortfall fails for good, but
-          // reported with both attempts' numbers so the log distinguishes "transient
-          // omission, recovered" from "these specific groupIds consistently will not
-          // name" instead of requiring another multi-session diagnostic to tell them apart.
-          const stillMissingGroupIds = retryResult.kind === "escalate" ? retryResult.missingGroupIds : missingGroups.map((g) => g.groupId);
-          const retryParsedCount = retryResult.kind === "escalate" ? retryResult.parsedCount : 0;
-          await reportGenerationFailure({
-            adminClient,
-            sendEmailFn: sendEmail,
-            route: "generate-capability-finalize",
-            errorType: "step3_failed",
-            message: `Step 3 naming pass: retry did not recover all missing groups (${stillMissingGroupIds.length} of ${missingGroups.length} still missing after one retry)`,
-            userId: user.id,
-            severity: "high",
-            metadata: {
-              reason: "retry_exhausted",
-              groupCount: evidenceGroups.length,
-              maxTokens: 8192,
-              initialStopReason: step3StopReason,
-              initialParsedCount: result.parsedCount,
-              initialExpectedCount: result.expectedCount,
-              initialMissingGroupIds: result.missingGroupIds,
-              retryStopReason: step3RetryStopReason,
-              retryParsedCount,
-              retryExpectedCount: missingGroups.length,
-              stillMissingGroupIds
-            },
-          });
-          return NextResponse.json({ error: "Failed to generate capability entries. Please try again." }, { status: 500 });
-        }
+        return NextResponse.json({ error: "Failed to generate capability entries. Please try again." }, { status: 500 });
       }
 
-      const tStep3End = Date.now();
-      console.log("[generate-capability-finalize][timing] step3 END t=" + tStep3End + " delta=" + (tStep3End - t6) + "ms capabilityLen=" + capabilitySummary.length + " entryCount=" + capabilityEntries.length);
-    } catch (err) {
-      // Previously swallowed silently: the route fell through to Step 4 with
-      // capabilitySummary/capabilityEntries left empty, producing a corrupted
-      // profile instead of a visible failure. Step 4's identical catch block
-      // (below) already reports and returns an error - this now matches it.
-      // Covers both the initial call and the (at most one) retry call - step3Phase
-      // says which was in flight when it threw.
-      const message = err instanceof Error ? err.message : String(err);
-      console.error("[generate-capability-finalize] step3 Sonnet error (phase=" + step3Phase + ")", err);
-      await reportGenerationFailure({
-        adminClient,
-        sendEmailFn: sendEmail,
-        route: "generate-capability-finalize",
-        errorType: "step3_failed",
-        message: `Step 3 naming pass API call failed during ${step3Phase} attempt: ${message}`,
-        userId: user.id,
-        severity: "high",
-        metadata: {
-          reason: "api_error",
-          phase: step3Phase,
-          groupCount: evidenceGroups.length,
-          maxTokens: 8192,
-        },
+      ctx.stage = "step3_missing_retry";
+      const retry = await runStep3Chunks(missingGroups, (g) => buildStep3Prompt(g));
+      step3MissingRetryChunks = retry.chunks;
+
+      if (retry.missingGroupIds.length > 0) {
+        // Only ONE retry (constraint D) - a second shortfall fails for good, but
+        // reported with both attempts' numbers so the log distinguishes "transient
+        // omission, recovered" from "these specific groupIds consistently will not
+        // name" instead of requiring another multi-session diagnostic to tell them apart.
+        const allThrew = [...initial.chunks, ...retry.chunks].every((c) => c.error !== null);
+        await reportFatal({
+          errorType: "step3_failed",
+          message: allThrew
+            ? `Step 3 naming pass API calls failed: ${initial.chunks[0]?.error ?? "unknown error"}`
+            : `Step 3 naming pass: retry did not recover all missing groups (${retry.missingGroupIds.length} of ${missingGroups.length} still missing after one retry)`,
+          metadata: {
+            reason: allThrew ? "api_error" : "retry_exhausted",
+            retryAttempted: true,
+            ...baseMetadata,
+            retryChunks: chunkSummaries(retry.chunks),
+            stillMissingGroupIds: retry.missingGroupIds
+          },
+        });
+        return NextResponse.json({ error: "Failed to generate capability entries. Please try again." }, { status: 500 });
+      }
+
+      entries = [...entries, ...retry.entries];
+      groupIds = [...groupIds, ...retry.groupIds];
+      categories = [...categories, ...retry.categories];
+      console.log(
+        "[generate-capability-finalize] Step 3 retry recovered all " + missingGroups.length + " missing group(s)"
+      );
+    }
+
+    // Merge the parallel chunks back into one leadership -> technical ->
+    // credentials list (the order buildStep3Prompt asks for within a call).
+    // Stable sort, so within a category the model's own order is kept. No entry
+    // is dropped: every group is accounted for across the calls above or the
+    // run has already failed.
+    const order = entries
+      .map((entry, i) => ({ entry, groupId: groupIds[i], rank: STEP3_CATEGORY_RANK[categories[i] ?? "TECHNICAL"], i }))
+      .sort((a, b) => a.rank - b.rank || a.i - b.i);
+    capabilityEntries = order.map((o) => o.entry);
+    entryGroupIds = order.map((o) => o.groupId);
+    capabilitySummary = buildCapabilitySummary(capabilityEntries);
+
+    const tStep3End = Date.now();
+    console.log("[generate-capability-finalize][timing] step3 END t=" + tStep3End + " delta=" + (tStep3End - t6) + "ms capabilityLen=" + capabilitySummary.length + " entryCount=" + capabilityEntries.length + " chunks=" + initial.chunks.length);
+  }
+
+  // --- Identity guard, targeted retry: capability entries ---
+  // Previously ONE flagged phrase in any of ~90-130 entries aborted the entire
+  // run at the very end (after Step 4 and the employer summary had also been
+  // paid for), and the next attempt regenerated everything from scratch. Now the
+  // flagged entries - and only those - are re-generated from their evidence
+  // groups with the rejected output and the exact failing phrases spelled out,
+  // the same pattern as the missing-groups retry above. Done BEFORE Step 4 so
+  // Step 4 and the employer summary are written from the corrected summary, not
+  // from text that already contains the identifying detail.
+  //
+  // Nothing is dropped: an entry whose retry is still flagged (or whose retry
+  // did not come back) keeps its original text, and the final guard block below
+  // aborts on it exactly as before. This changes recovery, not detection - every
+  // replacement is re-scanned by the same scanEmployerFacingText.
+  ctx.stage = "guard_entry_retry";
+  const initialEntryViolations = scanCapabilityEntries(capabilityEntries, { knownFullName });
+  type FlaggedEntry = {
+    entryIndex: number;
+    groupId: string;
+    name: string;
+    description: string;
+    flags: Array<{ category: string; match: string }>;
+  };
+  const entryRetryAttempts: Array<Record<string, unknown>> = [];
+  const entryRetryReport: Record<string, unknown> = {
+    flaggedEntryCount: 0,
+    initialViolations: [] as unknown[],
+    attempts: entryRetryAttempts,
+    skippedReason: null,
+    recoveredEntryIndexes: [] as number[],
+    unresolvedGroupIds: [] as string[]
+  };
+  const recoveredEntries: Array<{ entryIndex: number; groupId: string; attempt: number; before: { name: string; description: string }; after: { name: string; description: string } }> = [];
+
+  if (initialEntryViolations.length > 0) {
+    const flaggedIndexes = Array.from(new Set(initialEntryViolations.map((v) => v.index))).sort((a, b) => a - b);
+    entryRetryReport.flaggedEntryCount = flaggedIndexes.length;
+    entryRetryReport.initialViolations = buildGuardAbortViolationRows({
+      stringFields: [],
+      capabilityEntries,
+      capabilityEntryViolations: initialEntryViolations
+    });
+
+    let pending: FlaggedEntry[] = flaggedIndexes.map((entryIndex) => ({
+      entryIndex,
+      groupId: entryGroupIds[entryIndex],
+      name: capabilityEntries[entryIndex].name,
+      description: capabilityEntries[entryIndex].description,
+      flags: initialEntryViolations
+        .filter((v) => v.index === entryIndex)
+        .flatMap((v) => v.violations.map((x) => ({ category: x.category, match: x.match })))
+    }));
+    console.log(
+      "[generate-capability-finalize] guard flagged " + pending.length + " of " + capabilityEntries.length +
+      " capability entries - targeted retry of groups " + JSON.stringify(pending.map((f) => f.groupId))
+    );
+
+    // Up to two attempts. The second covers only what the first did not fix:
+    // entries whose rewrite still tripped the guard (retried again with the NEW
+    // flagged phrases, so the model sees what it got wrong this time) and
+    // entries that did not come back at all (seen 2026-09-30: the model wrote
+    // [b5-g13] for group b5-g14 - clean content, wrong label - so the group read
+    // as "not returned"). Anything still unresolved after that keeps its
+    // original flagged text and the final guard aborts on it.
+    for (let attempt = 1; attempt <= GUARD_ENTRY_RETRY_ATTEMPTS && pending.length > 0; attempt++) {
+      const elapsed = Date.now() - t0;
+      if (elapsed > GUARD_ENTRY_RETRY_DEADLINE_MS) {
+        entryRetryReport.skippedReason = `attempt ${attempt} skipped: time_budget (${Math.round(elapsed / 1000)}s elapsed)`;
+        break;
+      }
+
+      const byGroupId = new Map(pending.map((f) => [f.groupId, f]));
+      const groups = evidenceGroups.filter((g) => byGroupId.has(g.groupId));
+      const retry = await runStep3Chunks(groups, (chunkGroups) =>
+        buildStep3GuardRetryPrompt(chunkGroups, chunkGroups.map((g) => byGroupId.get(g.groupId)!))
+      );
+      guardEntryRetryChunks.push(...retry.chunks);
+
+      const nextPending: FlaggedEntry[] = [];
+      const stillFlagged: Array<Record<string, unknown>> = [];
+      let recoveredThisAttempt = 0;
+      retry.entries.forEach((candidate, i) => {
+        const groupId = retry.groupIds[i];
+        const f = byGroupId.get(groupId);
+        if (!f) return;
+        const nameViolations = scanEmployerFacingText(candidate.name, { knownFullName });
+        const descriptionViolations = scanEmployerFacingText(candidate.description, { knownFullName });
+        if (nameViolations.length === 0 && descriptionViolations.length === 0) {
+          const before = capabilityEntries[f.entryIndex];
+          recoveredEntries.push({
+            entryIndex: f.entryIndex,
+            groupId,
+            attempt,
+            before: { name: before.name, description: before.description },
+            after: { name: candidate.name, description: candidate.description }
+          });
+          capabilityEntries[f.entryIndex] = candidate;
+          (entryRetryReport.recoveredEntryIndexes as number[]).push(f.entryIndex);
+          recoveredThisAttempt++;
+        } else {
+          const newFlags = [...nameViolations, ...descriptionViolations].map((v) => ({ category: v.category, match: v.match }));
+          stillFlagged.push({
+            entryIndex: f.entryIndex,
+            groupId,
+            retriedName: candidate.name,
+            retriedDescription: candidate.description,
+            violations: [
+              ...nameViolations.map((v) => ({ part: "name", category: v.category, match: v.match })),
+              ...descriptionViolations.map((v) => ({ part: "description", category: v.category, match: v.match }))
+            ]
+          });
+          nextPending.push({ ...f, name: candidate.name, description: candidate.description, flags: [...f.flags, ...newFlags] });
+        }
       });
-      return NextResponse.json({ error: `AI generation failed: ${message}` }, { status: 500 });
+      for (const groupId of retry.missingGroupIds) {
+        const f = byGroupId.get(groupId);
+        if (f) nextPending.push(f);
+      }
+
+      entryRetryAttempts.push({
+        attempt,
+        requestedGroupIds: pending.map((f) => f.groupId),
+        recoveredCount: recoveredThisAttempt,
+        stillFlagged,
+        notReturnedGroupIds: retry.missingGroupIds,
+        chunks: chunkSummaries(retry.chunks)
+      });
+      console.log(
+        "[generate-capability-finalize] guard entry retry attempt " + attempt + ": recovered " + recoveredThisAttempt +
+        " of " + pending.length + ", still flagged " + stillFlagged.length + ", not returned " + retry.missingGroupIds.length
+      );
+      pending = nextPending;
+    }
+    entryRetryReport.unresolvedGroupIds = pending.map((f) => f.groupId);
+
+    if (recoveredEntries.length > 0) {
+      capabilitySummary = buildCapabilitySummary(capabilityEntries);
     }
   }
 
   const t6b = Date.now();
-  console.log("[generate-capability-finalize][timing] step3 complete t6b=" + t6b + " delta=" + (t6b - t6) + "ms capabilityLen=" + capabilitySummary.length);
+  console.log("[generate-capability-finalize][timing] step3 + entry guard retry complete t6b=" + t6b + " delta=" + (t6b - t6) + "ms capabilityLen=" + capabilitySummary.length);
 
   // --- Step 4: RECOMMENDED_POSITION, ENTRY_POINT, FUTURE_POSITIONS ---
+  ctx.stage = "step4";
   const t7 = Date.now();
 
   let positionsText = "";
@@ -320,6 +607,12 @@ export async function POST() {
     console.log("[generate-capability-finalize][timing] step4 FAILED t=" + tStep4Err + " delta=" + (tStep4Err - t7) + "ms");
     console.error("[generate-capability-finalize] step4 Anthropic API error", err);
     const message = err instanceof Error ? err.message : String(err);
+    // Previously console-only: this exit left no error_logs row.
+    await reportFatal({
+      errorType: "step4_failed",
+      message: `Step 4 API call failed: ${message}`,
+      metadata: { reason: "api_error", capabilityEntryCount: capabilityEntries.length }
+    });
     return NextResponse.json({ error: `AI generation failed: ${message}` }, { status: 500 });
   }
 
@@ -330,9 +623,9 @@ export async function POST() {
   );
 
   const step4Sections = extractStep4Sections(positionsText);
-  const recommendedPosition = step4Sections.recommendedPosition;
-  const entryPoint = step4Sections.entryPoint;
-  const futurePositions = step4Sections.futurePositions;
+  let recommendedPosition = step4Sections.recommendedPosition;
+  let entryPoint = step4Sections.entryPoint;
+  let futurePositions = step4Sections.futurePositions;
   let employerSummary = "";
 
   // --- Observability: stage tracing + raw-response persistence --------------
@@ -365,10 +658,9 @@ export async function POST() {
     const payload = {
       reason,
       step3: {
-        stopReason: step3StopReason,
-        length: rawStep3Text.length,
-        raw: rawStep3Text,
-        retry: step3RetryRawText === null ? null : { stopReason: step3RetryStopReason, length: step3RetryRawText.length, raw: step3RetryRawText }
+        initialChunks: step3InitialChunks,
+        missingGroupsRetry: step3MissingRetryChunks.length === 0 ? null : step3MissingRetryChunks,
+        guardEntryRetry: guardEntryRetryChunks.length === 0 ? null : guardEntryRetryChunks
       },
       step4: { stopReason: step4StopReason, length: positionsText.length, raw: positionsText },
       employerSummary: { stopReason: employerStopReason, length: rawEmployerText.length, raw: rawEmployerText },
@@ -381,14 +673,15 @@ export async function POST() {
     };
     console.log("[generate-capability-finalize][generation-debug] " + JSON.stringify(payload));
     try {
-      await adminClient.from("error_logs").insert({
-        route: "generate-capability-finalize",
+      const { error } = await adminClient.from("error_logs").insert({
+        route: ROUTE,
         error_message: "Raw capability-generation responses captured for run (" + reason + ")",
         error_type: "generation_debug",
         user_id: user.id,
         severity: "low",
         metadata: payload
       });
+      if (error) console.error("[generate-capability-finalize] generation_debug insert rejected", error);
     } catch (err) {
       console.error("[generate-capability-finalize] Failed to write generation_debug row", err);
     }
@@ -401,14 +694,9 @@ export async function POST() {
     // failure mode diagnosed: nothing throws on a truncated-but-200 response, so
     // this check is the only thing standing between that and a silent partial save.
     await persistGenerationDebug("step4-missing-sections");
-    await reportGenerationFailure({
-      adminClient,
-      sendEmailFn: sendEmail,
-      route: "generate-capability-finalize",
+    await reportFatal({
       errorType: "step4_incomplete",
       message: `Step 4 response missing required section(s): ${step4Sections.missingSections.join(", ")}`,
-      userId: user.id,
-      severity: "high",
       metadata: {
         missingSections: step4Sections.missingSections,
         stopReason: step4StopReason,
@@ -424,6 +712,7 @@ export async function POST() {
 
   traceStage("after-missingSections-check");
 
+  ctx.stage = "employer_summary";
   const t8 = Date.now();
 
   // --- Employer Summary ---
@@ -454,7 +743,7 @@ export async function POST() {
       await reportGenerationFailure({
         adminClient,
         sendEmailFn: sendEmail,
-        route: "generate-capability-finalize",
+        route: ROUTE,
         errorType: "employer_summary_empty_response",
         message: "Employer summary call returned no usable text block",
         userId: user.id,
@@ -473,7 +762,7 @@ export async function POST() {
     await reportGenerationFailure({
       adminClient,
       sendEmailFn: sendEmail,
-      route: "generate-capability-finalize",
+      route: ROUTE,
       errorType: "employer_summary_api_error",
       message: `Employer summary API call threw: ${message}`,
       userId: user.id,
@@ -485,8 +774,91 @@ export async function POST() {
   const t9 = Date.now();
   console.log("[generate-capability-finalize][timing] employer summary complete t9=" + t9 + " delta=" + (t9 - t8) + "ms employerSummaryLen=" + employerSummary.length);
 
+  // --- Identity guard, targeted retry: free-text fields ---
+  // Same recovery posture as the entry retry above, for the four single-block
+  // fields: a flagged field gets one minimal rewrite with its failing phrases
+  // named, and the rewrite is kept only if it re-scans clean. On 2026-09-27 a
+  // single "bridge to" in future_positions was enough to discard the run.
+  ctx.stage = "guard_field_retry";
+  type GuardedField = "employer_summary" | "recommended_position" | "entry_point" | "future_positions";
+  const getField = (f: GuardedField) =>
+    f === "employer_summary" ? employerSummary : f === "recommended_position" ? recommendedPosition : f === "entry_point" ? entryPoint : futurePositions;
+  const setField = (f: GuardedField, value: string) => {
+    if (f === "employer_summary") employerSummary = value;
+    else if (f === "recommended_position") recommendedPosition = value;
+    else if (f === "entry_point") entryPoint = value;
+    else futurePositions = value;
+  };
+  const guardedFields: Array<{ field: GuardedField; severity: "high" | "medium" }> = [
+    { field: "employer_summary", severity: "high" },
+    { field: "recommended_position", severity: "medium" },
+    { field: "entry_point", severity: "medium" },
+    { field: "future_positions", severity: "medium" }
+  ];
+  const fieldRetryReport: Array<Record<string, unknown>> = [];
+  const recoveredFields: Array<{ field: string; initialViolations: unknown[]; before: string; after: string }> = [];
+
+  const initialFieldFlags = guardedFields
+    .map((g) => ({ ...g, text: getField(g.field), violations: scanEmployerFacingText(getField(g.field), { knownFullName }) }))
+    .filter((g) => g.violations.length > 0);
+
+  if (initialFieldFlags.length > 0) {
+    const elapsed = Date.now() - t0;
+    if (elapsed > GUARD_FIELD_RETRY_DEADLINE_MS) {
+      for (const g of initialFieldFlags) {
+        fieldRetryReport.push({
+          field: g.field,
+          attempted: false,
+          skippedReason: `time_budget (${Math.round(elapsed / 1000)}s elapsed)`,
+          initialViolations: buildGuardAbortViolationRows({ stringFields: [g] })
+        });
+      }
+    } else {
+      await Promise.all(initialFieldFlags.map(async (g) => {
+        const initialViolations = buildGuardAbortViolationRows({ stringFields: [g] });
+        try {
+          const response = await anthropic.messages.create({
+            model: "claude-sonnet-4-6",
+            max_tokens: 8192,
+            temperature: 0.2,
+            messages: [{
+              role: "user",
+              content: buildGuardRewritePrompt(g.field, g.text, g.violations.map((v) => ({ category: v.category, match: v.match })))
+            }],
+          });
+          const rewritten = (response.content.find((b) => b.type === "text")?.text ?? "").trim();
+          const retryViolations = scanEmployerFacingText(rewritten, { knownFullName });
+          const accepted = rewritten.length > 0 && response.stop_reason !== "max_tokens" && retryViolations.length === 0;
+          if (accepted) {
+            setField(g.field, rewritten);
+            recoveredFields.push({ field: g.field, initialViolations, before: g.text, after: rewritten });
+          }
+          fieldRetryReport.push({
+            field: g.field,
+            attempted: true,
+            recovered: accepted,
+            stopReason: response.stop_reason,
+            rewrittenLength: rewritten.length,
+            initialViolations,
+            retryViolations: retryViolations.map((v) => ({ category: v.category, match: v.match })),
+            rewrittenPreview: accepted ? null : rewritten.slice(0, 1000)
+          });
+        } catch (err) {
+          fieldRetryReport.push({
+            field: g.field,
+            attempted: true,
+            recovered: false,
+            error: err instanceof Error ? err.message : String(err),
+            initialViolations
+          });
+        }
+      }));
+    }
+  }
+
   await persistGenerationDebug("success-path");
 
+  // --- Final identity guard (unchanged detection, same abort posture) ---
   // Mechanical safety net: this is the same category of failure that shipped
   // a live name/rank/clearance-sponsor/tenure disclosure in commit e79cd4f7 -
   // a prompt asking for anonymity is not a control, only a check on the
@@ -494,30 +866,29 @@ export async function POST() {
   // it is the field that actually reaches an employer's screen; the other
   // three are candidate-facing today but held to the same policy, so they're
   // checked too, at "medium," to catch the same failure mode before it can
-  // ever reach a future employer-facing surface.
-  const knownFullName = profile.display_name ?? null;
-  const guardChecks: Array<{ field: string; text: string; severity: "high" | "medium" }> = [
-    { field: "employer_summary", text: employerSummary, severity: "high" },
-    { field: "recommended_position", text: recommendedPosition, severity: "medium" },
-    { field: "entry_point", text: entryPoint, severity: "medium" },
-    { field: "future_positions", text: futurePositions, severity: "medium" }
-  ];
+  // ever reach a future employer-facing surface. Every value checked here is
+  // the post-retry value - a retry that did not come back clean left the
+  // original text in place, so it is caught here exactly as before.
+  ctx.stage = "guard_final";
   const redactedFields: string[] = [];
-  for (const check of guardChecks) {
-    const violations = scanEmployerFacingText(check.text, { knownFullName });
+  const finalStringViolations: Array<{ field: string; text: string; violations: TextGuardViolation[] }> = [];
+  for (const g of guardedFields) {
+    const text = getField(g.field);
+    const violations = scanEmployerFacingText(text, { knownFullName });
     if (violations.length === 0) {
       continue;
     }
-    redactedFields.push(check.field);
+    redactedFields.push(g.field);
+    finalStringViolations.push({ field: g.field, text, violations });
     await reportTextGuardViolation({
       adminClient,
       sendEmailFn: sendEmail,
-      route: "generate-capability-finalize",
-      field: check.field,
+      route: ROUTE,
+      field: g.field,
       userId: user.id,
       violations,
-      text: check.text,
-      severity: check.severity
+      text,
+      severity: g.severity
     });
   }
 
@@ -525,9 +896,7 @@ export async function POST() {
   // an array of {name, description} entries, not one block of text, and it DOES
   // reach an employer today - the "candidate-profiles" read endpoint sends this
   // field raw (see the aiFields fix in api/mvp/read/route.ts), so it is held to
-  // the same "high" severity as employer_summary, not "medium". Scanned as one
-  // aggregate check (not one reportTextGuardViolation call per bad entry) so a
-  // systemic failure across many entries produces one alert, not a flood of them.
+  // the same "high" severity as employer_summary, not "medium".
   const capabilityEntryViolations = scanCapabilityEntries(capabilityEntries, { knownFullName });
   if (capabilityEntryViolations.length > 0) {
     redactedFields.push("capability_entries");
@@ -535,30 +904,35 @@ export async function POST() {
 
   traceStage("after-guard-block");
 
-  // ABORT on any redaction - same failure posture as the Step 4 missing-sections
-  // check above. A hollowed-out profile is not a success: it must never be written
-  // with status "complete" or returned as 200. (Previously this block zeroed each
-  // flagged field in place and let the save proceed.)
+  // ABORT on any remaining violation - same failure posture as the Step 4
+  // missing-sections check above. A hollowed-out profile is not a success: it
+  // must never be written with status "complete" or returned as 200.
   if (redactedFields.length > 0) {
-    await reportGenerationFailure({
-      adminClient,
-      sendEmailFn: sendEmail,
-      route: "generate-capability-finalize",
+    // metadata.violations: one flat row per violation, per failing field - the
+    // category, the exact matched string, and the surrounding context with the
+    // match bracketed [[like this]]. This was previously absent (only the list
+    // of failing field names was recorded here, with string-field details split
+    // off into separate privacy_violation rows), which is what turned each abort
+    // into a guessing session.
+    const violationRows = buildGuardAbortViolationRows({
+      stringFields: finalStringViolations,
+      capabilityEntries,
+      capabilityEntryViolations
+    });
+    await reportFatal({
       errorType: "guard_redaction_abort",
-      message: `Text guard flagged field(s); aborted before write: ${redactedFields.join(", ")}`,
-      userId: user.id,
-      severity: "high",
+      message: `Text guard flagged field(s) after targeted retry; aborted before write: ${redactedFields.join(", ")} (${violationRows.length} violation(s))`,
       metadata: {
         redactedFields,
+        violationCount: violationRows.length,
+        violations: violationRows,
         step4StopReason,
-        employerSummaryLength: rawEmployerText.length,
+        employerSummaryLength: employerSummary.length,
         capabilityEntryCount: capabilityEntries.length,
-        capabilityEntryViolations: capabilityEntryViolations.map((v) => ({
-          index: v.index,
-          field: v.field,
-          textPreview: (v.field === "name" ? capabilityEntries[v.index]?.name : capabilityEntries[v.index]?.description)?.slice(0, 500),
-          violations: v.violations
-        }))
+        guardRetry: {
+          capabilityEntries: entryRetryReport,
+          stringFields: fieldRetryReport
+        }
       }
     });
     return NextResponse.json(
@@ -567,8 +941,33 @@ export async function POST() {
     );
   }
 
+  // The run is going to succeed, but the model DID produce identifying text
+  // that the retry corrected - record exactly what was caught and what replaced
+  // it, so a recovered run is visible (and prompt drift can be tracked) rather
+  // than indistinguishable from a clean first pass.
+  if (recoveredEntries.length > 0 || recoveredFields.length > 0) {
+    await reportGenerationFailure({
+      adminClient,
+      sendEmailFn: sendEmail,
+      route: ROUTE,
+      errorType: "guard_retry_recovered",
+      message: `Identity guard flagged ${recoveredEntries.length} capability entr${recoveredEntries.length === 1 ? "y" : "ies"} and ${recoveredFields.length} field(s); targeted retry corrected all of them`,
+      userId: user.id,
+      severity: "medium",
+      metadata: {
+        capabilityEntries: {
+          initialViolations: entryRetryReport.initialViolations,
+          recovered: recoveredEntries
+        },
+        stringFields: recoveredFields
+      }
+    });
+  }
+
   traceStage("before-db-write");
 
+  ctx.stage = "db_write";
+  ctx.committing = true;
   const { error: updateError } = await adminClient
     .from("candidate_profiles")
     .update({
@@ -586,9 +985,17 @@ export async function POST() {
     .eq("user_id", user.id);
 
   if (updateError) {
+    ctx.committing = false;
     console.error("[generate-capability-finalize] Failed to save AI output", updateError);
+    // Previously console-only.
+    await reportFatal({
+      errorType: "profile_write_failed",
+      message: `Final candidate_profiles write failed: ${updateError.message}`,
+      metadata: { code: updateError.code, details: updateError.details, capabilityEntryCount: capabilityEntries.length }
+    });
     return NextResponse.json({ error: "Failed to save generated profile." }, { status: 500 });
   }
+  ctx.stage = "done";
 
   // Completion notification - so someone who navigates away from the profile
   // page while this was running still learns it finished. Fired here rather

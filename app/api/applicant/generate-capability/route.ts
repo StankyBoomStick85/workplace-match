@@ -5,13 +5,26 @@ import { createClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
 import { extractEvidenceFromDocuments, runEvidenceGrouping, buildSelfReportedEvidenceItems, type EvidenceItem, type StoredDoc } from "@/lib/capabilityPipeline";
 import { reportGenerationFailure } from "@/lib/generationAlerts";
+import { createRunContext, runWithGenerationGuard, type GenerationRunContext } from "@/lib/generationRunGuard";
 import { sendEmail } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
+const ROUTE = "generate-capability";
+
+// In-progress values this route writes; a profile found in one of these at the
+// start of a run was left there by an earlier run that died, so it is not a
+// meaningful value to restore on failure.
+const IN_PROGRESS_STATUSES = new Set(["extracting_documents", "grouping_capabilities", "writing_profile"]);
+
 export async function POST(request: Request) {
   const t0 = Date.now();
+  const ctx = createRunContext(ROUTE, t0);
+  return runWithGenerationGuard(ctx, maxDuration, () => generate(request, ctx, t0));
+}
+
+async function generate(request: Request, ctx: GenerationRunContext, t0: number): Promise<Response> {
   console.log("[generate-capability][timing] START t0=" + t0);
 
   // Optional: present only when this run is the first half of a correction's Tier 2
@@ -45,6 +58,7 @@ export async function POST(request: Request) {
   if (userError || !user) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  ctx.userId = user.id;
 
   const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false }
@@ -52,7 +66,7 @@ export async function POST(request: Request) {
 
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("capability_tags, summary, document_metadata")
+    .select("capability_tags, summary, document_metadata, capability_generation_status")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -86,6 +100,14 @@ export async function POST(request: Request) {
   // this profile mid-request sees which real stage is running (see
   // ApplicantProfileForm.tsx's generate-phase polling). Always overwritten by
   // "groups_ready" before this request returns - see the final update below.
+  // On any failure from here on, the run guard writes back the status the
+  // profile had before this run (so a previously complete profile still reads
+  // "complete", and one with usable pending groups still reads "groups_ready" -
+  // this route only replaces pending_evidence_groups in its final write), or
+  // "failed" if it had none / was itself left stuck by an earlier dead run.
+  const priorStatus = typeof profile.capability_generation_status === "string" ? profile.capability_generation_status : null;
+  ctx.statusOnFailure = priorStatus && !IN_PROGRESS_STATUSES.has(priorStatus) ? priorStatus : "failed";
+  ctx.stage = "extracting_documents";
   await adminClient
     .from("candidate_profiles")
     .update({ capability_generation_status: "extracting_documents" })
@@ -186,6 +208,7 @@ export async function POST(request: Request) {
 
   console.log("[generate-capability][timing] totalEvidence (incl. self-reported)=" + allEvidenceItems.length);
 
+  ctx.stage = "grouping_capabilities";
   await adminClient
     .from("candidate_profiles")
     .update({ capability_generation_status: "grouping_capabilities" })
@@ -296,7 +319,7 @@ export async function POST(request: Request) {
   // verified has zero footprint in the final groups. Retrying Step 2 is cheap;
   // shipping a profile that silently lost verified credentials is not.
   if (cov.missingOfficialDocIds.length > 0) {
-    await reportGenerationFailure({
+    ctx.failureLogged = await reportGenerationFailure({
       adminClient,
       sendEmailFn: sendEmail,
       route: "generate-capability",
@@ -388,6 +411,7 @@ export async function POST(request: Request) {
     }
   }
 
+  ctx.stage = "db_write";
   const tDbWriteStart = Date.now();
   const { error: updateError } = await adminClient
     .from("candidate_profiles")
@@ -398,9 +422,21 @@ export async function POST(request: Request) {
   if (updateError) {
     console.error("[generate-capability] Failed to save pending evidence groups", updateError);
     console.log("[generate-capability][timing] DB write FAILED delta=" + (tDbWriteEnd - tDbWriteStart) + "ms");
+    // Previously console-only: this exit left no error_logs row.
+    ctx.failureLogged = await reportGenerationFailure({
+      adminClient,
+      sendEmailFn: sendEmail,
+      route: ROUTE,
+      errorType: "phase1_write_failed",
+      message: `Phase 1 failed to save pending evidence groups: ${updateError.message}`,
+      userId: user.id,
+      severity: "high",
+      metadata: { code: updateError.code, details: updateError.details, groupCount: evidenceGroups.length }
+    });
     return NextResponse.json({ error: "Failed to save evidence groups." }, { status: 500 });
   }
 
+  ctx.stage = "done";
   console.log("[generate-capability][timing] DB write complete delta=" + (tDbWriteEnd - tDbWriteStart) + "ms");
 
   // Temporary debug gate: when set, Phase 1 still saves pending_evidence_groups as

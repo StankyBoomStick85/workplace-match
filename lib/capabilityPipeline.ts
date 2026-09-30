@@ -980,15 +980,36 @@ Naming rules:
 
 Output ONLY the capability entries in this exact format (no ## heading, no preamble, no trailing text):
 
-[groupId] **[Capability Name]** [VERIFIED]: [Description]
+[groupId] (CATEGORY) **[Capability Name]** [VERIFIED]: [Description]
 
 or
 
-[groupId] **[Capability Name]** [USER_PROVIDED]: [Description]
+[groupId] (CATEGORY) **[Capability Name]** [USER_PROVIDED]: [Description]
 
 Use each group's own "groupId" value from the EVIDENCE GROUPS above, exactly as given, in square brackets at the very start of the line.
 
+CATEGORY is exactly one of LEADERSHIP (leadership/management/people-development), TECHNICAL (technical/operational/domain-specific), or CREDENTIAL (education/certifications/credentials), in parentheses - the same three-way split used for ordering.
+
 One entry per line. No numbered lists. No bullets. No category headers in the output.`;
+}
+
+// Order rank for the (CATEGORY) tag Step 3 emits. Lets entries produced by
+// several parallel Step 3 calls be merged back into the leadership / technical /
+// credentials order a single call would have produced. An entry with no tag
+// (older output, or the model omitted it) sorts with TECHNICAL, the middle band.
+export type Step3Category = "LEADERSHIP" | "TECHNICAL" | "CREDENTIAL";
+export const STEP3_CATEGORY_RANK: Record<Step3Category, number> = { LEADERSHIP: 0, TECHNICAL: 1, CREDENTIAL: 2 };
+
+// Maps whatever the model put in the parentheses to a category by prefix,
+// case-insensitive: "CREDENTIALS", "Leadership", "technical skills" all map;
+// anything unrecognized is null (sorted as TECHNICAL). The tag only affects
+// ordering - it must never be the reason an entry fails to parse.
+function toStep3Category(tag: string | undefined): Step3Category | null {
+  const t = (tag ?? "").trim().toUpperCase();
+  if (t.startsWith("LEADERSHIP")) return "LEADERSHIP";
+  if (t.startsWith("TECHNICAL")) return "TECHNICAL";
+  if (t.startsWith("CREDENTIAL")) return "CREDENTIAL";
+  return null;
 }
 
 // "sentinel" = the model deliberately returned STEP3_ESCALATE_SENTINEL (only
@@ -1013,8 +1034,21 @@ export type Step3Result =
       expectedCount: number;
       missingGroupIds: string[];
       matchedEntries: CapabilityEntry[];
+      // groupId of each matchedEntries[i], same order - CapabilityEntry itself
+      // carries no groupId (it is the persisted shape), but a targeted retry has
+      // to know which evidence group produced a given entry.
+      matchedEntryGroupIds: string[];
+      matchedEntryCategories: Array<Step3Category | null>;
+      duplicateGroupIds: string[];
     }
-  | { kind: "entries"; capabilitySummary: string; capabilityEntries: CapabilityEntry[] };
+  | {
+      kind: "entries";
+      capabilitySummary: string;
+      capabilityEntries: CapabilityEntry[];
+      entryGroupIds: string[];
+      entryCategories: Array<Step3Category | null>;
+      duplicateGroupIds: string[];
+    };
 
 // Parses Step 3's line-prefixed output. verificationStatus is ALWAYS taken from the
 // stored group's own field, never from the tag text Step 3 echoed back — this is what
@@ -1033,21 +1067,33 @@ export function parseStep3Response(raw: string, evidenceGroups: EvidenceGroup[],
       parsedCount: 0,
       expectedCount: evidenceGroups.length,
       missingGroupIds: [],
-      matchedEntries: []
+      matchedEntries: [],
+      matchedEntryGroupIds: [],
+      matchedEntryCategories: [],
+      duplicateGroupIds: []
     };
   }
 
   const capabilityEntries: CapabilityEntry[] = [];
+  const entryGroupIds: string[] = [];
+  const entryCategories: Array<Step3Category | null> = [];
+  const duplicateGroupIds: string[] = [];
   const prosLines: string[] = [];
   const matchedGroupIds = new Set<string>();
 
   for (const line of raw.split("\n")) {
-    const prefixMatch = line.match(/^\[([\w-]+)\]\s*(.*)$/);
+    // The (CATEGORY) tag is optional and matched loosely - any short
+    // parenthetical right after the [groupId], whatever its spelling or case -
+    // so a missing or garbled tag can never leave "(" at the start of `rest` and
+    // fail the entry match below (which would drop the whole entry as a missing
+    // group). It is stripped from the prose summary either way; toStep3Category
+    // decides what, if anything, it means.
+    const prefixMatch = line.match(/^\[([\w-]+)\]\s*(?:\(([^()*]{0,40})\)\s*)?(.*)$/);
     if (!prefixMatch) {
       prosLines.push(line);
       continue;
     }
-    const [, groupId, rest] = prefixMatch;
+    const [, groupId, category, rest] = prefixMatch;
     prosLines.push(rest);
 
     const entryMatch = rest.match(/^\*\*(.+?)\*\*\s*\[(VERIFIED|USER_PROVIDED)\]:\s*(.*)$/);
@@ -1055,6 +1101,14 @@ export function parseStep3Response(raw: string, evidenceGroups: EvidenceGroup[],
     const [, name, , description] = entryMatch;
     const group = evidenceGroups.find((g) => g.groupId === groupId);
     if (!group) continue;
+    // A groupId the model emitted twice (seen 2026-09-30: one group split into
+    // two differently-named entries) keeps only its first entry. Counting both
+    // used to inflate the entry count - enough to mask a genuinely missing group
+    // in the length check below, or to save a duplicate entry.
+    if (matchedGroupIds.has(groupId)) {
+      duplicateGroupIds.push(groupId);
+      continue;
+    }
 
     capabilityEntries.push({
       name: name.trim(),
@@ -1065,6 +1119,8 @@ export function parseStep3Response(raw: string, evidenceGroups: EvidenceGroup[],
       corroboratingDocLabels: group.corroboratingDocIds.map((id) => resolveDocLabel(id, storedDocs))
     });
     matchedGroupIds.add(groupId);
+    entryGroupIds.push(groupId);
+    entryCategories.push(toStep3Category(category));
   }
 
   if (capabilityEntries.length !== evidenceGroups.length) {
@@ -1077,11 +1133,100 @@ export function parseStep3Response(raw: string, evidenceGroups: EvidenceGroup[],
       parsedCount: capabilityEntries.length,
       expectedCount: evidenceGroups.length,
       missingGroupIds: evidenceGroups.map((g) => g.groupId).filter((id) => !matchedGroupIds.has(id)),
-      matchedEntries: capabilityEntries
+      matchedEntries: capabilityEntries,
+      matchedEntryGroupIds: entryGroupIds,
+      matchedEntryCategories: entryCategories,
+      duplicateGroupIds
     };
   }
 
-  return { kind: "entries", capabilitySummary: prosLines.join("\n"), capabilityEntries };
+  return { kind: "entries", capabilitySummary: prosLines.join("\n"), capabilityEntries, entryGroupIds, entryCategories, duplicateGroupIds };
+}
+
+// ---------- Identity-guard targeted retry ----------
+
+// Plain-language correction per guard category, used to tell the model exactly
+// what was wrong with a flagged phrase. Keyed by lib/employerTextGuard.ts's
+// TextGuardCategory values (as plain strings, so this module stays free of a
+// dependency on the guard). These instructions only describe how to REWRITE -
+// the guard's detection rules are untouched, and every rewritten entry is
+// re-scanned by the same guard before it can be kept.
+const GUARD_CATEGORY_CORRECTIONS: Record<string, string> = {
+  candidate_name: "Never include the candidate's name or initials. Refer to them only as \"this candidate\".",
+  honorific_name: "Never use an honorific with a name (Mr./Ms./Dr. + name). Refer to them only as \"this candidate\".",
+  gendered_pronoun: "Use \"this candidate\" or they/them/their only - no he/him/his/she/her.",
+  military_rank: "Do not state any rank or rank title. Describe the level of responsibility instead (e.g. \"senior team leader\", \"led a team of 12\").",
+  branch_of_service: "Do not name any branch of service, unit, command, or organization type. Describe the work itself generically.",
+  clearance_sponsor_or_agency: "Do not name any government agency or organization. A security clearance may be stated as a capability fact, never who granted or sponsored it.",
+  explicit_year: "Do not state any calendar year or date.",
+  tenure_count: "Do not state any duration, tenure length, or number of years. Describe scope, scale, and outcomes instead.",
+  publication_reference: "Do not mention any publication, book, article, or authored work.",
+  outsider_framing: "Do not use the words \"military\" or \"civilian\", and do not frame the candidate as transitioning, bridging, translating, or entering a new sector. It is simply their experience."
+};
+
+export type GuardFlaggedPhrase = { category: string; match: string };
+
+function formatGuardCorrections(flags: GuardFlaggedPhrase[]): string {
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const f of flags) {
+    const key = f.category + "\u0000" + f.match.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    lines.push(`   - "${f.match}" (${f.category}): ${GUARD_CATEGORY_CORRECTIONS[f.category] ?? "Remove this identifying detail."}`);
+  }
+  return lines.join("\n");
+}
+
+// Re-runs Step 3 for ONLY the entries the identity guard flagged, with the
+// previous (rejected) output and the exact phrases that failed spelled out.
+// Mirrors the missing-groupIds retry: the same buildStep3Prompt contract and
+// the same parseStep3Response parse, so a retried entry is indistinguishable
+// in shape from a first-pass entry and can be dropped straight back into place.
+export function buildStep3GuardRetryPrompt(
+  groups: EvidenceGroup[],
+  flagged: Array<{ groupId: string; name: string; description: string; flags: GuardFlaggedPhrase[] }>
+): string {
+  const corrections = flagged
+    .map((f) =>
+      `[${f.groupId}] PREVIOUS OUTPUT (REJECTED):\n` +
+      `   **${f.name}**: ${f.description}\n` +
+      `   Phrases that caused the rejection - none of these may appear in your rewrite:\n` +
+      formatGuardCorrections(f.flags)
+    )
+    .join("\n\n");
+
+  return `${buildStep3Prompt(groups)}
+
+CORRECTION REQUIRED - READ CAREFULLY:
+A previous attempt at these exact entries was rejected by an automated identity check, because it contained identifying detail that must never reach an employer. Rewrite each entry below from its evidence group, following every rule above, and specifically removing each flagged phrase. The check is literal and case-insensitive: a flagged word must not appear anywhere in the rewrite in ANY sense - even where you mean it innocently (e.g. "major" meaning "large", "general" meaning "overall", "private" meaning "confidential") - so use a different word. Do not substitute an abbreviation, synonym, or paraphrase that still identifies the same thing (for example, replacing a rank with a different rank, or a branch name with its initials). Keep the capability itself - the scale, nature, and outcomes of the work - fully intact; only the identifying detail goes.
+
+${corrections}
+
+Produce exactly one entry for each groupId listed above, in the same output format.`;
+}
+
+// Targeted rewrite of one flagged free-text field (recommended_position,
+// entry_point, future_positions, employer_summary). The text itself is the
+// input - these fields have no per-group source to regenerate from - and the
+// model is told to change only the flagged wording and return the same
+// structure, so the field's content and formatting survive the correction.
+export function buildGuardRewritePrompt(field: string, text: string, flags: GuardFlaggedPhrase[]): string {
+  return `The following text was written for a hiring manager on an anonymous hiring platform, but an automated identity check rejected it because it contains identifying or disallowed wording. This platform never discloses a candidate's identity to an employer.
+
+Rewrite it with the minimum change needed to remove every flagged phrase below. The check is literal and case-insensitive: a flagged word must not appear anywhere in the rewrite in ANY sense - even where you mean it innocently (e.g. "major" meaning "large", "general" meaning "overall") - so use a different word. Keep everything else - meaning, structure, markdown formatting, headings, bold titles, line breaks, and length - as close to the original as possible. Do not substitute an abbreviation, synonym, or paraphrase that still identifies the same thing. Refer to the candidate only as "this candidate" or they/them/their.
+
+FLAGGED PHRASES:
+${formatGuardCorrections(flags)}
+
+FIELD: ${field}
+
+ORIGINAL TEXT:
+<<<
+${text}
+>>>
+
+Output ONLY the rewritten text - no preamble, no explanation, no delimiters.`;
 }
 
 // ---------- Step 4: recommended position / entry point / future positions ----------

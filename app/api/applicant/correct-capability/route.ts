@@ -14,7 +14,7 @@ import {
   type StoredDoc,
   type Step3Result
 } from "@/lib/capabilityPipeline";
-import { scanEmployerFacingText, reportTextGuardViolation, scanCapabilityEntries } from "@/lib/employerTextGuard";
+import { scanEmployerFacingText, reportTextGuardViolation, scanCapabilityEntries, buildGuardAbortViolationRows } from "@/lib/employerTextGuard";
 import { reportGenerationFailure } from "@/lib/generationAlerts";
 import { sendEmail } from "@/lib/email";
 
@@ -322,6 +322,10 @@ export async function POST(request: Request) {
       userId: user.id,
       severity: "high",
       metadata: {
+        redactedFields: ["capability_entries"],
+        // Same flat per-violation shape as generate-capability-finalize's abort
+        // row: category, exact match, and surrounding context for each hit.
+        violations: buildGuardAbortViolationRows({ stringFields: [], capabilityEntries, capabilityEntryViolations }),
         capabilityEntryCount: capabilityEntries.length,
         capabilityEntryViolations: capabilityEntryViolations.map((v) => ({
           index: v.index,
