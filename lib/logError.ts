@@ -24,15 +24,30 @@ export interface LogErrorParams {
 
 export async function logError(params: LogErrorParams): Promise<void> {
   try {
-    // In a browser context the path is relative; in a Node/Edge context we need
-    // an absolute URL. Set NEXT_PUBLIC_SITE_URL in .env.local (e.g. http://localhost:3000
-    // for dev, https://your-domain.com for production) so server-side calls resolve.
-    const base =
-      typeof window !== "undefined"
-        ? ""
-        : (process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000");
+    // Server-side callers (API routes) are trusted code: write directly rather
+    // than POSTing to /api/log-error. That route now takes identity only from
+    // the request's session, and a server-to-server fetch carries no session,
+    // so going through it would silently strip userId and force severity to
+    // "low". (Next.js compiles typeof window to a constant in client bundles,
+    // so this branch and its import never ship to the browser.)
+    if (typeof window === "undefined") {
+      const { writeErrorLog, normalizeSeverity } = await import("./errorLogServer");
+      await writeErrorLog({
+        route: params.route,
+        errorMessage: params.errorMessage,
+        errorType: params.errorType,
+        severity: normalizeSeverity(params.severity),
+        userId: params.userId ?? null,
+        userEmail: params.userEmail ?? null,
+        metadata: params.metadata ?? null,
+        allowEmail: true
+      });
+      return;
+    }
 
-    await fetch(`${base}/api/log-error`, {
+    // Browser: the route ignores any userId/userEmail in this body and takes
+    // identity from the session cookie instead.
+    await fetch(`/api/log-error`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(params)
