@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import { ApplicantProfileForm } from "@/components/ApplicantProfileForm";
+import { signedProfilePhotoUrl } from "@/lib/profilePhotos";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +48,11 @@ export default async function ApplicantProfilePage() {
       error: profileError.message,
       code: profileError.code,
     });
+  }
+
+  // Own photo only, as a short-lived signed URL (lib/profilePhotos.ts).
+  if (profileData) {
+    profileData.profile_picture_url = await signedProfilePhotoUrl(adminClient, user.id, profileData.profile_picture_url);
   }
 
   return (

@@ -377,7 +377,13 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
     setIsSaving(true);
 
     try {
-      let savedPictureUrl = profile?.profilePictureUrl ?? "";
+      // The photo bucket is private: the browser only ever displays a signed URL
+      // the server mints for this candidate (lib/profilePhotos.ts), or the local
+      // preview right after an upload. The database stores only the storage path
+      // as a "has a photo" flag, and is written only when the photo changes, so a
+      // short-lived signed URL is never saved back into the profile.
+      let displayPictureUrl = profile?.profilePictureUrl ?? "";
+      let pictureFieldToSave: string | undefined;
 
       if (pendingPictureFile) {
         const { data: { user }, error: userError } = await supabase.auth.getUser();
@@ -398,13 +404,12 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
           setSaveError(`Picture upload failed: ${uploadError.message}`);
           return;
         }
-        const { data: { publicUrl } } = supabase.storage
-          .from(PROFILE_PICTURE_BUCKET)
-          .getPublicUrl(uploadData.path);
-        console.log("[handleSubmit] upload succeeded, publicUrl:", publicUrl);
-        savedPictureUrl = publicUrl;
+        console.log("[handleSubmit] upload succeeded, path:", uploadData.path);
+        pictureFieldToSave = uploadData.path;
+        displayPictureUrl = profilePictureDataUrl;
       } else if (!profilePictureDataUrl && profile?.profilePictureUrl) {
-        savedPictureUrl = "";
+        pictureFieldToSave = "";
+        displayPictureUrl = "";
       }
 
       const formData = new FormData(form);
@@ -413,7 +418,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
         streetAddress: profile?.streetAddress ?? "",
         city: profile?.city ?? "",
         state: profile?.state ?? "",
-        profilePictureUrl: savedPictureUrl,
+        profilePictureUrl: displayPictureUrl,
         fullName: String(formData.get("fullName") ?? "").trim(),
         zipCode: profile?.zipCode ?? "",
         desiredJobType: String(formData.get("desiredJobType") ?? "").trim(),
@@ -445,7 +450,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
             topSkills: nextProfile.topSkills,
             experienceLevel: nextProfile.experienceLevel,
             educationLevel: nextProfile.educationLevel,
-            profilePictureUrl: savedPictureUrl,
+            ...(pictureFieldToSave !== undefined ? { profilePictureUrl: pictureFieldToSave } : {}),
           },
         }),
       });
@@ -457,7 +462,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
       }
 
       setPendingPictureFile(null);
-      setProfilePictureDataUrl(savedPictureUrl);
+      setProfilePictureDataUrl(displayPictureUrl);
       setProfile(nextProfile);
       setIsEditing(false);
       setSaveSuccess(true);

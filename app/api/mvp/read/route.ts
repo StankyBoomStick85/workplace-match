@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import { resolveCallerIdentity, type CallerIdentity } from "@/lib/serverRoles";
+import { signedProfilePhotoUrl } from "@/lib/profilePhotos";
 
 export const dynamic = "force-dynamic";
 
@@ -104,6 +105,8 @@ export async function GET(request: Request) {
       if (!user) return NextResponse.json({ data: null });
       const { data, error } = await adminClient.from("candidate_profiles").select("*").eq("user_id", user.id).maybeSingle();
       if (error) throw error;
+      // The photo is returned only as a short-lived signed URL (lib/profilePhotos.ts).
+      if (data) data.profile_picture_url = await signedProfilePhotoUrl(adminClient, user.id, data.profile_picture_url);
       return NextResponse.json({ data });
     }
 
@@ -411,6 +414,7 @@ export async function GET(request: Request) {
         if (userId !== user.id && !(await getCaller()).isAdmin) return forbidden();
         const { data, error } = await adminClient.from("candidate_profiles").select("display_name,profile_picture_url").eq("user_id", userId).maybeSingle();
         if (error) throw error;
+        if (data) data.profile_picture_url = await signedProfilePhotoUrl(adminClient, userId, data.profile_picture_url);
         return NextResponse.json({ data });
       }
       if (!canSeeEmployerData(await getCaller(), userId)) return forbidden();
