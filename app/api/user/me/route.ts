@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
+import { resolveCallerIdentity } from "@/lib/serverRoles";
 
 export const dynamic = "force-dynamic";
 
@@ -56,17 +57,24 @@ export async function GET() {
     return NextResponse.json({ error: userRecordError.message }, { status: 500 });
   }
 
+  // isAdmin is resolved server-side (lib/serverRoles.ts) so the client only
+  // ever learns the answer, never the rule. It is a UI hint only - every admin
+  // API route re-checks it against the session itself.
+  const { isAdmin } = await resolveCallerIdentity(adminClient, user);
+
   if (!userRecord) {
     return NextResponse.json({
       id: user.id,
       email: user.email ?? "",
-      role: "pending"
+      role: "pending",
+      isAdmin
     });
   }
 
   return NextResponse.json({
     id: userRecord.id,
     email: userRecord.email,
-    role: userRecord.role
+    role: userRecord.role,
+    isAdmin
   });
 }

@@ -2,7 +2,6 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
-import { clearAdminSession, setAdminSession } from "../lib/adminAuth";
 import { supabase } from "../lib/supabase";
 import { AccountSettings } from "./AccountSettings";
 import { SupportSettings } from "./SupportSettings";
@@ -12,29 +11,25 @@ const AdminDashboard = dynamic(
   { ssr: false, loading: () => <p className="px-6 py-6 text-sm text-zinc-500">Loading…</p> }
 );
 
-const JOEL_EMAIL = "jdetoy85@gmail.com";
-const ADMIN_PIN = "1019";
-
 type Tab = "dark-mode" | "account" | "plan" | "support" | "admin";
 
 export function SettingsModal({ role }: { role: "candidate" | "employer" }) {
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("dark-mode");
   const [isDark, setIsDark] = useState(false);
-  const [userEmail, setUserEmail] = useState("");
-  const [adminUnlocked, setAdminUnlocked] = useState(false);
-  const [pinInput, setPinInput] = useState("");
-  const [pinError, setPinError] = useState(false);
+  // Whether the Admin tab exists at all comes from the server (lib/serverRoles.ts,
+  // surfaced as isAdmin by /api/user/me). It is a UI decision only: every admin
+  // data read behind the tab re-checks the session server-side.
+  const [isAdmin, setIsAdmin] = useState(false);
   const modalRef = useRef<HTMLDivElement>(null);
-  const pinInputRef = useRef<HTMLInputElement>(null);
 
-  const isJoel = userEmail === JOEL_EMAIL;
 
   useEffect(() => {
     setIsDark(localStorage.getItem("darkMode") === "true");
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user?.email) setUserEmail(user.email);
-    });
+    fetch("/api/user/me")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((me) => setIsAdmin(me?.isAdmin === true))
+      .catch(() => setIsAdmin(false));
   }, []);
 
   useEffect(() => {
@@ -46,26 +41,12 @@ export function SettingsModal({ role }: { role: "candidate" | "employer" }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen]);
 
-  // Focus PIN input when admin tab is selected and not yet unlocked
-  useEffect(() => {
-    if (activeTab === "admin" && !adminUnlocked) {
-      setTimeout(() => pinInputRef.current?.focus(), 50);
-    }
-  }, [activeTab, adminUnlocked]);
-
   function handleClose() {
     setIsOpen(false);
-    setAdminUnlocked(false);
-    setPinInput("");
-    setPinError(false);
-    clearAdminSession();
   }
 
   function handleOpen() {
     setActiveTab("dark-mode");
-    setAdminUnlocked(false);
-    setPinInput("");
-    setPinError(false);
     setIsOpen(true);
   }
 
@@ -78,19 +59,6 @@ export function SettingsModal({ role }: { role: "candidate" | "employer" }) {
     setIsDark(checked);
     localStorage.setItem("darkMode", String(checked));
     document.documentElement.classList.toggle("dark", checked);
-  }
-
-  function handlePinSubmit() {
-    if (pinInput === ADMIN_PIN) {
-      setAdminSession();
-      setAdminUnlocked(true);
-      setPinError(false);
-      setPinInput("");
-    } else {
-      setPinError(true);
-      setPinInput("");
-      setTimeout(() => pinInputRef.current?.focus(), 50);
-    }
   }
 
   const regularTabs: { id: Tab; label: string }[] = [
@@ -122,7 +90,7 @@ export function SettingsModal({ role }: { role: "candidate" | "employer" }) {
           <div
             ref={modalRef}
             className={`w-full rounded-lg border border-gray-200 bg-white shadow-xl transition-all ${
-              activeTab === "admin" && adminUnlocked ? "max-w-6xl" : "max-w-lg"
+              activeTab === "admin" && isAdmin ? "max-w-6xl" : "max-w-lg"
             }`}
           >
             {/* Modal header */}
@@ -158,7 +126,7 @@ export function SettingsModal({ role }: { role: "candidate" | "employer" }) {
                 </button>
               ))}
 
-              {isJoel ? (
+              {isAdmin ? (
                 <button
                   type="button"
                   onClick={() => setActiveTab("admin")}
@@ -220,39 +188,8 @@ export function SettingsModal({ role }: { role: "candidate" | "employer" }) {
                 </div>
               ) : activeTab === "support" ? (
                 <SupportSettings />
-              ) : activeTab === "admin" ? (
-                adminUnlocked ? (
-                  <AdminDashboard />
-                ) : (
-                  <div className="flex flex-col items-center justify-center px-6 py-12">
-                    <p className="mb-4 text-sm font-semibold text-zinc-700">Enter PIN</p>
-                    <input
-                      ref={pinInputRef}
-                      type="password"
-                      inputMode="numeric"
-                      maxLength={4}
-                      value={pinInput}
-                      onChange={(e) => {
-                        setPinInput(e.target.value.replace(/\D/g, ""));
-                        if (pinError) setPinError(false);
-                      }}
-                      onKeyDown={(e) => { if (e.key === "Enter") handlePinSubmit(); }}
-                      placeholder="••••"
-                      className="field w-24 text-center tracking-[0.4em]"
-                    />
-                    {pinError ? (
-                      <p className="mt-2 text-xs font-semibold text-red-600">Incorrect PIN</p>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={handlePinSubmit}
-                      disabled={pinInput.length !== 4}
-                      className="mt-4 rounded-md bg-zinc-800 px-4 py-2 text-sm font-semibold text-white transition hover:bg-zinc-900 disabled:opacity-40"
-                    >
-                      Confirm
-                    </button>
-                  </div>
-                )
+              ) : activeTab === "admin" && isAdmin ? (
+                <AdminDashboard />
               ) : null}
             </div>
 

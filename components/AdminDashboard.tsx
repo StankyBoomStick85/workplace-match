@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import L from "leaflet";
 import { MapContainer, Marker, Popup, TileLayer } from "react-leaflet";
 import { AccessRequestsPanel } from "./AccessRequestsPanel";
-import { clearAdminSession, hasAdminSession } from "../lib/adminAuth";
+import { supabase } from "../lib/supabase";
 import { refreshAdminEvents, type AdminEvent } from "../lib/adminEvents";
 import { zipCityStateLookup } from "../lib/addressHelpers";
 import {
@@ -132,15 +132,28 @@ const emptyAdminData = {
 
 export function AdminDashboard() {
   const [isSessionChecked, setIsSessionChecked] = useState(false);
+  const [isDenied, setIsDenied] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
-    if (!hasAdminSession()) {
-      window.location.href = "/admin/login";
-      return;
-    }
-
-    setIsSessionChecked(true);
+    // Admin access comes only from a signed-in session whose account the
+    // server recognizes as admin (lib/serverRoles.ts, surfaced as isAdmin by
+    // /api/user/me). This is a UI gate only: every admin data read re-checks
+    // the session server-side, so nothing here grants access by itself.
+    let cancelled = false;
+    fetch("/api/user/me")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((me) => {
+        if (cancelled) return;
+        if (me?.isAdmin === true) {
+          setIsSessionChecked(true);
+        } else {
+          setIsDenied(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setIsDenied(true);
+      });
 
     function refreshAdminData() {
       setRefreshToken((current) => current + 1);
@@ -151,6 +164,7 @@ export function AdminDashboard() {
     window.addEventListener("workplace-match-messages-updated", refreshAdminData);
 
     return () => {
+      cancelled = true;
       window.removeEventListener("workplace-match-admin-events-updated", refreshAdminData);
       window.removeEventListener("workplace-match-notifications-updated", refreshAdminData);
       window.removeEventListener("workplace-match-messages-updated", refreshAdminData);
@@ -166,6 +180,17 @@ export function AdminDashboard() {
 
     buildAdminData().then(setData);
   }, [refreshToken, isSessionChecked]);
+
+  if (isDenied) {
+    return (
+      <section className="mx-auto max-w-7xl px-4 py-8">
+        <p className="text-sm text-zinc-600">
+          Admin access requires signing in with an admin account.{" "}
+          <a href="/login" className="font-semibold text-red-800 underline">Log in</a>
+        </p>
+      </section>
+    );
+  }
 
   if (!isSessionChecked) {
     return (
@@ -187,9 +212,11 @@ export function AdminDashboard() {
         </div>
         <button
           type="button"
-          onClick={() => {
-            clearAdminSession();
-            window.location.href = "/admin/login";
+          onClick={async () => {
+            // Admin is the signed-in account itself, so logging out of admin
+            // means signing out of the session.
+            await supabase.auth.signOut();
+            window.location.href = "/";
           }}
           className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-gray-50"
         >

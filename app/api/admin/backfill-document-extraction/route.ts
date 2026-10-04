@@ -1,8 +1,9 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
-import { adminSessionKey } from "../../../../lib/adminAuth";
 import { extractDocumentText } from "../../../../lib/documentExtraction";
+import { resolveCallerIdentity } from "@/lib/serverRoles";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -11,24 +12,37 @@ export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const userIdParam = requestUrl.searchParams.get("userId");
 
-  // Admin Check
-  const cookieStore = cookies();
-  const isAdmin = cookieStore.get(adminSessionKey)?.value === "true";
-  if (!isAdmin) {
-    return NextResponse.json({ error: "Unauthorized. Admin access required." }, { status: 401 });
-  }
-
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
 
-  if (!supabaseUrl || !supabaseServiceRoleKey) {
+  if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey) {
     return NextResponse.json({ error: "Server configuration missing." }, { status: 500 });
   }
 
   const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+
+  // Admin check from the verified session (see lib/serverRoles.ts). Previously
+  // a workplace_match_admin_session=true cookie the browser set itself, which
+  // let anyone rewrite any user's document_metadata and spend Anthropic credits.
+  const cookieStore = cookies();
+  const authClient = createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookies: {
+      get(name: string) { return cookieStore.get(name)?.value; },
+      set(name: string, value: string, options: CookieOptions) { cookieStore.set(name, value, options); },
+      remove(name: string, options: CookieOptions) { cookieStore.set(name, "", options); }
+    }
+  });
+  const { data: { user } } = await authClient.auth.getUser();
+  if (!user) {
+    return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  }
+  if (!(await resolveCallerIdentity(adminClient, user)).isAdmin) {
+    return NextResponse.json({ error: "Admin access required." }, { status: 403 });
+  }
 
   try {
     let targetProfiles: any[] = [];

@@ -1,13 +1,40 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
-import { adminSessionKey } from "../../../../lib/adminAuth";
+import { resolveCallerIdentity } from "@/lib/serverRoles";
 
 export const dynamic = "force-dynamic";
 
-function isAuthorizedAdmin() {
+// Admin only, from the verified Supabase session (see lib/serverRoles.ts).
+// Previously this trusted a workplace_match_admin_session=true cookie that the
+// browser set itself, so anyone could forge it, list every access request, and
+// approve their own email into approved_emails. Returns a response to send back
+// (401/403/500) when the caller is not a verified admin, or null to proceed.
+async function rejectUnlessAdmin(): Promise<NextResponse | null> {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const adminClient = getAdminClient();
+  if (!supabaseUrl || !supabaseAnonKey || !adminClient) {
+    return NextResponse.json({ error: "Server configuration missing." }, { status: 500 });
+  }
   const cookieStore = cookies();
-  return cookieStore.get(adminSessionKey)?.value === "true";
+  const authClient = createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookies: {
+      get(name: string) { return cookieStore.get(name)?.value; },
+      set(name: string, value: string, options: CookieOptions) { cookieStore.set(name, value, options); },
+      remove(name: string, options: CookieOptions) { cookieStore.set(name, "", options); }
+    }
+  });
+  const { data: { user } } = await authClient.auth.getUser();
+  if (!user) {
+    return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  }
+  const caller = await resolveCallerIdentity(adminClient, user);
+  if (!caller.isAdmin) {
+    return NextResponse.json({ error: "Admin access required." }, { status: 403 });
+  }
+  return null;
 }
 
 function getAdminClient() {
@@ -20,9 +47,8 @@ function getAdminClient() {
 }
 
 export async function GET() {
-  if (!isAuthorizedAdmin()) {
-    return NextResponse.json({ error: "Unauthorized. Admin access required." }, { status: 401 });
-  }
+  const rejection = await rejectUnlessAdmin();
+  if (rejection) return rejection;
 
   const adminClient = getAdminClient();
   if (!adminClient) {
@@ -52,9 +78,8 @@ export async function GET() {
 }
 
 export async function PATCH(request: Request) {
-  if (!isAuthorizedAdmin()) {
-    return NextResponse.json({ error: "Unauthorized. Admin access required." }, { status: 401 });
-  }
+  const rejection = await rejectUnlessAdmin();
+  if (rejection) return rejection;
 
   const body = await request.json().catch(() => null);
   const id = typeof body?.id === "string" ? body.id : "";
