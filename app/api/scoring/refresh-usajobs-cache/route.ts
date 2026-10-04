@@ -1,8 +1,34 @@
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import { logError } from "../../../../lib/logError";
 
 export const dynamic = "force-dynamic";
+
+// Signed-in callers only (any role). The live caller is the candidate job map
+// (components/ApplicantJobsMap.tsx); there is no cron. Previously anyone,
+// logged out, could trigger this and burn the external job API quota.
+async function rejectUnlessSignedIn(): Promise<NextResponse | null> {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return NextResponse.json({ error: "Server configuration missing." }, { status: 500 });
+  }
+  const cookieStore = cookies();
+  const authClient = createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookies: {
+      get(name: string) { return cookieStore.get(name)?.value; },
+      set(name: string, value: string, options: CookieOptions) { cookieStore.set(name, value, options); },
+      remove(name: string, options: CookieOptions) { cookieStore.set(name, "", options); }
+    }
+  });
+  const { data: { user } } = await authClient.auth.getUser();
+  if (!user) {
+    return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  }
+  return null;
+}
 
 const REGION = "St. Louis, Missouri";
 
@@ -31,6 +57,9 @@ type USAJobsItem = {
 };
 
 export async function POST() {
+  const rejection = await rejectUnlessSignedIn();
+  if (rejection) return rejection;
+
   try {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;

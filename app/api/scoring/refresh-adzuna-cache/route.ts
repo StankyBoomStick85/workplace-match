@@ -1,8 +1,34 @@
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import { logError } from "../../../../lib/logError";
 
 export const dynamic = "force-dynamic";
+
+// Signed-in callers only (any role). The live caller is the candidate job map
+// (components/ApplicantJobsMap.tsx); there is no cron. Previously anyone,
+// logged out, could trigger this and burn the external job API quota.
+async function rejectUnlessSignedIn(): Promise<NextResponse | null> {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return NextResponse.json({ error: "Server configuration missing." }, { status: 500 });
+  }
+  const cookieStore = cookies();
+  const authClient = createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookies: {
+      get(name: string) { return cookieStore.get(name)?.value; },
+      set(name: string, value: string, options: CookieOptions) { cookieStore.set(name, value, options); },
+      remove(name: string, options: CookieOptions) { cookieStore.set(name, "", options); }
+    }
+  });
+  const { data: { user } } = await authClient.auth.getUser();
+  if (!user) {
+    return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  }
+  return null;
+}
 
 async function reverseGeocode(lat: number, lng: number): Promise<string> {
   try {
@@ -55,6 +81,9 @@ function parseIsPredicted(value: string | number | boolean | undefined): boolean
 }
 
 export async function POST(request: Request) {
+  const rejection = await rejectUnlessSignedIn();
+  if (rejection) return rejection;
+
   try {
     const body = await request.json().catch(() => ({}));
     const lat = typeof body.lat === "number" ? body.lat : parseFloat(body.lat ?? "");
@@ -240,10 +269,17 @@ export async function POST(request: Request) {
   }
 }
 
+function forwardedSession(request: Request): Record<string, string> {
+  const cookie = request.headers.get("cookie");
+  return cookie ? { cookie } : {};
+}
+
 async function triggerUSAJobsRefresh(request: Request): Promise<void> {
   try {
     const baseUrl = new URL(request.url).origin;
-    const data = await fetch(`${baseUrl}/api/scoring/refresh-usajobs-cache`, { method: "POST" })
+    // Forward the caller's session: the downstream route requires sign-in too,
+    // and a server-to-server fetch carries no cookies on its own.
+    const data = await fetch(`${baseUrl}/api/scoring/refresh-usajobs-cache`, { method: "POST", headers: forwardedSession(request) })
       .then((r) => r.json());
     console.log("[refresh-adzuna-cache] USAJobs refresh:", data.cached, "cached, fresh:", data.fresh);
   } catch (err) {
@@ -254,7 +290,7 @@ async function triggerUSAJobsRefresh(request: Request): Promise<void> {
 async function triggerMuseRefresh(request: Request): Promise<void> {
   try {
     const baseUrl = new URL(request.url).origin;
-    const data = await fetch(`${baseUrl}/api/scoring/refresh-muse-cache`, { method: "POST" })
+    const data = await fetch(`${baseUrl}/api/scoring/refresh-muse-cache`, { method: "POST", headers: forwardedSession(request) })
       .then((r) => r.json());
     console.log("[refresh-adzuna-cache] Muse refresh:", data.cached, "cached, fresh:", data.fresh);
   } catch (err) {
