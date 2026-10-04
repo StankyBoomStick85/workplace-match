@@ -121,10 +121,13 @@ export function MyMatches({ role }: { role: Role }) {
         return;
       }
 
+      // Candidate profiles are employer-only data (api/mvp/read refuses them
+      // to candidates with a 403) and are only rendered in the employer branch
+      // below, so a candidate never requests them.
       const [jobs, mutualMatches, candidateProfiles, applicantInterests] = await Promise.all([
         getAllJobs(),
         getMutualMatches(),
-        getAllApplicantProfiles(),
+        role === "employer" ? getAllApplicantProfiles() : Promise.resolve([]),
         role === "employer" ? getApplicantInterests() : Promise.resolve([])
       ]);
       const scopedMatches = mutualMatches.filter((match) =>
