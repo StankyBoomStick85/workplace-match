@@ -542,8 +542,7 @@ export function EmployerFindApplicants() {
     const { error: matchWriteError } = await addSupabaseMutualMatch({
       candidateId: nextMutualMatch.candidateId,
       employerId: employerUserId,
-      jobId: nextMutualMatch.jobId,
-      matchPercent: nextMutualMatch.matchPercent
+      jobId: nextMutualMatch.jobId
     });
 
     if (matchWriteError) {
@@ -1656,8 +1655,7 @@ async function healMissingMutualMatches({
     const { error: matchWriteError } = await addSupabaseMutualMatch({
       candidateId: pair.candidateId,
       employerId: userId,
-      jobId: pair.jobId,
-      matchPercent
+      jobId: pair.jobId
     });
     if (matchWriteError) {
       console.error("[healMissingMutualMatches] Failed to write healed match", { pair, error: matchWriteError });

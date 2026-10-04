@@ -1,6 +1,5 @@
 import type { LocalAccount } from "./localAccounts";
 import {
-  addNotification,
   addNotificationByUserId,
   deleteNotificationById,
   markNotificationReadById,
@@ -80,35 +79,10 @@ export function attemptPreferredContact({
   return false;
 }
 
-export function addContactNotification(
-  notification: Omit<ContactNotification, "id" | "createdAt" | "status" | "type" | "title"> &
-    Partial<Pick<ContactNotification, "type" | "title">>
-) {
-  const nextNotification: ContactNotification = {
-    ...notification,
-    type: notification.type ?? "missed_contact",
-    title: notification.title ?? "Follow up needed",
-    id: crypto.randomUUID(),
-    createdAt: new Date().toISOString(),
-    status: "unread"
-  };
-
-  notificationCache = [nextNotification, ...notificationCache];
-  addNotification(nextNotification).then(() => {
-    window.dispatchEvent(new Event("workplace-match-notifications-updated"));
-  });
-  return nextNotification;
-}
-
-export function addNewMatchNotification(notification: Omit<ContactNotification, "id" | "createdAt" | "status" | "type" | "title" | "message">) {
-  return addContactNotification({
-    ...notification,
-    type: "new_match",
-    title: "New Match",
-    message: "You have a new mutual match."
-  });
-}
-
+// addContactNotification / addNewMatchNotification (email-resolved, written
+// straight from the browser) were removed along with the uncalled
+// addNotification they depended on - every notification is now written
+// server-side through addNotificationByUserId -> app/api/notifications.
 // addNewMessageNotification and addScheduleRequestNotification were removed:
 // message notifications are now sent via addNotificationByUserId (resolved by
 // real user id, never by email) at every call site, and the schedule-request
@@ -120,7 +94,7 @@ export function addNewMatchNotification(notification: Omit<ContactNotification, 
 // recipient's real user id, not email - see addNotificationByUserId() for why.
 // The message text is the only place identity/privacy is controlled: callers
 // on the employer side must never put a candidate's name in it, only what's
-// already visible pre-mutual-match (ZIP-area, skills, match %).
+// already visible pre-mutual-match (ZIP-area, stored AI match %).
 export function addInterestReceivedNotification({
   recipientUserId,
   jobId,
@@ -134,6 +108,9 @@ export function addInterestReceivedNotification({
   title: string;
   message: string;
 }) {
+  // The server builds the delivered text (app/api/notifications), including
+  // any match percentage, from server-side data only; title and message here
+  // are not sent.
   return addNotificationByUserId({
     recipientUserId,
     type: "interest_received",
@@ -144,12 +121,9 @@ export function addInterestReceivedNotification({
   });
 }
 
-// Reliable mutual-match notification, delivered by real user id like
-// addInterestReceivedNotification() above - addNewMatchNotification() (email
-// resolution) is left in place but no longer called for the employer<->
-// candidate loop, since that resolution path is proven unreliable for
-// candidates (candidate-profiles never joins users, so candidateEmail is
-// always undefined server-side).
+// Mutual-match notification, delivered by real user id like
+// addInterestReceivedNotification() above (the old email-resolved path was
+// unreliable for candidates and has been removed).
 export function addMatchFoundNotification({
   recipientUserId,
   jobId,

@@ -1,7 +1,6 @@
 export type MatchMessageSender = "applicant" | "employer";
 
 import { logAdminEvent } from "./adminEvents";
-import { supabase } from "./supabase";
 
 export type MatchMessage = {
   id: string;
@@ -136,27 +135,38 @@ export function addMatchThreadMessage(message: Omit<MatchMessage, "id" | "create
   messageCache = updatedMessages;
   pruneEchoes();
   recentlySentEchoes.set(echoKey(message, message.senderRole, trimmedText), Date.now());
-  // sender_email deliberately omitted - messaging is entirely internal to the
-  // platform; the sender is already identifiable from applicant_id/employer_id
-  // (both uuid not null) + sender_role, and no email address is ever written here.
-  supabase.from("match_messages").insert({
-    applicant_id: message.applicantId,
-    employer_id: message.employerId,
-    job_id: message.jobId,
-    sender_role: message.senderRole,
-    text: trimmedText
-  }).then(({ error }) => {
-    if (error) {
-      console.error("[addMatchThreadMessage] Failed to write message", {
-        applicantId: message.applicantId,
-        employerId: message.employerId,
-        jobId: message.jobId,
-        error: error.message
-      });
-      return;
-    }
-    window.dispatchEvent(new Event("workplace-match-messages-updated"));
-  });
+  // Written server-side (app/api/messages): the server checks the caller is a
+  // party to a mutually matched thread and derives sender_role from the
+  // caller's account role - message.senderRole is used only for the
+  // optimistic local copy and echo suppression above, never sent. Realtime
+  // still delivers the inserted row to both parties.
+  fetch("/api/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      applicantId: message.applicantId,
+      employerId: message.employerId,
+      jobId: message.jobId,
+      text: trimmedText
+    })
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        console.error("[addMatchThreadMessage] Failed to write message", {
+          applicantId: message.applicantId,
+          employerId: message.employerId,
+          jobId: message.jobId,
+          status: response.status,
+          error: payload?.error
+        });
+        return;
+      }
+      window.dispatchEvent(new Event("workplace-match-messages-updated"));
+    })
+    .catch((error) => {
+      console.error("[addMatchThreadMessage] Failed to write message", { error: error instanceof Error ? error.message : String(error) });
+    });
   logAdminEvent({
     type: "message_sent",
     userRole: message.senderRole === "applicant" ? "candidate" : "employer",

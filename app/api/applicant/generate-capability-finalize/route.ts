@@ -28,7 +28,7 @@ import {
 import { reportGenerationFailure } from "@/lib/generationAlerts";
 import { createRunContext, runWithGenerationGuard, type GenerationRunContext } from "@/lib/generationRunGuard";
 import { sendEmail } from "@/lib/email";
-import { addNotificationByUserId } from "@/lib/supabaseMvpData";
+import { insertNotification } from "@/lib/serverNotifications";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -1000,8 +1000,11 @@ async function finalize(ctx: GenerationRunContext, t0: number): Promise<Response
   // Completion notification - so someone who navigates away from the profile
   // page while this was running still learns it finished. Fired here rather
   // than at the end of generate-capability (phase 1) because this is the point
-  // the profile is actually fully written and viewable.
-  const { error: notifyError } = await addNotificationByUserId({
+  // the profile is actually fully written and viewable. A system notification,
+  // written with the service role: this previously went through the browser
+  // Supabase client, which has no session on the server, so the insert ran as
+  // anon, was refused, and this notification was never once delivered.
+  const { error: notifyError } = await insertNotification(adminClient, {
     recipientUserId: user.id,
     type: "capability_ready",
     title: "Your capability profile is ready",

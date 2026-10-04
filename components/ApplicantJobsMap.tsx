@@ -1077,18 +1077,15 @@ export function ApplicantJobsMap() {
     });
 
     // First-sided interest notification (mutual match, below, sends its own
-    // separate stronger notification). Privacy: only what's already visible
-    // pre-mutual-match on this employer's Find Applicants view - ZIP-area,
-    // skills, match % - never name, exact address, or AI narrative summary.
-    const skillsPreview = (profile?.topSkills ?? []).slice(0, 5).join(", ");
+    // separate stronger notification). The server (app/api/notifications)
+    // writes the delivered text from ZIP-area + match % only; raw self-typed
+    // skills (topSkills) are never sent to an employer.
     const { error: interestNotifyError } = await addInterestReceivedNotification({
       recipientUserId: employerUserId,
       jobId: job.id,
       jobTitle: job.title,
       title: "A candidate is interested",
-      message: `A candidate near ${profile?.zipCode || "your area"} is interested in your ${job.title} listing (${matchPercent}% match).${
-        skillsPreview ? ` Skills: ${skillsPreview}.` : ""
-      }`
+      message: `A candidate near ${profile?.zipCode || "your area"} is interested in your ${job.title} listing.`
     });
     if (interestNotifyError) {
       setInterestError(`Interest recorded, but the notification to the employer failed to send: ${interestNotifyError}`);
@@ -1112,8 +1109,7 @@ export function ApplicantJobsMap() {
     const { error: matchWriteError } = await addSupabaseMutualMatch({
       candidateId: nextMutualMatch.candidateId,
       employerId: employerUserId,
-      jobId: nextMutualMatch.jobId,
-      matchPercent: nextMutualMatch.matchPercent
+      jobId: nextMutualMatch.jobId
     });
 
     if (matchWriteError) {
@@ -3354,8 +3350,7 @@ async function healMissingMutualMatches({
     const { error: matchWriteError } = await addSupabaseMutualMatch({
       candidateId,
       employerId: pair.employerId,
-      jobId: pair.jobId,
-      matchPercent
+      jobId: pair.jobId
     });
     if (matchWriteError) {
       console.error("[healMissingMutualMatches] Failed to write healed match", { pair, error: matchWriteError });

@@ -51,17 +51,25 @@ export function logAdminEvent(event: Omit<AdminEvent, "id" | "timestamp">) {
   };
 
   adminEventCache = [nextEvent, ...events].slice(0, 500);
-  supabase.from("admin_activity_events").insert({
-    type: nextEvent.type,
-    user_role: nextEvent.userRole,
-    job_id: normalizeUuid(nextEvent.jobId),
-    applicant_id: normalizeUuid(nextEvent.applicantId),
-    employer_id: normalizeUuid(nextEvent.employerId),
-    metadata: nextEvent.metadata ?? {},
-    dedupe_key: nextEvent.dedupeKey
-  }).then(() => {
-    window.dispatchEvent(new Event("workplace-match-admin-events-updated"));
-  });
+  // Written server-side (app/api/admin-events), which sets user_role from the
+  // caller's real account role - nextEvent.userRole is not sent.
+  fetch("/api/admin-events", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    keepalive: true,
+    body: JSON.stringify({
+      type: nextEvent.type,
+      jobId: normalizeUuid(nextEvent.jobId),
+      applicantId: normalizeUuid(nextEvent.applicantId),
+      employerId: normalizeUuid(nextEvent.employerId),
+      metadata: nextEvent.metadata ?? {},
+      dedupeKey: nextEvent.dedupeKey
+    })
+  })
+    .then(() => {
+      window.dispatchEvent(new Event("workplace-match-admin-events-updated"));
+    })
+    .catch(() => undefined);
   return nextEvent;
 }
 
@@ -105,4 +113,3 @@ function normalizeUuid(value?: string) {
     ? value
     : null;
 }
-import { supabase } from "./supabase";

@@ -253,19 +253,17 @@ export async function addInterest({
   toUserId: string;
   jobId: string;
 }): Promise<{ error: string | null; mutual: boolean }> {
-  const { error } = await supabase.from("interests").upsert(
-    {
-      from_user_id: fromUserId,
-      to_user_id: toUserId,
-      job_id: jobId,
-      status: "pending"
-    },
-    { onConflict: "from_user_id,to_user_id,job_id" }
-  );
+  // Written server-side (app/api/interests): the sender is the session user,
+  // never fromUserId, which is kept only for logging and call-site symmetry.
+  const result = await postJson<{ ok?: boolean; mutual?: boolean; error?: string }>("/api/interests", {
+    action: "add",
+    toUserId,
+    jobId
+  });
 
-  if (error) {
-    console.error("[addInterest] Failed to write interest", { fromUserId, toUserId, jobId, error: error.message });
-    return { error: error.message, mutual: false };
+  if (result.error) {
+    console.error("[addInterest] Failed to write interest", { fromUserId, toUserId, jobId, error: result.error });
+    return { error: result.error, mutual: false };
   }
 
   triggerTransactionalEmail({
@@ -274,14 +272,12 @@ export async function addInterest({
     jobId
   });
 
-  // Reciprocal check runs as a live DB read here rather than relying on the
-  // caller's client-side interest arrays (loaded once at page mount) - if the
-  // other party's interest was written after this session's page load, a
-  // stale in-memory check would silently never detect the pair, and the
-  // matches row would never get created. This is the single source of truth
-  // for whether the two directions currently form a mutual pair.
-  const mutual = await checkReciprocalInterest({ fromUserId: toUserId, toUserId: fromUserId, jobId });
-  return { error: null, mutual };
+  // The route checks for the reciprocal interest with a live DB read after
+  // writing, rather than relying on the caller's client-side interest arrays
+  // (loaded once at page mount) - if the other party's interest was written
+  // after this session's page load, a stale in-memory check would silently
+  // never detect the pair, and the matches row would never get created.
+  return { error: null, mutual: result.mutual === true };
 }
 
 export async function checkReciprocalInterest({
@@ -327,16 +323,16 @@ export async function removeInterest({
   toUserId: string;
   jobId: string;
 }): Promise<{ error: string | null }> {
-  const results = await Promise.all([
-    supabase.from("interests").delete().eq("from_user_id", fromUserId).eq("to_user_id", toUserId).eq("job_id", jobId),
-    supabase.from("matches").delete().eq("candidate_id", toUserId).eq("employer_id", fromUserId).eq("job_id", jobId),
-    supabase.from("matches").delete().eq("candidate_id", fromUserId).eq("employer_id", toUserId).eq("job_id", jobId)
-  ]);
-
-  const failed = results.find((result) => result.error);
-  if (failed?.error) {
-    console.error("[removeInterest] Failed to remove interest/match", { fromUserId, toUserId, jobId, error: failed.error.message });
-    return { error: failed.error.message };
+  // Server-side (app/api/interests): deletes only the session user's own
+  // interest, plus any match between the two on this job.
+  const result = await postJson<{ ok?: boolean; error?: string }>("/api/interests", {
+    action: "remove",
+    toUserId,
+    jobId
+  });
+  if (result.error) {
+    console.error("[removeInterest] Failed to remove interest/match", { fromUserId, toUserId, jobId, error: result.error });
+    return { error: result.error };
   }
   return { error: null };
 }
@@ -350,32 +346,23 @@ export async function addMutualMatch(match: {
   candidateId: string;
   employerId: string;
   jobId: string;
-  matchPercent: number;
 }): Promise<{ error: string | null }> {
-  const existingMatch = await fetchMvpData<{ id: string } | null>("match-exists", {
+  // Server-side (app/api/matches): created only when BOTH interests exist,
+  // verified there, with the match score read from the stored AI score on the
+  // server - no percentage is sent from here. created=false means the match
+  // already existed.
+  const result = await postJson<{ ok?: boolean; created?: boolean; error?: string }>("/api/matches", {
     candidateId: match.candidateId,
     employerId: match.employerId,
     jobId: match.jobId
   });
 
-  const { error } = await supabase.from("matches").upsert(
-    {
-      candidate_id: match.candidateId,
-      employer_id: match.employerId,
-      job_id: match.jobId,
-      capability_match: match.matchPercent,
-      score: match.matchPercent,
-      status: "mutual_match"
-    },
-    { onConflict: "candidate_id,employer_id,job_id" }
-  );
-
-  if (error) {
-    console.error("[addMutualMatch] Failed to write mutual match", { match, error: error.message });
-    return { error: error.message };
+  if (result.error) {
+    console.error("[addMutualMatch] Failed to write mutual match", { match, error: result.error });
+    return { error: result.error };
   }
 
-  if (!existingMatch) {
+  if (result.created) {
     triggerTransactionalEmail({
       type: "match_notification",
       recipientUserId: match.candidateId,
@@ -400,57 +387,15 @@ export async function readNotificationsForEmail(email: string) {
   return (result.data ?? []).map((notification: any) => mapNotification(notification, recipient.email));
 }
 
-export async function addNotification(notification: Omit<MvpNotification, "id" | "createdAt" | "status"> & { status?: "unread" | "read" }) {
-  const recipient = await getUserByEmail(notification.recipientEmail);
-  if (!recipient) {
-    return null;
-  }
-
-  const message = JSON.stringify({
-    message: notification.message,
-    title: notification.title,
-    senderEmail: notification.senderEmail,
-    jobId: notification.jobId,
-    jobTitle: notification.jobTitle,
-    candidateId: notification.candidateId,
-    employerId: notification.employerId,
-    dedupeKey: notification.dedupeKey
-  });
-
-  if (notification.dedupeKey) {
-    const existing = (await readNotificationsForEmail(notification.recipientEmail)).find(
-      (storedNotification) => storedNotification.dedupeKey === notification.dedupeKey
-    );
-    if (existing) {
-      return existing;
-    }
-  }
-
-  const nextNotification: MvpNotification = {
-    ...notification,
-    id: crypto.randomUUID(),
-    createdAt: new Date().toISOString(),
-    status: notification.status ?? "unread"
-  };
-
-  await supabase.from("notifications").insert({
-    user_id: recipient.id,
-    type: notification.type,
-    message,
-    read: notification.status === "read",
-    related_id: notification.dedupeKey ? stableRelatedId(notification.dedupeKey) : null
-  });
-
-  return nextNotification;
-}
-
-// addNotification() above resolves recipientEmail -> user_id via
-// getUserByEmail(), which silently fails for candidates: the candidate-profiles
-// read never joins users, so a candidate's email is never available to
-// employer-side code. This writes directly by the real users.id instead
+// Notifications are delivered by the recipient's real users.id
 // (candidate_profiles.user_id / job_posts.employer_id are both already real
-// user ids, no join needed), so one-sided interest notifications can actually
-// reach the recipient regardless of that gap.
+// user ids), never resolved from an email address.
+//
+// Written server-side by app/api/notifications, which checks the caller's
+// relationship with the recipient and builds the title/message text itself -
+// the title, message and jobTitle passed here are no longer sent, and are kept
+// only so existing call sites don't change shape. For a notification to
+// yourself (new_match), the other party is taken from candidateId/employerId.
 export async function addNotificationByUserId(notification: {
   recipientUserId: string;
   type: string;
@@ -461,53 +406,48 @@ export async function addNotificationByUserId(notification: {
   candidateId?: string;
   employerId?: string;
 }): Promise<{ error: string | null }> {
-  const payload = JSON.stringify({
-    message: notification.message,
-    title: notification.title,
-    jobId: notification.jobId,
-    jobTitle: notification.jobTitle,
-    candidateId: notification.candidateId,
-    employerId: notification.employerId
-  });
-
-  const { error } = await supabase.from("notifications").insert({
-    user_id: notification.recipientUserId,
+  const otherUserId =
+    notification.recipientUserId === notification.candidateId ? notification.employerId : notification.candidateId;
+  const result = await postJson<{ ok?: boolean; error?: string }>("/api/notifications", {
     type: notification.type,
-    message: payload,
-    read: false
+    recipientUserId: notification.recipientUserId,
+    jobId: notification.jobId,
+    otherUserId
   });
 
-  if (error) {
+  if (result.error) {
     console.error("[addNotificationByUserId] Failed to write notification", {
       recipientUserId: notification.recipientUserId,
       type: notification.type,
-      error: error.message
+      error: result.error
     });
-    return { error: error.message };
+    return { error: result.error };
   }
-  // Mirrors addContactNotification()'s post-write dispatch (lib/contactPreferences.ts)
-  // so any NotificationBell mounted in this tab refreshes immediately instead of
-  // only on next mount/page load.
+  // So any NotificationBell mounted in this tab refreshes immediately instead
+  // of only on next mount/page load.
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event("workplace-match-notifications-updated"));
   }
   return { error: null };
 }
 
+// Marks the SIGNED-IN user's notifications read (server-side, app/api/notifications
+// PATCH). email is only used to re-read the list afterwards; the update itself
+// is always scoped to the session user.
 export async function markNotificationsReadForEmail(email: string) {
-  const user = await getUserByEmail(email);
-  if (!user) {
-    return [];
+  const result = await patchJson("/api/notifications", { all: true });
+  if (result.error) {
+    console.error("[markNotificationsReadForEmail] Failed to mark notifications read", { error: result.error });
   }
-  await supabase.from("notifications").update({ read: true }).eq("user_id", user.id);
   return readNotificationsForEmail(email);
 }
 
 export async function markNotificationReadById(id: string): Promise<{ error: string | null }> {
-  const { error } = await supabase.from("notifications").update({ read: true }).eq("id", id);
+  // Server-side (app/api/notifications PATCH): only ever the session user's own row.
+  const { error } = await patchJson("/api/notifications", { id });
   if (error) {
-    console.error("[markNotificationReadById] Failed to mark notification read", { id, error: error.message });
-    return { error: error.message };
+    console.error("[markNotificationReadById] Failed to mark notification read", { id, error });
+    return { error };
   }
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event("workplace-match-notifications-updated"));
@@ -531,16 +471,6 @@ export async function deleteNotificationById(id: string): Promise<{ error: strin
     window.dispatchEvent(new Event("workplace-match-notifications-updated"));
   }
   return { error: null };
-}
-
-export async function getUserByEmail(email: string) {
-  const normalizedEmail = email.trim().toLowerCase();
-  if (!normalizedEmail) {
-    return null;
-  }
-
-  const data = await fetchMvpData<MvpUser | null>("user-by-email", { email: normalizedEmail });
-  return data as MvpUser | null;
 }
 
 function mapCandidateProfile(data: any): MvpApplicantProfile {
@@ -647,11 +577,6 @@ function mapNotification(data: any, recipientEmail: string): MvpNotification {
   };
 }
 
-function stableRelatedId(value: string) {
-  const text = value.padEnd(32, "0").replace(/[^a-f0-9]/gi, "0").slice(0, 32);
-  return `${text.slice(0, 8)}-${text.slice(8, 12)}-${text.slice(12, 16)}-${text.slice(16, 20)}-${text.slice(20)}`;
-}
-
 function triggerTransactionalEmail({
   type,
   recipientUserId,
@@ -670,6 +595,34 @@ function triggerTransactionalEmail({
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ type, recipientUserId, jobId })
   }).catch(() => undefined);
+}
+
+// POST helper for the server-side write routes. Never throws: a network or
+// HTTP failure comes back as { error } so callers keep their existing
+// error-returning contract.
+async function patchJson(url: string, body: unknown): Promise<{ error?: string }> {
+  return sendJson("PATCH", url, body);
+}
+
+async function postJson<T extends { error?: string }>(url: string, body: unknown): Promise<T> {
+  return sendJson<T>("POST", url, body);
+}
+
+async function sendJson<T extends { error?: string }>(method: "POST" | "PATCH", url: string, body: unknown): Promise<T> {
+  try {
+    const response = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const payload = (await response.json().catch(() => ({}))) as T;
+    if (!response.ok) {
+      return { ...payload, error: payload.error ?? `Request failed (${response.status}).` };
+    }
+    return payload;
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Network error." } as T;
+  }
 }
 
 async function fetchMvpData<T>(resource: string, params: Record<string, string> = {}) {

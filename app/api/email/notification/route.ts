@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { hasRelationship, isUuid } from "@/lib/serverRelationships";
 import {
   interestNotificationTemplate,
   matchNotificationTemplate,
@@ -11,8 +12,6 @@ import {
 export const dynamic = "force-dynamic";
 
 type NotificationEmailType = "match_notification" | "interest_notification";
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Signed-in only. The recipient is always resolved server-side from
 // recipientUserId -> public.users.email, and only when the caller has a real
@@ -40,7 +39,7 @@ export async function POST(request: Request) {
   }
   // Both values are interpolated into PostgREST or() filters below, so they must
   // be plain UUIDs - anything else could inject filter syntax.
-  if (!UUID_PATTERN.test(recipientUserId) || !UUID_PATTERN.test(jobId)) {
+  if (!isUuid(recipientUserId) || !isUuid(jobId)) {
     return NextResponse.json({ error: "recipientUserId and jobId must be UUIDs." }, { status: 400 });
   }
 
@@ -103,39 +102,6 @@ export async function POST(request: Request) {
   });
 
   return NextResponse.json({ ok: true });
-}
-
-// True when the two users share, on this job: an interest in either direction
-// (any status), a matches row (either side as candidate), or a message thread.
-async function hasRelationship(adminClient: SupabaseClient, a: string, b: string, jobId: string): Promise<boolean> {
-  const [interests, matches, messages] = await Promise.all([
-    adminClient
-      .from("interests")
-      .select("id")
-      .eq("job_id", jobId)
-      .or(`and(from_user_id.eq.${a},to_user_id.eq.${b}),and(from_user_id.eq.${b},to_user_id.eq.${a})`)
-      .limit(1),
-    adminClient
-      .from("matches")
-      .select("id")
-      .eq("job_id", jobId)
-      .or(`and(candidate_id.eq.${a},employer_id.eq.${b}),and(candidate_id.eq.${b},employer_id.eq.${a})`)
-      .limit(1),
-    adminClient
-      .from("match_messages")
-      .select("id")
-      .eq("job_id", jobId)
-      .or(`and(applicant_id.eq.${a},employer_id.eq.${b}),and(applicant_id.eq.${b},employer_id.eq.${a})`)
-      .limit(1)
-  ]);
-  for (const result of [interests, matches, messages]) {
-    if (result.error) {
-      console.error("[api/email/notification] relationship lookup failed", result.error);
-      continue;
-    }
-    if ((result.data ?? []).length > 0) return true;
-  }
-  return false;
 }
 
 async function getJobTitle(adminClient: SupabaseClient, jobId: string) {
