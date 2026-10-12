@@ -1462,7 +1462,7 @@ function EmployerMutualMatchActions({
             background - combined, that produces black text on a black chip.
             Neither red shade has a dark-mode override, so this is safe
             regardless of nesting. */}
-        <CapabilityEntryChips entries={profile.capabilityEntries} />
+        <CapabilityEntryChips entries={profile.capabilityEntries} limit={12} />
         {profile.employerSummary && scanEmployerFacingText(profile.employerSummary).length === 0 ? (
           <EmployerSummaryContent text={profile.employerSummary} />
         ) : (

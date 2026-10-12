@@ -451,27 +451,21 @@ export function MyMatches({ role }: { role: Role }) {
                                 <p className="mt-1 text-sm text-zinc-500">Capability summary unavailable - pending review.</p>
                               )}
                             </div>
-                            <div className="grid gap-3 sm:grid-cols-2">
-                              <div className="rounded-md border border-gray-200 bg-white p-3">
-                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Applicant area</p>
-                                <p className="mt-1 font-semibold text-zinc-950">{record.candidateProfile?.zipCode || "Generalized ZIP area"}</p>
-                              </div>
-                              <div className="rounded-md border border-gray-200 bg-white p-3">
-                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Skills</p>
-                                {/* capability_entries (AI-derived, verification-tagged), not raw
-                                    topSkills - topSkills is a free-text field the candidate types
-                                    on their own profile form, never scanned, and was showing the
-                                    six self-entered signup skills verbatim here. See
-                                    CapabilityEntryChips for the provenance rationale. */}
-                                {record.candidateProfile?.capabilityEntries?.length &&
-                                isCapabilityEntriesSafe(record.candidateProfile.capabilityEntries) ? (
-                                  <div className="mt-1">
-                                    <CapabilityEntryChips entries={record.candidateProfile.capabilityEntries} />
-                                  </div>
-                                ) : (
-                                  <p className="mt-1 text-sm text-zinc-600">Not listed</p>
-                                )}
-                              </div>
+                            <div className="rounded-md border border-gray-200 bg-white p-3">
+                              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Skills</p>
+                              {/* capability_entries (AI-derived, verification-tagged), not raw
+                                  topSkills - topSkills is a free-text field the candidate types
+                                  on their own profile form, never scanned, and was showing the
+                                  six self-entered signup skills verbatim here. See
+                                  CapabilityEntryChips for the provenance rationale. */}
+                              {record.candidateProfile?.capabilityEntries?.length &&
+                              isCapabilityEntriesSafe(record.candidateProfile.capabilityEntries) ? (
+                                <div className="mt-1">
+                                  <CapabilityEntryChips entries={record.candidateProfile.capabilityEntries} limit={12} />
+                                </div>
+                              ) : (
+                                <p className="mt-1 text-sm text-zinc-600">Not listed</p>
+                              )}
                             </div>
                           </div>
                         ) : null}
@@ -591,7 +585,7 @@ export function MyMatches({ role }: { role: Role }) {
                             <div>
                               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Skills</p>
                               <div className="mt-2">
-                                <CapabilityEntryChips entries={record.capabilityEntries} />
+                                <CapabilityEntryChips entries={record.capabilityEntries} limit={12} />
                               </div>
                             </div>
                           ) : null}
