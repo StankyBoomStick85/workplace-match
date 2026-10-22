@@ -47,6 +47,8 @@ export const PROOF_MAX = 4;
 // line is enough here. Every proof line still needs a sourced number.
 export const NICHE_PROOF_MIN = 1;
 export const CORE_MIN_DISTINCT_GROUPS = 2;
+// "Under 25 words" - a statement must be readable at a glance.
+export const STATEMENT_MAX_WORDS = 24;
 
 export type StatementIssueCode =
   | "empty_statement"
@@ -59,7 +61,12 @@ export type StatementIssueCode =
   | "overstated_verification"
   | "pronoun_or_subject"
   | "time_limited_without_end_date"
-  | "no_applicability";
+  | "no_applicability"
+  | "statement_too_long"
+  | "rating_as_statement"
+  | "self_report_filler"
+  | "dash_character"
+  | "repeated_glossary_phrase";
 
 export type StatementIssue = {
   code: StatementIssueCode;
@@ -237,6 +244,86 @@ function checkProofLines(
   return issues;
 }
 
+export function countWords(text: string): number {
+  return (text.match(/[A-Za-z0-9$%#][\w$%#.,'+/-]*/g) ?? []).length;
+}
+
+// A rating, ranking, award, or promotion result is proof inside the
+// capability it supports - never the capability itself. Checked on the
+// statement sentence only; proof lines are exactly where these belong.
+const RATING_IN_STATEMENT =
+  /\b(?:ranks?|ranked|rankings?|rated|ratings?|top (?:\d+(?:\s?-\s?\d+)?|few) ?(?:%|percent)|promot\w*|awards?|awarded|commendations?|medals?|decorat\w*|recogni[sz](?:ed|ation)|honou?r(?:s|ed)?|accolades?)\b/i;
+
+// "Self-reports X as a strength" and similar: a self-reported fact is stated
+// as a fact with its own number, or left out.
+const SELF_REPORT_FILLER =
+  /\b(?:self-?report\w*|self-?describ\w*|self-?identif\w*|self-?assess\w*|by (?:their|his|her) own account|describes? (?:it|this|themselves) as|lists? (?:it|this) as|claims? (?:it|this) as|as an? (?:core |key |personal )?(?:strength|capability|competenc\w*))\b/i;
+
+// En dash (U+2013) and em dash (U+2014). Hyphens or commas only.
+const DASH_CHARACTER = /[–—]/;
+
+function checkItemText(statement: string, proofTexts: string[], extraTexts: string[] = []): StatementIssue[] {
+  const issues: StatementIssue[] = [];
+  const words = countWords(statement);
+  if (words > STATEMENT_MAX_WORDS) {
+    issues.push({ code: "statement_too_long", detail: `statement has ${words} words; keep it under ${STATEMENT_MAX_WORDS + 1}` });
+  }
+  const rating = statement.match(RATING_IN_STATEMENT);
+  if (rating) {
+    issues.push({
+      code: "rating_as_statement",
+      detail: `statement is built on a rating/ranking/award/promotion ("${rating[0]}"); make it the capability, and put the result in a proof line`,
+    });
+  }
+  proofTexts.forEach((t, i) => {
+    const filler = t.match(SELF_REPORT_FILLER);
+    if (filler) {
+      issues.push({
+        code: "self_report_filler",
+        detail: `"${filler[0]}" is filler; state the self-reported fact with its own number, or leave it out`,
+        proofIndex: i,
+      });
+    }
+  });
+  if ([statement, ...proofTexts, ...extraTexts].some((t) => DASH_CHARACTER.test(t))) {
+    issues.push({ code: "dash_character", detail: "contains an em dash or en dash; use a hyphen or a comma" });
+  }
+  return issues;
+}
+
+// ---------- cross-statement: repeated glossary phrasing ----------
+
+const STOPWORDS = new Set([
+  "a", "an", "the", "and", "or", "of", "to", "for", "in", "on", "at", "by", "with", "from", "as", "is", "it",
+  "its", "that", "this", "who", "which", "every", "all", "any", "each", "be", "are", "was", "their", "often",
+]);
+
+function tokens(text: string): string[] {
+  return text.toLowerCase().replace(/[^a-z0-9\s]+/g, " ").split(/\s+/).filter(Boolean);
+}
+
+// 4-word sequences with at least 3 content words (numbers do not count):
+// specific enough to be a recognizable phrase ("operates independently often
+// far"), not a fact several statements may need ("a 12 person team").
+function phraseGrams(text: string): string[] {
+  const t = tokens(text);
+  const out: string[] = [];
+  for (let i = 0; i + 4 <= t.length; i++) {
+    const gram = t.slice(i, i + 4);
+    if (gram.filter((w) => !STOPWORDS.has(w) && !/\d/.test(w)).length >= 3) out.push(gram.join(" "));
+  }
+  return out;
+}
+
+export function buildGlossaryPhraseSet(glossaryTexts: string[]): Set<string> {
+  return new Set(glossaryTexts.flatMap(phraseGrams));
+}
+
+// Glossary phrases an item uses (statement sentence + proof lines).
+export function glossaryPhrasesIn(texts: string[], glossaryPhrases: Set<string>): Set<string> {
+  return new Set(texts.flatMap(phraseGrams).filter((g) => glossaryPhrases.has(g)));
+}
+
 function checkSharedText(texts: string[]): StatementIssue[] {
   const issues: StatementIssue[] = [];
   const joined = texts.join(" \n ");
@@ -296,6 +383,7 @@ export function checkCoreStatement(s: CoreStatement, ctx: CheckContext): Stateme
       detail: `proof cites ${distinct.size} distinct evidence group(s); a core statement must draw on at least ${CORE_MIN_DISTINCT_GROUPS}`,
     });
   }
+  issues.push(...checkItemText(s.statement ?? "", proof.map((p) => p.text ?? "")));
   issues.push(...checkSharedText([s.statement ?? "", ...proof.map((p) => p.text ?? "")]));
   return issues;
 }
@@ -316,6 +404,7 @@ export function checkNicheCapability(s: NicheCapability, ctx: CheckContext): Sta
   }
   issues.push(...checkProofLines(proof, ctx.groupsById, sourceTextsFor));
   issues.push(...checkStatementNumbers(s.statement ?? "", proof, ctx.groupsById, sourceTextsFor));
+  issues.push(...checkItemText(s.statement ?? "", proof.map((p) => p.text ?? ""), s.applicability ?? []));
   issues.push(...checkSharedText([s.statement ?? "", ...proof.map((p) => p.text ?? ""), ...(s.applicability ?? [])]));
   return issues;
 }

@@ -7,7 +7,7 @@
  * it never writes a statement to candidate_profiles.
  *
  * Run:   node scripts/compare-capability-statements.mjs [userIdOrPrefix] [model ...]
- *        defaults: 707ef2c7  claude-sonnet-4-6 claude-fable-5-1
+ *        defaults: 707ef2c7  claude-fable-5-1 (pass several models to compare)
  * Needs NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, ANTHROPIC_API_KEY
  * (read from .env.local when not already set).
  */
@@ -19,7 +19,7 @@ import { loadTsModules, loadEnvLocal, ROOT } from "./lib/loadTsModules.mjs";
 
 loadEnvLocal();
 const [, , userArg = "707ef2c7", ...modelArgs] = process.argv;
-const models = modelArgs.length ? modelArgs : ["claude-sonnet-4-6", "claude-fable-5-1"];
+const models = modelArgs.length ? modelArgs : ["claude-fable-5-1"];
 
 const { runCapabilityStatementSynthesis } = await loadTsModules(
   ["capabilityStatements", "capabilityStatementChecks", "statementGuard", "employerTextGuard", "translationGlossary", "documentLabels"],

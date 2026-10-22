@@ -1,37 +1,39 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
-import { createClient } from "@supabase/supabase-js";
-import Anthropic from "@anthropic-ai/sdk";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { waitUntil } from "@vercel/functions";
 import { resolveCallerIdentity } from "@/lib/serverRoles";
-import { runCapabilityStatementSynthesis, DEFAULT_SYNTHESIS_MODEL } from "@/lib/capabilityStatements";
-import type { EvidenceGroup, StoredDoc } from "@/lib/capabilityPipeline";
+import { createJob, getJobStatus, triggerStep } from "@/lib/capabilityStatementJobs";
 
 // Tier 1 capability statements, Phase 1 trigger: admin-only, one user at a
-// time, NOT chained into normal generation. Reads the user's saved evidence
-// groups (pending_evidence_groups) and runs synthesis.
+// time, NOT chained into normal generation. Synthesis runs as a background job
+// (lib/capabilityStatementJobs.ts) because a full run takes longer than one
+// function invocation.
 //
 // POST { userId: string, model?: string, write?: boolean }
-// - Dry run by default: returns the full synthesis result and writes nothing.
-// - write: true saves capability_statements / niche_capabilities /
-//   capability_profile_generated_at, and only when synthesis status is "ok".
-//   Requires supabase/migrations/20261022_add_capability_statements.sql.
+//   Starts a job and returns 202 { jobId } immediately.
+//   Dry run by default: the result is stored on the job row only.
+//   write: true also saves capability_statements / niche_capabilities /
+//   capability_profile_generated_at when synthesis status is "ok".
+//   Requires supabase/migrations/20261022_create_capability_statement_jobs.sql
+//   (and 20261022_add_capability_statements.sql for write: true).
+//
+// GET ?jobId=...
+//   Job status, and the full result once finished.
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+export const maxDuration = 60;
 
-export async function POST(request: Request) {
+async function requireAdmin(): Promise<{ adminClient: SupabaseClient; userId: string } | NextResponse> {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey || !apiKey) {
+  if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey || !process.env.ANTHROPIC_API_KEY) {
     return NextResponse.json({ error: "Server configuration missing." }, { status: 500 });
   }
-
   const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
-
   const cookieStore = cookies();
   const authClient = createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
@@ -47,58 +49,63 @@ export async function POST(request: Request) {
   if (!(await resolveCallerIdentity(adminClient, user)).isAdmin) {
     return NextResponse.json({ error: "Admin access required." }, { status: 403 });
   }
+  return { adminClient, userId: user.id };
+}
+
+export async function POST(request: Request) {
+  const auth = await requireAdmin();
+  if (auth instanceof NextResponse) return auth;
 
   const body = (await request.json().catch(() => null)) as { userId?: unknown; model?: unknown; write?: unknown } | null;
   const userId = typeof body?.userId === "string" ? body.userId.trim() : "";
   if (!userId) {
     return NextResponse.json({ error: "userId is required." }, { status: 400 });
   }
-  const model = typeof body?.model === "string" && body.model.trim() ? body.model.trim() : DEFAULT_SYNTHESIS_MODEL;
-  const write = body?.write === true;
+  const model = typeof body?.model === "string" && body.model.trim() ? body.model.trim() : undefined;
 
-  const { data: profile, error: profileError } = await adminClient
-    .from("candidate_profiles")
-    .select("display_name, pending_evidence_groups, document_metadata")
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (profileError) {
-    return NextResponse.json({ error: "Failed to load profile.", detail: profileError.message }, { status: 500 });
+  const created = await createJob(auth.adminClient, { userId, requestedBy: auth.userId, model, dryRun: body?.write !== true });
+  if ("error" in created) {
+    return NextResponse.json({ error: created.error }, { status: created.httpStatus });
   }
-  if (!profile) {
-    return NextResponse.json({ error: "No profile for that userId." }, { status: 404 });
-  }
-  const groups: EvidenceGroup[] = Array.isArray(profile.pending_evidence_groups) ? (profile.pending_evidence_groups as EvidenceGroup[]) : [];
-  if (groups.length === 0) {
-    return NextResponse.json({ error: "Profile has no saved evidence groups. Run capability generation first." }, { status: 400 });
-  }
-  const storedDocs: StoredDoc[] = Array.isArray(profile.document_metadata) ? (profile.document_metadata as StoredDoc[]) : [];
+  const { job } = created;
+  waitUntil(triggerStep(auth.adminClient, new URL(request.url).origin, job, 1));
 
-  const result = await runCapabilityStatementSynthesis({
-    anthropic: new Anthropic({ apiKey }),
-    groups,
-    storedDocs,
-    knownFullName: profile.display_name ?? null,
-    model,
+  return NextResponse.json(
+    { jobId: job.id, userId, model: job.model, dryRun: job.dry_run, status: job.status, statusUrl: `/api/admin/synthesize-capability-statements?jobId=${job.id}` },
+    { status: 202 }
+  );
+}
+
+export async function GET(request: Request) {
+  const auth = await requireAdmin();
+  if (auth instanceof NextResponse) return auth;
+
+  const jobId = new URL(request.url).searchParams.get("jobId") ?? "";
+  if (!jobId) {
+    return NextResponse.json({ error: "jobId is required." }, { status: 400 });
+  }
+  const job = await getJobStatus(auth.adminClient, jobId).catch((err: unknown) => {
+    console.error("[synthesize-capability-statements] status lookup failed", err);
+    return undefined;
   });
+  if (job === undefined) return NextResponse.json({ error: "Failed to load job." }, { status: 500 });
+  if (job === null) return NextResponse.json({ error: "No such job." }, { status: 404 });
 
-  let written = false;
-  let writeError: string | null = null;
-  if (write && result.status === "ok") {
-    const { error } = await adminClient
-      .from("candidate_profiles")
-      .update({
-        capability_statements: result.core,
-        niche_capabilities: result.niche,
-        capability_profile_generated_at: result.generatedAt,
-      })
-      .eq("user_id", userId);
-    if (error) {
-      writeError = error.message;
-      console.error("[synthesize-capability-statements] write failed", { userId, error: error.message });
-    } else {
-      written = true;
-    }
-  }
-
-  return NextResponse.json({ userId, write, written, writeError, result });
+  // The input snapshot (evidence + name) is never returned; the state is
+  // summarized rather than dumped.
+  return NextResponse.json({
+    jobId: job.id,
+    userId: job.user_id,
+    model: job.model,
+    dryRun: job.dry_run,
+    status: job.status,
+    stepSeq: job.step_seq,
+    stepStartedAt: job.step_started_at,
+    nextStep: job.state?.next ?? null,
+    callsSoFar: job.state?.calls ?? [],
+    error: job.error,
+    result: job.result,
+    createdAt: job.created_at,
+    updatedAt: job.updated_at,
+  });
 }

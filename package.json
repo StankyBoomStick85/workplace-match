@@ -13,6 +13,7 @@
     "@supabase/auth-helpers-nextjs": "^0.15.0",
     "@supabase/ssr": "^0.6.1",
     "@supabase/supabase-js": "^2.105.3",
+    "@vercel/functions": "^3.10.3",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.468.0",
     "mammoth": "^1.12.0",

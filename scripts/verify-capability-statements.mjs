@@ -255,5 +255,161 @@ function expect(name, cond, detail = "") {
   }
 }
 
+// ───────────────────────── follow-up rules (2026-10-22) ─────────────────────────
+{
+  const groups = [
+    { groupId: "g1", verificationStatus: "VERIFIED", claims: ["Rated #2 of 6 peers by senior rater"] },
+    { groupId: "g2", verificationStatus: "VERIFIED", claims: ["Responsible for $2,000,000 of equipment with zero loss"] },
+    { groupId: "g3", verificationStatus: "USER_PROVIDED", claims: ["Budget & Asset Accountability", "Led teams of 12 people"] },
+  ];
+  const ctx = { groupsById: new Map(groups.map((g) => [g.groupId, g])) };
+  const codes = (issues) => issues.map((i) => i.code);
+  const proof = [
+    { text: "Ranked #2 of 6 peers by an independent senior evaluator", groupIds: ["g1"] },
+    { text: "Accountable for $2M in equipment with zero loss", groupIds: ["g2"] },
+  ];
+
+  const long = { statement: "Keeps " + "very ".repeat(22) + "high-value equipment accountable.", proof };
+  expect("rule d: 25+ word statement flagged", codes(checks.checkCoreStatement(long, ctx)).includes("statement_too_long"));
+  expect("rule d: 24-word statement allowed", checks.countWords("one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty a b c d") === 24);
+
+  for (const statement of [
+    "Consistently ranks in the top few percent of peers.",
+    "Ranked in the top 3-5% across reviews.",
+    "Earns repeated promotion ahead of peers.",
+    "Holds 6 commendations for performance.",
+  ]) {
+    expect(`rule a: rating as statement flagged: ${statement}`, codes(checks.checkCoreStatement({ statement, proof }, ctx)).includes("rating_as_statement"));
+  }
+  expect(
+    "rule a: ranking inside a proof line is fine",
+    !codes(checks.checkCoreStatement({ statement: "Keeps high-value equipment and people accountable.", proof }, ctx)).includes("rating_as_statement")
+  );
+  expect(
+    "rule a: 'recognizes' (verb) is not a rating",
+    !codes(checks.checkCoreStatement({ statement: "Recognizes risks early and plans around them.", proof }, ctx)).includes("rating_as_statement")
+  );
+
+  const filler = {
+    statement: "Keeps high-value equipment accountable.",
+    proof: [proof[0], { text: "Accountable for $2M in equipment; self-reports budget and asset accountability as a core strength", groupIds: ["g2", "g3"] }],
+  };
+  expect("rule b: self-report filler flagged", codes(checks.checkCoreStatement(filler, ctx)).includes("self_report_filler"));
+  const fillerB = { ...filler, proof: [proof[0], { text: "Leads teams of 12 people, listing it as a key strength", groupIds: ["g3", "g2"] }] };
+  expect("rule b: 'as a key strength' flagged", codes(checks.checkCoreStatement(fillerB, ctx)).includes("self_report_filler"));
+  const selfFact = { ...filler, proof: [proof[0], { text: "Leads teams of 12 people", groupIds: ["g3", "g2"] }] };
+  expect("rule b: self-reported fact stated as a fact passes", !codes(checks.checkCoreStatement(selfFact, ctx)).includes("self_report_filler"));
+
+  const em = { statement: "Keeps equipment accountable — with zero loss.", proof };
+  expect("rule c: em dash flagged", codes(checks.checkCoreStatement(em, ctx)).includes("dash_character"));
+  const en = { statement: "Keeps equipment accountable.", proof: [proof[0], { text: "Accountable for $2M – zero loss", groupIds: ["g2"] }] };
+  expect("rule c: en dash in proof flagged", codes(checks.checkCoreStatement(en, ctx)).includes("dash_character"));
+  const nicheDash = { statement: "Inspects safety-critical equipment.", applicability: ["aviation — safety"], proof: [proof[0]] };
+  expect("rule c: dash in applicability tag flagged", codes(checks.checkNicheCapability(nicheDash, ctx)).includes("dash_character"));
+  expect(
+    "rule c: range dashes are normalized at parse",
+    synth.parseSynthesisOutput(JSON.stringify({ core: [{ statement: "x", proof: [{ text: "top 3–5%", groupIds: [] }] }], niche: [], uncertainTerms: [] }))
+      .core[0].proof[0].text === "top 3-5%"
+  );
+
+  const phrases = checks.buildGlossaryPhraseSet(["A small, self-sufficient specialist team that operates independently, often far from support."]);
+  const used = checks.glossaryPhrasesIn(["Directs a team that operates independently, often far from support"], phrases);
+  expect("rule d: glossary phrase detected", used.has("operates independently often far"), JSON.stringify([...used]));
+  const glue = checks.glossaryPhrasesIn(["for a 12 person team"], checks.buildGlossaryPhraseSet(["Director of operations for a 12-person team"]));
+  expect("rule d: a numeric fact ('a 12-person team') is not glossary phrasing", glue.size === 0, JSON.stringify([...glue]));
+}
+
+// ───────────────────────── follow-up guard terms ─────────────────────────
+{
+  const cats = (t) => guard.scanStatementText(t, { knownFullName: "Joel DeToy" }).map((v) => v.category);
+  for (const [text, cat] of [
+    ["Advised the commander on logistics", "service_term"],
+    ["Led 14 movements as the on-scene commander", "service_term"],
+    ["Realigned to a new theater with no loss", "service_term"],
+    ["Destroyed hostile positions", "service_term"],
+    ["Protected coalition forces", "service_term"],
+    ["Exceeded the infantry standard by 22 minutes", "service_term"],
+    ["Advised senior leaders at two higher commands", "unit_designator"],
+    ["Effects felt across multiple commands", "unit_designator"],
+    ["Recognized at two levels of command", "unit_designator"],
+    ["Lessons provided to a national intelligence agency", "service_term"],
+    ["Tracked 88 people during the COVID-19 crisis", "dating_event"],
+    ["Kept operations running through the pandemic", "dating_event"],
+    ["Restored power after Hurricane Maria", "dating_event"],
+  ]) {
+    expect(`guard flags (${cat}): ${text}`, cats(text).includes(cat), JSON.stringify(cats(text)));
+  }
+  for (const text of ["Commands respect from senior partners", "Coordinated 2 command posts"]) {
+    expect(`guard passes: ${text}`, guard.scanStatementText(text).length === 0, JSON.stringify(guard.scanStatementText(text)));
+  }
+  expect("core-only: 'combat' flagged by the core scan", guard.scanCoreOnlyText("Performs under combat conditions").length === 1);
+  expect("core-only: 'combat' NOT flagged by the shared statement guard (niche allowed)", !guard.scanStatementText("Coordinates fire under combat conditions").some((v) => /combat/i.test(v.match)));
+  expect("core-only: 'under direct threat' passes", guard.scanCoreOnlyText("Leads under direct threat").length === 0);
+  for (const text of [
+    "Led a 3-person assault element",
+    "Trained 7 operators in a week",
+    "Holds a valor citation",
+    "Recorded in the official service record",
+    "Coordinated 2 nine-person assault teams",
+  ]) {
+    expect(`core-only flags: ${text}`, guard.scanCoreOnlyText(text).length > 0, JSON.stringify(guard.scanCoreOnlyText(text)));
+    expect(`core-only term NOT in shared guard (niche keeps it): ${text}`, !guard.scanStatementText(text).some((v) => v.category === "core_only_term"));
+  }
+  expect("core-only: 'specialists' / 'official records' pass", guard.scanCoreOnlyText("Trained 7 specialists, recorded in official records").length === 0);
+  expect(
+    "guard: 'master breacher' blocked everywhere",
+    guard.scanStatementText("Appointed team master breacher").some((v) => v.category === "school_or_qualification")
+  );
+}
+
+// ───────────────── state machine with a mocked model (no network) ─────────────────
+{
+  const groups = [
+    { groupId: "a", verificationStatus: "VERIFIED", primarySourceDocId: "d", corroboratingDocIds: [], claims: ["Rated #2 of 6 peers", "Top 3% of peers"] },
+    { groupId: "b", verificationStatus: "VERIFIED", primarySourceDocId: "d", corroboratingDocIds: [], claims: ["Responsible for $2,000,000 of equipment"] },
+    { groupId: "c", verificationStatus: "VERIFIED", primarySourceDocId: "d", corroboratingDocIds: [], claims: ["Trained 500 partner personnel", "Trained 80 personnel in explosives"] },
+    { groupId: "e", verificationStatus: "VERIFIED", primarySourceDocId: "d", corroboratingDocIds: [], claims: ["Coordinated 15 logistics movements", "Planned air support for 8 months"] },
+  ];
+  const good = (statement, p1, p2) => ({ statement, proof: [p1, p2] });
+  const ok1 = good("Keeps high-value equipment accountable under pressure.", { text: "Accountable for $2M in equipment", groupIds: ["b"] }, { text: "Ranked #2 of 6 peers", groupIds: ["a"] });
+  const ok2 = good("Builds training that scales to hundreds of people.", { text: "Trained 500 partner personnel", groupIds: ["c"] }, { text: "Placed in the top 3% of peers", groupIds: ["a"] });
+  const bad = good("Plans multinational logistics in the combat theater.", { text: "Coordinated 15 movements", groupIds: ["e"] }, { text: "Trained 80 people in explosives", groupIds: ["c"] });
+  const fixed = good("Plans multinational logistics across borders on schedule.", { text: "Coordinated 15 logistics movements", groupIds: ["e"] }, { text: "Planned air support for 8 months", groupIds: ["e", "c"] });
+  const responses = [
+    { core: [ok1, ok2, bad], niche: [], uncertainTerms: [{ term: "X", assumedMeaning: "y", reason: "z" }] },
+    { core: [fixed], niche: [], uncertainTerms: [] },
+  ];
+  const prompts = [];
+  const anthropic = {
+    messages: {
+      stream: (params) => {
+        prompts.push(params.messages[0].content);
+        const body = responses.shift();
+        return { finalMessage: async () => ({ model: params.model, stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 }, content: [{ type: "text", text: JSON.stringify(body) }] }) };
+      },
+    },
+  };
+  const result = await synth.runCapabilityStatementSynthesis({ anthropic, groups, storedDocs: [], knownFullName: "Joel DeToy", model: "claude-fable-5-1" });
+  expect("state machine: ok after one targeted retry", result.status === "ok", JSON.stringify({ status: result.status, notes: result.notes, rejected: result.rejected }));
+  expect("state machine: 2 model calls", result.calls.length === 2);
+  expect("state machine: replacement lands in the failed slot", result.core[2]?.statement === fixed.statement, JSON.stringify(result.core.map((c) => c.statement)));
+  expect("state machine: retry prompt names the rejected phrases", /core_only_term|"combat"/.test(prompts[1]) && /theater/.test(prompts[1]));
+  expect("state machine: accepted items not re-sent as rejected", !prompts[1].includes("REJECTED CORE STATEMENTS (2)"));
+  expect("state machine: uncertain terms carried through", result.uncertainTerms.length === 1);
+
+  // Cross-statement glossary phrasing: the second statement to use a phrase fails.
+  const dupA = good("Runs a team that works independently far from support.", { text: "Accountable for $2M in equipment", groupIds: ["b"] }, { text: "Ranked #2 of 6 peers", groupIds: ["a"] });
+  const dupB = good("Trains partners for a team that works independently far from support.", { text: "Trained 500 partner personnel", groupIds: ["c"] }, { text: "Placed in the top 3% of peers", groupIds: ["a"] });
+  responses.push({ core: [dupA, dupB, ok2], niche: [], uncertainTerms: [] }, { core: [], niche: [], uncertainTerms: [] }, { core: [], niche: [], uncertainTerms: [] });
+  const dupGlossary = [{ term: "Team", aliases: ["team"], field: "x", employerMeaning: "A team that works independently far from support." }];
+  const r2 = await synth.runCapabilityStatementSynthesis({ anthropic, groups, storedDocs: [], knownFullName: null, model: "claude-fable-5-1", glossary: dupGlossary });
+  expect(
+    "cross-check: repeated glossary phrasing rejects the later statement only",
+    r2.rejected.length === 1 && r2.rejected[0].issues[0].code === "repeated_glossary_phrase" && r2.rejected[0].item.statement === dupB.statement,
+    JSON.stringify(r2.rejected.map((f) => [f.item.statement, f.issues.map((i) => i.code)]))
+  );
+  expect("cross-check: first user of the phrase is kept", r2.core.some((c) => c.statement === dupA.statement));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

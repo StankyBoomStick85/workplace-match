@@ -284,7 +284,7 @@ export const TRANSLATION_GLOSSARY: GlossaryEntry[] = [
     term: "Medals",
     aliases: ["Medal", "Bronze Star", "Commendation Medal", "Achievement Medal", "Meritorious Service Medal"],
     field: "military",
-    employerMeaning: "Formal recognition for performance. A Bronze Star means significant achievement in a combat zone.",
+    employerMeaning: "Formal recognition for performance. A Bronze Star means significant achievement in a high-risk zone.",
     notes: "Count only, never name the medal.",
   },
   {

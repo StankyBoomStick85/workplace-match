@@ -27,7 +27,9 @@ export type StatementGuardCategory =
   | "document_type"
   | "operation_name"
   | "location"
-  | "service_term";
+  | "service_term"
+  | "dating_event"
+  | "core_only_term";
 
 export type StatementGuardViolation = {
   category: StatementGuardCategory;
@@ -58,7 +60,7 @@ const AWARD_NAME_SHAPE = /\b(?:[A-Z][a-z]+\s+){1,5}(?:Medal|Badge|Tab|Ribbon|Cro
 export const SCHOOL_AND_QUALIFICATION_TERMS = [
   "sfqc", "q course", "q-course", "qualification course", "sfas", "assessment and selection",
   "selection course", "ranger school", "airborne school", "air assault", "pathfinder", "sere",
-  "jumpmaster", "jump master", "halo", "haho", "military free fall", "static line", "static-line",
+  "jumpmaster", "jump master", "halo", "haho", "military free fall", "static line", "static-line", "master breacher",
   "advanced leader course", "advanced leaders course", "senior leader course", "senior leaders course",
   "basic leader course", "master leader course", "master leaders course", "warrior leader course",
   "alc", "slc", "blc", "mlc", "wlc", "sfauc", "solt", "dlpt", "dlab", "opi", "jfkswcs", "swcs",
@@ -108,7 +110,37 @@ export const SERVICE_TERMS = [
   // Added after the 2026-10-22 comparison run surfaced them in otherwise-clean output.
   "enemy", "enemies", "lethality", "sniper", "snipers", "airborne", "defense department", "defense-department",
   "department of defense",
+  // Added 2026-10-22 at Joel's direction after reviewing the Fable/Sonnet comparison.
+  "commander", "commanders", "on-scene commander", "theater", "theatre", "theaters", "hostile", "hostiles",
+  "coalition", "infantry", "intelligence agency", "intelligence agencies", "intelligence organization",
+  "intelligence community",
 ];
+
+// "commands" as organizations ("two higher commands", "across multiple
+// commands", "two levels of command"). The verb ("Commands respect") is fine.
+const COMMANDS_AS_ORGS = [
+  /\b(?:\d+|two|three|four|five|several|multiple|many|higher|sister|other|both|all|various|senior|subordinate|adjacent|separate|different)\s+(?:higher\s+)?commands\b/gi,
+  /\b(?:across|between|among)\s+(?:the\s+)?commands\b/gi,
+  /\blevels? of command\b/gi,
+  /\bcommand (?:team|staff|level|headquarters|group|element)\b/gi,
+];
+
+// Named historical events that date the work. "pandemic" is included because
+// it dates the work as surely as the name does.
+export const DATING_EVENT_TERMS = [
+  "covid", "covid-19", "covid19", "coronavirus", "sars-cov-2", "pandemic", "9/11", "september 11",
+  "september 11th", "y2k", "brexit", "arab spring", "gulf war", "desert storm", "desert shield", "cold war",
+  "global war on terror", "global war on terrorism", "gwot", "great recession",
+  "deepwater horizon", "fall of kabul", "ebola outbreak", "ebola crisis",
+];
+const DATING_EVENT_SHAPES = [/\bHurricane\s+[A-Z][a-z]+/g, /\b(?:Super)?[Ss]torm\s+[A-Z][a-z]+/g];
+
+// Blocked in CORE statements only (statement and proof lines): core
+// statements use the vocabulary a civilian hiring manager uses. Niche skills
+// may keep a technical term when the skill itself is technical (fire
+// coordination, explosives work), so these are not in the shared lists above.
+const CORE_ONLY_TERMS =
+  /\b(?:combat|assault(?:s|ed|ing)?|operators?|valou?r(?:ous)?|service records?)\b/gi;
 
 // "company" is an ordinary business word; it is only a unit when used like one.
 const COMPANY_AS_UNIT = [
@@ -195,6 +227,7 @@ const UNIT_RE = termListRegex(UNIT_DESIGNATOR_TERMS);
 const DOCUMENT_RE = termListRegex(DOCUMENT_TYPE_TERMS);
 const OPERATION_RE = termListRegex(OPERATION_TERMS);
 const SERVICE_RE = termListRegex(SERVICE_TERMS);
+const DATING_EVENT_RE = termListRegex(DATING_EVENT_TERMS);
 const LOCATION_RE = termListRegex(LOCATION_TERMS);
 const RANK_ABBREV_RE = termListRegex(RANK_ABBREVIATIONS);
 
@@ -216,6 +249,12 @@ function push(out: StatementGuardViolation[], category: StatementGuardCategory, 
 }
 
 const YEAR_END_DATE_BEFORE = /\b(?:expir\w*|valid (?:through|until)|current through|eligible through|through|until|ends?|lapses?)\b[^.;]{0,25}$/i;
+
+// Core statements get one extra rule on top of scanStatementText.
+export function scanCoreOnlyText(text: string): StatementGuardViolation[] {
+  if (!text) return [];
+  return Array.from(text.matchAll(CORE_ONLY_TERMS), (m) => ({ category: "core_only_term" as const, match: m[0], index: m.index ?? 0 }));
+}
 
 export function scanStatementText(text: string, options?: { knownFullName?: string | null }): StatementGuardViolation[] {
   if (!text) return [];
@@ -239,6 +278,9 @@ export function scanStatementText(text: string, options?: { knownFullName?: stri
   push(out, "military_rank", text, PAY_GRADE);
   push(out, "military_rank", text, RANK_ABBREV_RE);
   push(out, "location", text, LOCATION_RE);
+  for (const re of COMMANDS_AS_ORGS) push(out, "unit_designator", text, re);
+  push(out, "dating_event", text, DATING_EVENT_RE);
+  for (const re of DATING_EVENT_SHAPES) push(out, "dating_event", text, re);
 
   push(out, "specialty_code", text, SPECIALTY_EXPLICIT);
   for (const m of text.matchAll(SPECIALTY_SHAPE)) {
@@ -281,5 +323,8 @@ export const STATEMENT_GUARD_CORRECTIONS: Record<string, string> = {
   document_type: "Never name an evaluation document type. Say \"annual performance reviews\" or \"independent senior evaluators\" instead.",
   operation_name: "Never name an operation or exercise. Describe the type of environment instead.",
   location: "Never name a country, state, region, or installation. Describe the environment (e.g. \"austere international settings\").",
+  dating_event: "Never name a historical event that dates the work (e.g. a pandemic). Describe the situation instead (\"a prolonged organization-wide crisis\").",
+  core_only_term:
+    "Core statements use the vocabulary a civilian hiring manager uses: \"under direct threat\" not \"combat\", \"specialists\" not \"operators\", \"official records\" not \"service record\"; no \"assault\" or \"valor\" (say what was done and that it was formally recognized).",
   service_term: "Do not use this service term. Carry its meaning across in plain business words - translate it, do not just delete it.",
 };
