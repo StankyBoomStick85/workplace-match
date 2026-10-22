@@ -189,22 +189,19 @@ claim, sourceDocId, sourceDocLabel, sourceDocType, isOfficialDocument
 No markdown fences. No explanation. No text outside the JSON array.`;
 }
 
-// The profile's self-reported summary/skill tags are folded in as their own USER_PROVIDED
-// evidence items alongside whatever gets extracted from actual documents.
+// The profile's self-reported skill tags are folded in as their own USER_PROVIDED
+// evidence items alongside whatever gets extracted from actual documents. A tag
+// that a document also proves is absorbed into that document's group at the
+// merge step (see applyMergePlan); only an unsupported tag stands on its own.
+//
+// The self-written summary is deliberately NOT evidence: it is context about who
+// the person is (Step 4 and the employer summary read it from the profile
+// directly). As a single claim it used to become its own capability entry,
+// restating name, rank, and tenure.
 export function buildSelfReportedEvidenceItems(input: {
-  summary?: string | null;
   capabilityTags?: string[] | null;
 }): EvidenceItem[] {
   const items: EvidenceItem[] = [];
-  if (input.summary) {
-    items.push({
-      claim: input.summary,
-      sourceDocId: "profile-self-reported",
-      sourceDocLabel: "Applicant Self-Reported Summary",
-      sourceDocType: "other",
-      isOfficialDocument: false,
-    });
-  }
   if (Array.isArray(input.capabilityTags)) {
     for (const tag of input.capabilityTags) {
       items.push({
@@ -484,6 +481,7 @@ ${JSON.stringify(groups, null, 2)}
 Rules for deciding what combines:
 - Combine two or more groups when they describe the SAME BROADER CAPABILITY, even if the specific incidents, roles, timeframes, or source documents differ. Test: would a hiring manager describe these as "the same skill, shown more than once" rather than as two different things this person can do? If yes, combine them.
 - Do NOT combine groups that describe genuinely different skills or deliverables just because they sit in a similar theme or domain. Example: leading a team and training/mentoring people are related, leadership-adjacent skills, but they are different things a hiring manager would list separately - do not combine them. The same applies to e.g. asset accountability vs. budget management, or technical execution vs. advising others on it.
+- A self-reported group (verificationStatus USER_PROVIDED, e.g. a skill tag the applicant typed in) that restates a capability a document group (VERIFIED) proves MUST be listed in that document group's merge set. The documented group then stands as the capability; the self-reported restatement is not kept as a separate one.
 - When it is genuinely unclear whether two groups are the same skill or two related-but-different skills, leave them separate. Under-combining loses nothing (Step 3 still produces a usable entry for each); over-combining destroys specific, evidence-backed strengths by folding them into a vague catch-all.
 - A group that does not clearly match another is left alone.
 - For calibration only, not a target to hit: most single-person profiles, however many preliminary groups batching produced, describe on the order of a dozen to a few dozen genuinely distinct broad capabilities - not hundreds (a sign this pass under-combined restatements of the same thing) and not just a handful (a sign genuinely different skills got folded together). Use this only to sanity-check your own output; the two rules above decide the actual count, not this number.
@@ -510,7 +508,11 @@ export type MergePlanApplication = {
   invalidGroupIdRefs: string[]; // referenced by the plan but not a real preliminary groupId
   duplicateGroupIdRefs: string[]; // referenced in more than one merge set
   unaccountedGroupIds: string[]; // preliminary groups that ended up neither merged nor passed through (invariant: empty)
-  splitForVerifiedSafety: string[][]; // merge sets where USER_PROVIDED members were pulled out rather than blended into VERIFIED
+  splitForVerifiedSafety: string[][]; // merge sets that mixed VERIFIED and USER_PROVIDED members
+  // USER_PROVIDED groups dropped because a VERIFIED group in the same merge set
+  // proves the same capability (see applyMergePlan). Kept whole for logging and
+  // so coverage can count their evidence as represented.
+  droppedUserProvidedGroups: EvidenceGroup[];
 };
 
 // Tolerant parse of the merge plan. On any failure returns an empty plan
@@ -592,13 +594,16 @@ function mergeGroupSet(members: EvidenceGroup[]): EvidenceGroup {
 }
 
 // Applies a validated merge plan to the preliminary groups. Every preliminary
-// group is either folded into a merge or passed through verbatim - nothing is
-// dropped (see unaccountedGroupIds, an invariant that must stay empty).
+// group is folded into a merge, passed through verbatim, or - only when it is a
+// USER_PROVIDED restatement of a capability a VERIFIED group in the same merge
+// set proves - dropped and reported in droppedUserProvidedGroups. Nothing else
+// is ever dropped (see unaccountedGroupIds, an invariant that must stay empty).
 export function applyMergePlan(preliminaryGroups: EvidenceGroup[], plan: MergePlan): MergePlanApplication {
   const byId = new Map(preliminaryGroups.map((g) => [g.groupId, g] as const));
   const invalidGroupIdRefs: string[] = [];
   const duplicateGroupIdRefs: string[] = [];
   const splitForVerifiedSafety: string[][] = [];
+  const droppedUserProvidedGroups: EvidenceGroup[] = [];
   const consumed = new Set<string>();
   const mergedGroups: EvidenceGroup[] = [];
   let mergeInstructionsApplied = 0;
@@ -620,12 +625,21 @@ export function applyMergePlan(preliminaryGroups: EvidenceGroup[], plan: MergePl
 
     let members = ids.map((id) => byId.get(id)!);
 
-    // VERIFIED purity: never blend a self-reported-only (USER_PROVIDED) group into
-    // a VERIFIED one. If the set mixes both, keep only the VERIFIED members in the
-    // merge; the USER_PROVIDED members are left un-consumed and pass through.
+    // A document proves this capability, so it is document-backed: the
+    // USER_PROVIDED members are dropped, not blended in (their claims would make
+    // the VERIFIED group impure) and not passed through (that is how a skill
+    // tag like "Budget & Asset Accountability" used to survive as its own
+    // self-reported entry next to the evaluations that prove it). A lone
+    // VERIFIED member left after the drop simply passes through unchanged.
     const verifiedMembers = members.filter((g) => g.verificationStatus === "VERIFIED");
     if (verifiedMembers.length > 0 && verifiedMembers.length < members.length) {
       splitForVerifiedSafety.push(ids);
+      for (const g of members) {
+        if (g.verificationStatus !== "VERIFIED") {
+          consumed.add(g.groupId);
+          droppedUserProvidedGroups.push(g);
+        }
+      }
       members = verifiedMembers;
     }
     if (members.length < 2) continue;
@@ -648,6 +662,7 @@ export function applyMergePlan(preliminaryGroups: EvidenceGroup[], plan: MergePl
     duplicateGroupIdRefs,
     unaccountedGroupIds,
     splitForVerifiedSafety,
+    droppedUserProvidedGroups,
   };
 }
 
@@ -744,6 +759,8 @@ export type GroupingResult = {
   mergePlanDuplicateGroupIdRefs: string[];
   mergePlanUnaccountedGroupIds: string[];
   mergePlanSplitForVerifiedSafety: string[][];
+  // Self-reported groups dropped because a document group proves the same capability.
+  mergePlanDroppedUserProvidedGroupIds: string[];
   failedBatchIndexes: number[];
   truncatedBatchIndexes: number[];
   coverageAfterGrouping: GroupingCoverage;
@@ -760,7 +777,7 @@ export async function runEvidenceGrouping(
       groups: [], batchCount: 0, batchTimings: [], mergeRan: false, mergeElapsedMs: null,
       preliminaryGroupCount: 0, mergeStopReason: null, mergeWasTruncated: false,
       mergePlanParseOk: true, mergeInstructionsApplied: 0, mergePlanInvalidGroupIdRefs: [],
-      mergePlanDuplicateGroupIdRefs: [], mergePlanUnaccountedGroupIds: [], mergePlanSplitForVerifiedSafety: [],
+      mergePlanDuplicateGroupIdRefs: [], mergePlanUnaccountedGroupIds: [], mergePlanSplitForVerifiedSafety: [], mergePlanDroppedUserProvidedGroupIds: [],
       failedBatchIndexes: [], truncatedBatchIndexes: [],
       coverageAfterGrouping: computeGroupingCoverage(evidenceItems, []), coverageAfterMerge: null,
     };
@@ -849,6 +866,7 @@ export async function runEvidenceGrouping(
   let mergePlanDuplicateGroupIdRefs: string[] = [];
   let mergePlanUnaccountedGroupIds: string[] = [];
   let mergePlanSplitForVerifiedSafety: string[][] = [];
+  let mergePlanDroppedUserProvidedGroups: EvidenceGroup[] = [];
 
   if (preliminaryGroups.length > 1) {
     mergeRan = true;
@@ -883,16 +901,28 @@ export async function runEvidenceGrouping(
       mergePlanDuplicateGroupIdRefs = applied.duplicateGroupIdRefs;
       mergePlanUnaccountedGroupIds = applied.unaccountedGroupIds;
       mergePlanSplitForVerifiedSafety = applied.splitForVerifiedSafety;
+      mergePlanDroppedUserProvidedGroups = applied.droppedUserProvidedGroups;
       mergeElapsedMs = Date.now() - mergeStart;
 
-      if (applied.invalidGroupIdRefs.length > 0 || applied.duplicateGroupIdRefs.length > 0 || applied.splitForVerifiedSafety.length > 0) {
+      if (applied.invalidGroupIdRefs.length > 0 || applied.duplicateGroupIdRefs.length > 0) {
         console.error(
           "[capabilityPipeline][step2b] MERGE PLAN issues (instruction(s) partially skipped, no evidence lost) " +
           JSON.stringify({
             invalidGroupIdRefs: applied.invalidGroupIdRefs,
             duplicateGroupIdRefs: applied.duplicateGroupIdRefs,
-            splitForVerifiedSafety: applied.splitForVerifiedSafety,
           })
+        );
+      }
+      if (applied.droppedUserProvidedGroups.length > 0) {
+        console.log(
+          "[capabilityPipeline][step2b] self-reported groups absorbed by document-backed groups (dropped): " +
+          JSON.stringify(
+            applied.droppedUserProvidedGroups.map((g) => ({
+              groupId: g.groupId,
+              claims: g.claims,
+              mergeSet: applied.splitForVerifiedSafety.find((set) => set.includes(g.groupId)) ?? null,
+            }))
+          )
         );
       }
       if (applied.unaccountedGroupIds.length > 0) {
@@ -914,7 +944,12 @@ export async function runEvidenceGrouping(
     }
   }
 
-  const coverageAfterMerge = mergeRan ? computeGroupingCoverage(evidenceItems, finalGroups) : null;
+  // A dropped self-reported group's evidence is represented by the document
+  // group that proves the same capability, so it counts as covered - otherwise
+  // every absorbed skill tag would read as lost evidence.
+  const coverageAfterMerge = mergeRan
+    ? computeGroupingCoverage(evidenceItems, [...finalGroups, ...mergePlanDroppedUserProvidedGroups])
+    : null;
   if (coverageAfterMerge && coverageAfterMerge.missingDocIds.length > coverageAfterGrouping.missingDocIds.length) {
     console.error(
       "[capabilityPipeline][step2b] MERGE INTRODUCED A COVERAGE GAP " +
@@ -937,6 +972,7 @@ export async function runEvidenceGrouping(
     mergePlanDuplicateGroupIdRefs,
     mergePlanUnaccountedGroupIds,
     mergePlanSplitForVerifiedSafety,
+    mergePlanDroppedUserProvidedGroupIds: mergePlanDroppedUserProvidedGroups.map((g) => g.groupId),
     failedBatchIndexes,
     truncatedBatchIndexes,
     coverageAfterGrouping,

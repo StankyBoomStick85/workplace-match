@@ -115,7 +115,11 @@ function toPromptGroups(groups: EvidenceGroup[], storedDocs: StoredDoc[]): Promp
   }));
 }
 
-export function buildSynthesisPrompt(promptGroups: PromptGroup[], glossary: GlossaryEntry[] = TRANSLATION_GLOSSARY): string {
+export function buildSynthesisPrompt(
+  promptGroups: PromptGroup[],
+  glossary: GlossaryEntry[] = TRANSLATION_GLOSSARY,
+  context?: PersonContext
+): string {
   return `You are writing the capability statements a hiring manager will read about one person. Your job is to turn what this person has DONE into what they CAN DO and what they are capable of, in the plain language any hiring manager already uses.
 
 THE CORE RULE: TRANSLATE, DON'T STRIP.
@@ -173,10 +177,26 @@ NEVER APPEARS ANYWHERE IN THE OUTPUT (identity and jargon - the person is anonym
 GLOSSARY (authoritative corrections when a term matches):
 ${formatGlossaryForPrompt(glossary)}
 
-EVIDENCE GROUPS:
+${formatPersonContext(context)}EVIDENCE GROUPS:
 ${JSON.stringify(promptGroups, null, 1)}
 
 Return only the JSON object.`;
+}
+
+// The self-written summary and signup skill tags describe who the person is
+// and what they want to be known for. They help decide emphasis and wording,
+// but they are not evidence: they are never cited, and a number in them can
+// never appear in a proof line (the provenance check only sources numbers from
+// cited claims, so this is enforced in code as well as asked for here).
+export type PersonContext = { summary?: string | null; capabilityTags?: string[] | null };
+
+function formatPersonContext(context?: PersonContext): string {
+  const summary = context?.summary?.trim();
+  const tags = (context?.capabilityTags ?? []).filter((t) => t && t.trim());
+  if (!summary && tags.length === 0) return "";
+  return `CONTEXT ABOUT THE PERSON - NOT EVIDENCE. Use it only to understand who this person is and which capabilities they want to lead with. Never cite it, never take a fact or number from it, and never write a statement or proof line that exists only because of it. Every statement and proof line comes from the evidence groups below.
+${summary ? `Self-written summary: ${JSON.stringify(summary)}\n` : ""}${tags.length ? `Skills they listed at signup: ${JSON.stringify(tags)}\n` : ""}
+`;
 }
 
 const PROOF_SCHEMA = {
@@ -451,6 +471,8 @@ export type SynthesisInput = {
   storedDocs: StoredDoc[];
   knownFullName: string | null;
   glossary?: GlossaryEntry[];
+  // Summary + signup tags: context about the person, never evidence.
+  context?: PersonContext;
 };
 
 export function createSynthesisState(model: string = DEFAULT_SYNTHESIS_MODEL): SynthesisState {
@@ -515,7 +537,7 @@ export async function runSynthesisStep(state: SynthesisState, input: SynthesisIn
   if (state.next === "done") return state;
   const glossary = input.glossary ?? TRANSLATION_GLOSSARY;
   const ctx = buildCheckContext(input.groups, glossary);
-  const basePrompt = buildSynthesisPrompt(toPromptGroups(input.groups, input.storedDocs), glossary);
+  const basePrompt = buildSynthesisPrompt(toPromptGroups(input.groups, input.storedDocs), glossary, input.context);
   const s: SynthesisState = JSON.parse(JSON.stringify(state));
 
   if (s.next === "initial") {

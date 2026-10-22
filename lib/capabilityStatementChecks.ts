@@ -66,7 +66,8 @@ export type StatementIssueCode =
   | "rating_as_statement"
   | "self_report_filler"
   | "dash_character"
-  | "repeated_glossary_phrase";
+  | "repeated_glossary_phrase"
+  | "mixed_citation";
 
 export type StatementIssue = {
   code: StatementIssueCode;
@@ -237,6 +238,16 @@ function checkProofLines(
       issues.push({
         code: "overstated_verification",
         detail: "wording implies third-party documentation, but every cited group is self-reported",
+        proofIndex: i,
+      });
+    }
+    // Self-reported evidence only stands where no document supports the point.
+    // Citing it next to a document group adds nothing the document does not
+    // already prove, and is how "self-reports X as a strength" padding got in.
+    if (known.length > 0 && deriveEvidenceBasis(known, groupsById) === "mixed") {
+      issues.push({
+        code: "mixed_citation",
+        detail: "cites a self-reported group alongside a document group; cite only the document group(s), or make a separate self-reported point",
         proofIndex: i,
       });
     }

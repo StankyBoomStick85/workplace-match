@@ -411,5 +411,65 @@ function expect(name, cond, detail = "") {
   expect("cross-check: first user of the phrase is kept", r2.core.some((c) => c.statement === dupA.statement));
 }
 
+// ───────────── self-reported evidence is context / absorbed (2026-10-22) ─────────────
+{
+  const pipeline = await loadTsModules(["capabilityPipeline", "documentLabels"], "capabilityPipeline");
+
+  const items = pipeline.buildSelfReportedEvidenceItems({ summary: "Retired senior leader with 20 years", capabilityTags: ["Budget & Asset Accountability", "Cybersecurity"] });
+  expect("self-reported items: summary is not evidence", items.length === 2 && items.every((i) => i.claim !== "Retired senior leader with 20 years"));
+  expect("self-reported items: tags stay USER_PROVIDED evidence", items.every((i) => i.isOfficialDocument === false && i.sourceDocId === "profile-self-reported"));
+
+  const g = (groupId, verificationStatus, claims, primarySourceDocId = "doc") => ({ groupId, verificationStatus, claims, primarySourceDocId, corroboratingDocIds: [] });
+  const groups = [
+    g("v1", "VERIFIED", ["Responsible for $2,000,000 of equipment"], "eval"),
+    g("v2", "VERIFIED", ["Zero discrepancies in inventory"], "eval2"),
+    g("u1", "USER_PROVIDED", ["Budget & Asset Accountability"], "profile-self-reported"),
+    g("v3", "VERIFIED", ["Trained 500 partner personnel"], "eval"),
+    g("u2", "USER_PROVIDED", ["Training Program Development"], "profile-self-reported"),
+    g("u3", "USER_PROVIDED", ["Cybersecurity & Network Defense"], "profile-self-reported"),
+    g("u4", "USER_PROVIDED", ["Network defense"], "resume"),
+    g("u5", "USER_PROVIDED", ["Authored a book"], "book"),
+  ];
+  const applied = pipeline.applyMergePlan(groups, { merges: [["v1", "u1", "v2"], ["v3", "u2"], ["u3", "u4"]] });
+  const ids = applied.groups.map((x) => x.groupId);
+  expect("merge: mixed set keeps the VERIFIED merge", applied.groups.some((x) => x.groupId === "v1" && x.claims.length === 2 && x.verificationStatus === "VERIFIED"));
+  expect("merge: VERIFIED merge stays pure (no self-reported claims blended in)", !applied.groups.find((x) => x.groupId === "v1").claims.includes("Budget & Asset Accountability"));
+  expect("merge: USER_PROVIDED member of a mixed set is dropped, not passed through", !ids.includes("u1") && !ids.includes("u2"), JSON.stringify(ids));
+  expect("merge: dropped groups are reported", JSON.stringify(applied.droppedUserProvidedGroups.map((x) => x.groupId).sort()) === '["u1","u2"]');
+  expect("merge: lone VERIFIED member left after the drop passes through unchanged", applied.groups.some((x) => x.groupId === "v3" && x.claims.length === 1));
+  expect("merge: an all-self-reported set still merges as USER_PROVIDED", applied.groups.some((x) => x.groupId === "u3" && x.verificationStatus === "USER_PROVIDED" && x.claims.length === 2));
+  expect("merge: an unsupported self-reported group stands on its own", ids.includes("u5"));
+  expect("merge: nothing unaccounted", applied.unaccountedGroupIds.length === 0);
+  expect("merge prompt: tells the model to list self-reported restatements with the document group", /self-reported group[\s\S]{0,200}MUST be listed in that document group's merge set/.test(pipeline.buildEvidenceGroupMergePrompt(groups)));
+
+  // Coverage: a dropped group's evidence counts as represented.
+  const evidence = [
+    { claim: "x", sourceDocId: "eval", sourceDocLabel: "e", sourceDocType: "NCOER", isOfficialDocument: true },
+    { claim: "Budget & Asset Accountability", sourceDocId: "profile-self-reported", sourceDocLabel: "s", sourceDocType: "other", isOfficialDocument: false },
+  ];
+  const withDropped = pipeline.computeGroupingCoverage(evidence, [groups[0], ...applied.droppedUserProvidedGroups]);
+  expect("coverage: absorbed self-reported evidence is not reported as lost", !withDropped.missingDocIds.includes("profile-self-reported"));
+
+  // Statements: no mixed citations.
+  const sgroups = [
+    { groupId: "d", verificationStatus: "VERIFIED", claims: ["Responsible for $2,000,000 of equipment"] },
+    { groupId: "s", verificationStatus: "USER_PROVIDED", claims: ["Budget & Asset Accountability", "Managed 3 budgets"] },
+    { groupId: "e", verificationStatus: "VERIFIED", claims: ["Ranked #2 of 6 peers"] },
+  ];
+  const sctx = { groupsById: new Map(sgroups.map((x) => [x.groupId, x])) };
+  const codesOf = (st) => checks.checkCoreStatement(st, sctx).map((i) => i.code);
+  const mixed = { statement: "Keeps equipment accountable.", proof: [{ text: "Accountable for $2M in equipment", groupIds: ["d", "s"] }, { text: "Ranked #2 of 6 peers", groupIds: ["e"] }] };
+  expect("statements: proof citing self-reported + document group is rejected", codesOf(mixed).includes("mixed_citation"));
+  const separate = { ...mixed, proof: [{ text: "Accountable for $2M in equipment", groupIds: ["d"] }, { text: "Managed 3 budgets", groupIds: ["s"] }] };
+  expect("statements: self-reported point on its own line is allowed", !codesOf(separate).includes("mixed_citation"), JSON.stringify(codesOf(separate)));
+
+  // Context block: present, marked not-evidence, and its numbers cannot source a proof line.
+  const prompt = synth.buildSynthesisPrompt([], undefined, { summary: "Led teams across 50+ countries", capabilityTags: ["Budget & Asset Accountability"] });
+  expect("synthesis prompt: summary and tags passed as NOT EVIDENCE context", /CONTEXT ABOUT THE PERSON - NOT EVIDENCE/.test(prompt) && prompt.includes("50+ countries") && prompt.includes("Budget & Asset Accountability"));
+  expect("synthesis prompt: no context block when there is no context", !/NOT EVIDENCE/.test(synth.buildSynthesisPrompt([], undefined, {})));
+  const fromContext = { statement: "Leads teams.", proof: [{ text: "Led teams across 50 countries", groupIds: ["d"] }, { text: "Ranked #2 of 6 peers", groupIds: ["e"] }] };
+  expect("synthesis: a number that exists only in the context is unsourced", codesOf(fromContext).includes("number_not_in_claims"));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

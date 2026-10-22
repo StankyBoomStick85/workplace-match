@@ -31,7 +31,7 @@ const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABA
 });
 const { data: rows, error } = await db
   .from("candidate_profiles")
-  .select("user_id, display_name, pending_evidence_groups, document_metadata");
+  .select("user_id, display_name, summary, capability_tags, pending_evidence_groups, document_metadata");
 if (error) throw error;
 const matches = rows.filter((r) => r.user_id === userArg || r.user_id.startsWith(userArg));
 if (matches.length !== 1) {
@@ -54,6 +54,7 @@ await Promise.all(
       groups,
       storedDocs: Array.isArray(profile.document_metadata) ? profile.document_metadata : [],
       knownFullName: profile.display_name ?? null,
+      context: { summary: profile.summary ?? null, capabilityTags: Array.isArray(profile.capability_tags) ? profile.capability_tags : null },
       model,
     });
     const file = join(outDir, `statements-${model}.json`);

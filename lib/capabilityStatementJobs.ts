@@ -108,7 +108,7 @@ export async function createJob(
 ): Promise<{ job: JobRow } | { error: string; httpStatus: number }> {
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("display_name, pending_evidence_groups, document_metadata")
+    .select("display_name, summary, capability_tags, pending_evidence_groups, document_metadata")
     .eq("user_id", args.userId)
     .maybeSingle();
   if (profileError) return { error: `Failed to load profile: ${profileError.message}`, httpStatus: 500 };
@@ -124,6 +124,10 @@ export async function createJob(
     groups,
     storedDocs: docs.map((d) => ({ id: d.id, label: d.label, contentType: d.contentType }) as StoredDoc),
     knownFullName: profile.display_name ?? null,
+    context: {
+      summary: profile.summary ?? null,
+      capabilityTags: Array.isArray(profile.capability_tags) ? (profile.capability_tags as string[]) : null,
+    },
   };
   const model = args.model ?? DEFAULT_SYNTHESIS_MODEL;
 
@@ -210,6 +214,34 @@ export async function runJobStep(adminClient: SupabaseClient, jobId: string, seq
   }
 
   const result = finishSynthesis(next, job.input);
+
+  // Statements cite positional groupIds, so they are only valid against the
+  // exact evidence they were built from. If the profile was regenerated while
+  // this job ran, writing would attach statements to different evidence
+  // (regeneration already cleared the old ones - see generate-capability).
+  if (!job.dry_run && result.status === "ok") {
+    const { data: current, error: currentError } = await adminClient
+      .from("candidate_profiles")
+      .select("pending_evidence_groups")
+      .eq("user_id", job.user_id)
+      .maybeSingle();
+    const evidenceUnchanged =
+      !currentError && !!current && JSON.stringify(current.pending_evidence_groups ?? null) === JSON.stringify(job.input.groups);
+    if (!evidenceUnchanged) {
+      const message = currentError ? `could not re-read evidence before writing: ${currentError.message}` : "evidence changed during job";
+      await adminClient
+        .from(JOB_TABLE)
+        .update({ state: next, result: { ...result, written: false, writeError: message }, updated_at: new Date().toISOString() })
+        .eq("id", jobId);
+      await failJob(adminClient, job, "capability_statements_evidence_changed", message, {
+        seq,
+        snapshotGroupCount: job.input.groups.length,
+        currentGroupCount: Array.isArray(current?.pending_evidence_groups) ? current.pending_evidence_groups.length : null,
+      });
+      return { kind: "finished", status: "failed" };
+    }
+  }
+
   let written = false;
   let writeError: string | null = null;
   if (!job.dry_run && result.status === "ok") {
