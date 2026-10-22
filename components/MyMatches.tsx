@@ -14,13 +14,13 @@ import {
 } from "../lib/matchMessages";
 import { useMatchThreadRealtime } from "../lib/useMatchThreadRealtime";
 import { useAutoScrollToBottom } from "../lib/useAutoScrollToBottom";
-import { calculateSkillMatch, getApplicantMatchSignals } from "../lib/skillMatch";
 import {
   addNotificationByUserId,
   getAllApplicantProfiles,
   getAllJobs,
   getApplicantInterests,
   getCurrentMvpUser,
+  getEmployerMatchScores,
   getEmployerProfile,
   getMutualMatches,
   removeInterest,
@@ -55,7 +55,7 @@ type PendingInterestRecord = {
   candidateId: string;
   zipCode: string;
   employerSummary: string;
-  matchPercent: number;
+  matchPercent: number | null;
 };
 
 export function MyMatches({ role }: { role: Role }) {
@@ -123,11 +123,17 @@ export function MyMatches({ role }: { role: Role }) {
       // Candidate profiles are employer-only data (api/mvp/read refuses them
       // to candidates with a 403) and are only rendered in the employer branch
       // below, so a candidate never requests them.
-      const [jobs, mutualMatches, candidateProfiles, applicantInterests] = await Promise.all([
+      const [jobs, mutualMatches, candidateProfiles, applicantInterests, employerScores] = await Promise.all([
         getAllJobs(),
         getMutualMatches(),
         role === "employer" ? getAllApplicantProfiles() : Promise.resolve([]),
-        role === "employer" ? getApplicantInterests() : Promise.resolve([])
+        role === "employer" ? getApplicantInterests() : Promise.resolve([]),
+        role === "employer"
+          ? getEmployerMatchScores().catch((err) => {
+              console.error("[MyMatches] stored match scores failed to load", err);
+              return {} as Record<string, number>;
+            })
+          : Promise.resolve({} as Record<string, number>)
       ]);
       const scopedMatches = mutualMatches.filter((match) =>
         role === "employer" ? match.employerId === user.id : match.candidateId === user.id
@@ -188,11 +194,10 @@ export function MyMatches({ role }: { role: Role }) {
                 return null;
               }
 
-              const matchPercent = calculateSkillMatch(
-                job.requiredSkills,
-                getApplicantMatchSignals(candidateProfile ?? null),
-                job.title
-              ).percentage;
+              // The stored employer-direction AI score; null when this
+              // candidate was never scored for this job (shown as "Not yet
+              // scored", never 0%).
+              const matchPercent = employerScores[`${interest.jobId}:${interest.candidateId}`] ?? null;
 
               return {
                 key: `${interest.employerId}:${interest.jobId}:${interest.candidateId}`,
@@ -507,7 +512,11 @@ export function MyMatches({ role }: { role: Role }) {
                         <span className="font-bold text-zinc-950">{record.job.title}</span>
                         <span className="flex items-center gap-2">
                           <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-800">&hearts; Interested</span>
-                          <span className="rounded-full bg-zinc-800 px-3 py-1 text-xs font-bold text-white">{record.matchPercent}%</span>
+                          {record.matchPercent !== null ? (
+                            <span className="rounded-full bg-zinc-800 px-3 py-1 text-xs font-bold text-white">{record.matchPercent}%</span>
+                          ) : (
+                            <span className="text-xs font-semibold text-zinc-400">Not yet scored</span>
+                          )}
                         </span>
                       </button>
                       {isExpanded ? (

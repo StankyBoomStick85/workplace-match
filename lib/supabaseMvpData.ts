@@ -24,8 +24,10 @@ export type MvpApplicantProfile = {
   employerSummary?: string;
   // capability_entries is deliberately absent: employers see the employer
   // summary only, and the "candidate-profiles" read no longer returns entries.
-  // topSkills is a client-side match-scoring input only - never rendered to
-  // an employer.
+  // topSkills is populated only on a candidate's OWN profile read; the
+  // employer-facing "candidate-profiles" read never returns capability_tags,
+  // so it is always empty in any employer view (match % there is the stored
+  // AI score - see getEmployerMatchScores).
   topSkills?: string[];
   experienceLevel?: string;
   updatedAt?: string;
@@ -202,6 +204,16 @@ export async function getCandidateMatchScores(candidateId: string, jobIds: strin
   });
   return data.reduce<Record<string, number>>((acc, row) => {
     acc[row.job_id] = row.score;
+    return acc;
+  }, {});
+}
+
+// Stored employer-direction AI scores for the calling employer's own jobs,
+// keyed "jobId:candidateId". Read-only; a missing key means "not yet scored".
+export async function getEmployerMatchScores() {
+  const data = await fetchMvpData<Array<{ job_id: string; candidate_id: string; score: number }>>("employer-match-scores");
+  return data.reduce<Record<string, number>>((acc, row) => {
+    acc[`${row.job_id}:${row.candidate_id}`] = row.score;
     return acc;
   }, {});
 }

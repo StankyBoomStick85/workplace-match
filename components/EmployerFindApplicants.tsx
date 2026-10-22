@@ -17,6 +17,7 @@ import {
   getCurrentMvpUser,
   getEmployerInterests,
   getEmployerJobs,
+  getEmployerMatchScores,
   getMutualMatches,
   removeInterest as removeSupabaseInterest
 } from "../lib/supabaseMvpData";
@@ -72,15 +73,10 @@ type applicantProfile = {
   // No capability entries or statements: employers see the employer summary
   // only, at every stage (decision 2026-10-22). They stay internal - they feed
   // the summary and matching - and the API no longer sends them.
-  // topSkills (capability_tags) is EVIDENCE, not PUBLIC: a free-text field the
-  // candidate types on their own profile form, never scanned by the identity
-  // guard. It stays in this type only because calculateSkillMatch still uses
-  // it as a scoring input (see getApplicantMatchSignals below) - it must
-  // never be rendered directly to an employer again. experienceLevel is the
-  // same shape of problem (a self-selected tier, no evidence behind it) and
-  // is kept for the same scoring-only reason - see the removed render site's
-  // comment for why no derived label replaces it.
-  topSkills?: string[];
+  // No raw signup skills (capability_tags) either: they are never sent to an
+  // employer. The match % shown is the stored AI score, computed server-side.
+  // experienceLevel is a self-selected tier with no evidence behind it; it is
+  // never rendered to an employer.
   experienceLevel?: string;
   educationLevel?: string;
   updatedAt?: string;
@@ -93,15 +89,17 @@ type ApplicantAccount = {
   preferredContactMethods?: ContactMethod[];
 };
 
-type SkillMatch = {
-  percentage: number;
-  matchedSkills: string[];
-  missingSkills: string[];
+// The stored employer-direction AI score for one (job, candidate) pair -
+// null when this employer has never had the candidate scored for that job.
+// Never a client-side estimate: the old keyword match needed the candidate's
+// raw signup skills in the employer's browser, and those are no longer sent.
+type JobFitScore = {
+  percentage: number | null;
 };
 
 type ApplicantJobMatch = {
   job: JobListing;
-  match: SkillMatch;
+  match: JobFitScore;
   interestState: ApplicantInterestState;
 };
 
@@ -134,7 +132,8 @@ type EmployerInterest = {
   employerId: string;
   jobId: string;
   candidateId: string;
-  matchPercent: number;
+  // Local display value only - the server stores the real AI score itself.
+  matchPercent: number | null;
   createdAt: string;
   status: "employer_interested";
 };
@@ -152,7 +151,7 @@ type MutualMatch = {
   employerId: string;
   jobId: string;
   candidateId: string;
-  matchPercent: number;
+  matchPercent: number | null;
   createdAt: string;
   status: "mutual_match";
   notificationStatus: {
@@ -222,6 +221,10 @@ export function EmployerFindApplicants() {
   // stale score from a previous job can never flash on the new job's cards;
   // "not present yet" renders as no badge, never a wrong number.
   const [aiScores, setAiScores] = useState<Record<string, number>>({});
+  // Every AI score already stored for this employer's jobs, keyed
+  // "jobId:candidateId" - the source for every job OTHER than the selected one
+  // (aiScores above is the live, freshly-scored source for the selected job).
+  const [storedScores, setStoredScores] = useState<Record<string, number>>({});
 
   useEffect(() => {
     loadMapData();
@@ -233,16 +236,21 @@ export function EmployerFindApplicants() {
         return;
       }
 
-      const [employerJobs, fetchedApplicantProfiles, employerInterestRows, applicantInterestRows, mutualMatchRows] =
+      const [employerJobs, fetchedApplicantProfiles, employerInterestRows, applicantInterestRows, mutualMatchRows, employerScores] =
         await Promise.all([
           getEmployerJobs(user.id),
           getAllApplicantProfiles(),
           getEmployerInterests(),
           getApplicantInterests(),
-          getMutualMatches()
+          getMutualMatches(),
+          getEmployerMatchScores().catch((err) => {
+            console.error("[EmployerFindApplicants] stored match scores failed to load", err);
+            return {} as Record<string, number>;
+          })
         ]);
 
       setAccount({ id: user.id, email: user.email });
+      setStoredScores(employerScores);
       setJobs(employerJobs as JobListing[]);
       setSelectedJobId(employerJobs[0]?.id ?? "");
       setApplicantProfiles(fetchedApplicantProfiles as applicantProfile[]);
@@ -258,7 +266,6 @@ export function EmployerFindApplicants() {
       const healedMatches = await healMissingMutualMatches({
         userId: user.id,
         jobs: employerJobs as JobListing[],
-        profiles: fetchedApplicantProfiles as applicantProfile[],
         employerInterests: employerInterestRows as EmployerInterest[],
         applicantInterests: applicantInterestRows as ApplicantInterest[],
         existingMatches: mutualMatchRows as MutualMatch[]
@@ -320,18 +327,23 @@ export function EmployerFindApplicants() {
       }
 
       const applicantRecordId = profile.userId;
-      // Still calculateSkillMatch-based, deliberately: this ranks THIS
-      // candidate's fit across the employer's OTHER jobs for the expanded
-      // per-candidate detail view (ApplicantMatchPopup's orderedJobMatches) -
-      // a different question than the main badge below, out of scope for the
-      // AI-scoring pass that badge just moved to.
+      // This candidate's fit across all of the employer's jobs, for the
+      // per-candidate detail view (ApplicantMatchPopup's orderedJobMatches).
+      // Every number is a stored AI score: the live one for the selected job,
+      // the stored one for every other job. A job never scored for this
+      // candidate has no number (and sorts last) - never a keyword estimate.
       const jobMatches = jobs
         .map((job) => ({
           job,
-          match: calculateSkillMatch(job.requiredSkills, getApplicantMatchSignals(profile), job.title),
+          match: {
+            percentage:
+              (job.id === selectedJobId ? aiScores[applicantRecordId] : undefined) ??
+              storedScores[`${job.id}:${applicantRecordId}`] ??
+              null
+          },
           interestState: getApplicantInterestState(applicantRecordId, job.id)
         }))
-        .sort((first, second) => second.match.percentage - first.match.percentage);
+        .sort((first, second) => (second.match.percentage ?? -1) - (first.match.percentage ?? -1));
       const hasMatchData = jobMatches.length > 0;
 
       summaries.push({
@@ -346,13 +358,13 @@ export function EmployerFindApplicants() {
         // candidates this replaced it for (a hard 0 above crew level).
         // Missing from aiScores renders as no badge, per the null guard on
         // this field everywhere it's read.
-        selectedJobMatchPercent: aiScores[applicantRecordId] ?? null,
+        selectedJobMatchPercent: aiScores[applicantRecordId] ?? storedScores[`${selectedJobId}:${applicantRecordId}`] ?? null,
         hasMatchData
       });
 
       return summaries;
     }, []);
-  }, [account, applicantProfiles, jobs, interests, applicantInterests, mutualMatches, selectedJobId, aiScores]);
+  }, [account, applicantProfiles, jobs, interests, applicantInterests, mutualMatches, selectedJobId, aiScores, storedScores]);
 
   const applicantGroups = useMemo(
     () => groupApplicantsByLocation(applicantSummaries),
@@ -431,7 +443,7 @@ export function EmployerFindApplicants() {
     return "none";
   }
 
-  async function toggleEmployerInterestForJob(job: JobListing, profile: applicantProfile, matchPercent: number) {
+  async function toggleEmployerInterestForJob(job: JobListing, profile: applicantProfile, matchPercent: number | null) {
     if (!account) {
       return;
     }
@@ -914,7 +926,7 @@ function ApplicantListView({
 }: {
   applicantSummaries: ApplicantMatchSummary[];
   selectedJobId: string;
-  onEmployerInterestForJob: (job: JobListing, profile: applicantProfile, matchPercent: number) => void;
+  onEmployerInterestForJob: (job: JobListing, profile: applicantProfile, matchPercent: number | null) => void;
   employerAccount: EmployerAccount | null;
 }) {
   const [expandedApplicantId, setExpandedApplicantId] = useState("");
@@ -1008,7 +1020,7 @@ function MapSurface({
   customAreaPoints: Coordinates[];
   onDrawingCustomAreaChange: (isDrawing: boolean) => void;
   onCustomAreaPointsChange: Dispatch<SetStateAction<Coordinates[]>>;
-  onEmployerInterestForJob: (job: JobListing, profile: applicantProfile, matchPercent: number) => void;
+  onEmployerInterestForJob: (job: JobListing, profile: applicantProfile, matchPercent: number | null) => void;
   employerAccount: EmployerAccount | null;
 }) {
   const jobPosition = job ? getJobMapPosition(job) : stLouisCenter;
@@ -1194,7 +1206,7 @@ function ApplicantLocationGroupPopup({
   group: ApplicantLocationGroup;
   focusedApplicantId: string;
   focusedJobId: string;
-  onEmployerInterestForJob: (job: JobListing, profile: applicantProfile, matchPercent: number) => void;
+  onEmployerInterestForJob: (job: JobListing, profile: applicantProfile, matchPercent: number | null) => void;
   employerAccount: EmployerAccount | null;
 }) {
   const [selectedApplicantId, setSelectedApplicantId] = useState<string | null>(focusedApplicantId || null);
@@ -1282,7 +1294,7 @@ function ApplicantMatchPopup({
 }: {
   applicant: ApplicantMatchSummary;
   focusedJobId?: string;
-  onEmployerInterestForJob: (job: JobListing, profile: applicantProfile, matchPercent: number) => void;
+  onEmployerInterestForJob: (job: JobListing, profile: applicantProfile, matchPercent: number | null) => void;
   employerAccount: EmployerAccount | null;
   variant?: "popup" | "panel";
   hideHeader?: boolean;
@@ -1295,7 +1307,7 @@ function ApplicantMatchPopup({
         if (second.job.id === focusedJobId) {
           return 1;
         }
-        return second.match.percentage - first.match.percentage;
+        return (second.match.percentage ?? -1) - (first.match.percentage ?? -1);
       })
     : applicant.jobMatches;
   const widthClass = variant === "panel" ? "w-full" : "w-80";
@@ -1322,13 +1334,9 @@ function ApplicantMatchPopup({
       <div className="space-y-2">
         {orderedJobMatches.map(({ job, match, interestState }) => {
           // The focused job is the one the employer actually has selected -
-          // same job the list row's badge scores. Point this row at that same
-          // AI score (employer_match_scores via applicant.selectedJobMatchPercent)
-          // instead of the old calculateSkillMatch engine, which is what was
-          // showing 0% here even after the list row moved to AI scoring.
-          // Other jobs in this candidate's breakdown have no AI score
-          // available (scoring only ever covers the selected job) and still
-          // show the old engine's number - see the report on this pass for why.
+          // same job and same AI score as the list row's badge. Other jobs
+          // show their stored AI score from employer_match_scores, or no
+          // number at all when this candidate was never scored for them.
           const isFocusedJob = job.id === focusedJobId;
           const displayPercent = isFocusedJob ? applicant.selectedJobMatchPercent : match.percentage;
           return (
@@ -1542,14 +1550,12 @@ function createMutualMatchRecord(interest: EmployerInterest): MutualMatch {
 async function healMissingMutualMatches({
   userId,
   jobs,
-  profiles,
   employerInterests,
   applicantInterests,
   existingMatches
 }: {
   userId: string;
   jobs: JobListing[];
-  profiles: applicantProfile[];
   employerInterests: EmployerInterest[];
   applicantInterests: ApplicantInterest[];
   existingMatches: MutualMatch[];
@@ -1570,8 +1576,9 @@ async function healMissingMutualMatches({
     if (!job) {
       continue;
     }
-    const profile = profiles.find((candidateProfile) => candidateProfile.userId === pair.candidateId);
-    const matchPercent = calculateSkillMatch(job.requiredSkills, getApplicantMatchSignals(profile ?? null), job.title).percentage;
+    // The matches route stores the real AI score server-side; nothing here
+    // estimates one (and the raw signup skills it would need are not sent).
+    const matchPercent = null;
 
     const { error: matchWriteError } = await addSupabaseMutualMatch({
       candidateId: pair.candidateId,
@@ -2149,233 +2156,3 @@ function createMatchIcon(percentage: number | null, interestState: ApplicantInte
     popupAnchor: [0, -20]
   });
 }
-
-function calculateSkillMatch(requiredSkillsValue: string[], candidateSkillsValue: string[], jobTitle = "") {
-  const requiredSkills = parseFlexibleSkills(requiredSkillsValue);
-  const candidateSkills = parseFlexibleSkills(candidateSkillsValue);
-  const scoredRequirements = requiredSkills.map((requiredSkill) => ({
-    skill: requiredSkill,
-    score: getBestRequirementScore(requiredSkill, candidateSkills)
-  }));
-  const matchedSkills = scoredRequirements.filter((result) => result.score > 0).map((result) => result.skill);
-  const missingSkills = scoredRequirements.filter((result) => result.score === 0).map((result) => result.skill);
-  const totalScore = scoredRequirements.reduce((sum, result) => sum + result.score, 0);
-  const calculatedPercentage =
-    requiredSkills.length > 0 ? Math.min(100, Math.round((totalScore / requiredSkills.length) * 100)) : 0;
-  const percentage = Math.max(
-    calculatedPercentage,
-    getLeadershipCrewMatchFloor(candidateSkills, requiredSkills, jobTitle)
-  );
-
-  return {
-    percentage,
-    matchedSkills,
-    missingSkills
-  };
-}
-
-function getApplicantMatchSignals(profile: applicantProfile | null) {
-  if (!profile) {
-    return [];
-  }
-
-  return [
-    ...(profile.topSkills ?? []),
-    profile.desiredJobType ?? "",
-    profile.capabilitySummary ?? "",
-    profile.experienceLevel ?? ""
-  ].filter(Boolean);
-}
-
-function parseFlexibleSkills(value: string[]) {
-  return value
-    .flatMap((skill) => skill.split(/[,\r\n]+/))
-    .map((skill) => skill.trim())
-    .filter(Boolean);
-}
-
-function normalizeSkill(skill: string) {
-  return skill
-    .toLowerCase()
-    .trim()
-    .replace(/&/g, " and ")
-    .replace(/[^a-z0-9\s-]/g, " ")
-    .replace(/[-\s]+/g, " ")
-    .trim();
-}
-
-const capabilityTranslationGroups = [
-  ["leadership", "supervisor", "team lead", "shift lead", "crew lead", "manager", "management", "assistant manager"],
-  ["operational planning", "operations", "logistics", "coordination", "planning", "scheduling"],
-  ["process improvement", "lean", "continuous improvement", "efficiency", "workflow improvement"],
-  ["risk assessment", "safety", "compliance", "hazard analysis", "risk management"],
-  ["team development", "training", "mentoring", "coaching", "onboarding"],
-  [
-    "decision making under pressure",
-    "decision making",
-    "fast paced",
-    "emergency response",
-    "dispatch",
-    "production leadership",
-    "critical decisions"
-  ],
-  ["systems thinking", "process mapping", "root cause analysis", "workflow", "operations support"],
-  ["adaptability", "changing priorities", "fast paced environment", "flexible", "problem solving"],
-  ["execution", "delivery", "follow through", "implementation", "operations"]
-].map((group) => group.map(normalizeSkill));
-
-const hierarchyTransferGroups = [
-  {
-    sources: ["leadership", "team development", "supervisor", "manager", "assistant manager", "shift lead", "team lead", "crew lead"],
-    targets: ["crew", "crew member", "team member", "associate", "frontline worker", "frontline", "staff member"],
-    score: 0.7
-  },
-  {
-    sources: ["leadership", "team development", "execution", "decision making", "decision making under pressure", "supervisor", "manager", "assistant manager", "shift lead", "team lead"],
-    targets: ["shift lead", "team lead", "crew lead", "assistant manager", "supervisor"],
-    score: 0.9
-  },
-  {
-    sources: ["operational planning", "operations", "logistics", "process improvement", "execution", "fulfillment", "inventory"],
-    targets: ["picker", "warehouse associate", "warehouse", "inventory", "fulfillment", "stocker", "stock associate"],
-    score: 0.7
-  },
-  {
-    sources: ["safety", "risk assessment", "compliance", "hazard analysis", "risk management"],
-    targets: ["warehouse", "production", "operations support"],
-    score: 0.45
-  },
-  {
-    sources: ["safety", "risk assessment", "compliance", "hazard analysis", "risk management"],
-    targets: ["forklift", "warehouse", "production", "operations support"],
-    score: 0.35
-  },
-  {
-    sources: ["forklift", "equipment operation", "equipment operations", "warehouse machinery", "machinery", "powered industrial truck", "pallet jack"],
-    targets: ["forklift", "equipment operation", "warehouse machinery"],
-    score: 0.95
-  },
-  {
-    sources: ["adaptability", "execution", "systems thinking", "problem solving", "workflow"],
-    targets: ["operations support", "associate", "team member", "fulfillment"],
-    score: 0.5
-  }
-].map((group) => ({
-  ...group,
-  sources: group.sources.map(normalizeSkill),
-  targets: group.targets.map(normalizeSkill)
-}));
-
-function getBestRequirementScore(requiredSkill: string, candidateSkills: string[]) {
-  return candidateSkills.reduce(
-    (bestScore, candidateSkill) => Math.max(bestScore, getSkillMatchScore(requiredSkill, candidateSkill)),
-    0
-  );
-}
-
-function getSkillMatchScore(requiredSkill: string, candidateSkill: string) {
-  const requiredForms = getSkillForms(requiredSkill);
-  const candidateForms = getSkillForms(candidateSkill);
-
-  // Exact matches get full credit. This catches direct skill overlap after
-  // normalizing case, punctuation, whitespace, and simple plurals.
-  if (requiredForms.some((requiredForm) => candidateForms.includes(requiredForm))) {
-    return 1;
-  }
-
-  // Translation matches get strong partial credit when both sides land in the
-  // same capability family, such as leadership -> supervisor.
-  const requiredConcepts = getCapabilityConcepts(requiredForms);
-  const candidateConcepts = getCapabilityConcepts(candidateForms);
-  if (requiredConcepts.some((concept) => candidateConcepts.includes(concept))) {
-    return 0.85;
-  }
-
-  // Hierarchy matches get medium credit when higher-level capability supports a
-  // lower-level role in the same work family. This lets shift lead support crew,
-  // operations support picker, and safety support forklift without making
-  // unrelated kitchen/cook requirements look matched.
-  return getHierarchyTransferScore(requiredForms, candidateForms);
-}
-
-function getSkillForms(skill: string) {
-  const normalized = normalizeSkill(skill);
-  const singularized = normalized
-    .split(" ")
-    .map(singularizeWord)
-    .join(" ");
-  return Array.from(new Set([normalized, singularized].filter(Boolean)));
-}
-
-function singularizeWord(word: string) {
-  if (word.endsWith("ies") && word.length > 4) {
-    return `${word.slice(0, -3)}y`;
-  }
-
-  if (word.endsWith("es") && word.length > 4) {
-    return word.slice(0, -2);
-  }
-
-  if (word.endsWith("s") && word.length > 3) {
-    return word.slice(0, -1);
-  }
-
-  return word;
-}
-
-function getCapabilityConcepts(skillForms: string[]) {
-  return capabilityTranslationGroups
-    .map((group, index) =>
-      group.some((term) =>
-        skillForms.some(
-          (skillForm) =>
-            skillForm === term ||
-            skillForm.includes(term) ||
-            (skillForm.length >= 4 && term.includes(skillForm))
-        )
-      )
-        ? index
-        : -1
-    )
-    .filter((index) => index >= 0);
-}
-
-function getHierarchyTransferScore(requiredForms: string[], candidateForms: string[]) {
-  return hierarchyTransferGroups.reduce((bestScore, group) => {
-    const hasSource = group.sources.some((source) => skillFormsContain(candidateForms, source));
-    const hasTarget = group.targets.some((target) => skillFormsContain(requiredForms, target));
-
-    return hasSource && hasTarget ? Math.max(bestScore, group.score) : bestScore;
-  }, 0);
-}
-
-function getLeadershipCrewMatchFloor(candidateSkills: string[], requiredSkills: string[], jobTitle: string) {
-  const candidateForms = candidateSkills.flatMap(getSkillForms);
-  const roleForms = [...requiredSkills, jobTitle].flatMap(getSkillForms);
-  const hasLeadership = leadershipFloorTerms.some((term) => skillFormsContain(candidateForms, term));
-  const isCrewRole = crewFloorTerms.some((term) => skillFormsContain(roleForms, term));
-
-  return hasLeadership && isCrewRole ? 30 : 0;
-}
-
-const leadershipFloorTerms = [
-  "leadership",
-  "team development",
-  "supervisor",
-  "manager",
-  "shift lead",
-  "crew lead"
-].map(normalizeSkill);
-
-const crewFloorTerms = ["crew", "crew member", "team member", "associate", "entry level"].map(normalizeSkill);
-
-function skillFormsContain(skillForms: string[], term: string) {
-  return skillForms.some(
-    (skillForm) =>
-      skillForm === term ||
-      skillForm.includes(term) ||
-      (skillForm.length >= 4 && term.includes(skillForm))
-  );
-}
-
-

@@ -114,8 +114,9 @@ export async function GET(request: Request) {
       // Employers and admins only. Previously this branch had no session or
       // role check at all, so any logged-out caller could read every approved
       // candidate's capability_entries and employer_summary.
-      // capability_tags is still sent for client-side match scoring only (see
-      // getApplicantMatchSignals); no employer view renders it.
+      // capability_tags (raw signup skills) is not on the allowlist: the match %
+      // an employer sees is the stored AI score (resource
+      // "employer-match-scores"), computed server-side.
       if (!user) return notAuthenticated();
       if (!canSeeCandidateProfiles(await getCaller())) return forbidden();
 
@@ -131,14 +132,13 @@ export async function GET(request: Request) {
       // server-side only.
       const { data, error } = await adminClient
         .from("candidate_profiles")
-        .select("user_id, zip_code, job_types, work_preference, capability_tags, experience_level, employer_summary, is_approved");
+        .select("user_id, zip_code, job_types, work_preference, experience_level, employer_summary, is_approved");
       if (error) throw error;
       const gated = (data ?? []).map((row: Record<string, unknown>) => ({
         user_id: row.user_id,
         zip_code: row.zip_code,
         job_types: row.job_types,
         work_preference: row.work_preference,
-        capability_tags: row.capability_tags,
         experience_level: row.experience_level,
         // AI-generated content is withheld until a human approves it. The
         // employer summary is the ONLY AI field an employer ever receives:
@@ -287,6 +287,25 @@ export async function GET(request: Request) {
         .eq("scoring_mode", "career")
         .in("job_id", jobIds)
         .gt("expires_at", new Date().toISOString());
+      if (error) throw error;
+      return NextResponse.json({ data: data ?? [] });
+    }
+
+    if (resource === "employer-match-scores") {
+      // The employer-direction AI scores ("could this candidate do this job")
+      // already stored for the CALLER's own jobs - read-only, never triggers
+      // scoring (score-candidates-for-job does that, for the selected job).
+      // This is the only match % an employer view shows: the old client-side
+      // keyword match needed the candidate's raw signup skills in the
+      // employer's browser, and those are no longer sent. A (job, candidate)
+      // pair with no row is simply absent - shown as "not yet scored", never 0%.
+      if (!user) return notAuthenticated();
+      const caller = await getCaller();
+      if (caller.role !== "employer" && !caller.isAdmin) return forbidden();
+      const { data, error } = await adminClient
+        .from("employer_match_scores")
+        .select("job_id, candidate_id, score")
+        .eq("employer_id", user.id);
       if (error) throw error;
       return NextResponse.json({ data: data ?? [] });
     }
