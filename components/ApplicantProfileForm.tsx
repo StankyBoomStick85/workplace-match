@@ -3,6 +3,7 @@
 import { useState, useEffect, type FormEvent } from "react";
 import { supabase } from "../lib/supabase";
 import { EmployerSummaryContent } from "./EmployerSummaryContent";
+import { CapabilityStatementsSection } from "./CapabilityStatementsSection";
 
 const PROFILE_PICTURE_BUCKET = "profile-pictures";
 const DOCUMENTS_BUCKET = "candidate-documents";
@@ -1275,6 +1276,10 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
           {hasGeneratedContent ? (
             <>
             <div className="space-y-6">
+              <CapabilityStatementsSection
+                statements={initialProfile?.capability_statements}
+                niche={initialProfile?.niche_capabilities}
+              />
               {profile?.recommendedPosition ? <RecommendedPositionCard content={profile.recommendedPosition} /> : null}
               {profile?.entryPoint ? <EntryPointCard content={profile.entryPoint} /> : null}
               {profile?.futurePositions ? <AccordionSection title="Future Position Recommendations" text={profile.futurePositions} /> : null}
