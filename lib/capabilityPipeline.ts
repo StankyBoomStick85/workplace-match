@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
 import { getCivilianDocLabel } from "@/lib/documentLabels";
+import { findUnsourcedNumbers } from "@/lib/capabilityStatementChecks";
 
 export type EvidenceItem = {
   claim: string;
@@ -1366,131 +1367,242 @@ export function extractStep4Sections(positionsText: string): Step4ExtractionResu
 }
 
 // ---------- Employer-facing summary ----------
+//
+// The employer summary is the ONLY capability content an employer ever sees,
+// at every stage (decision 2026-10-22). It is written from the candidate's
+// capability statements (falling back to capability entries only when no
+// statements exist yet) plus their own summary and stated direction as
+// context, in a fixed scannable shape:
+//
+//   ## HEADLINE      one line, who they are NOW and the value they bring
+//   ## PROVEN_AT     3-5 bullets: "- **Lead phrase** proof with a number"
+//   ## THRIVES_IN    one line: role FAMILIES and work settings
+//   ## GROWING_INTO  one line: where they are heading
+//   ## GAP           optional, one line, a clear fixable gap
+//
+// Every identity / framing rule from the previous versions is unchanged.
 
-export const EMPLOYER_SUMMARY_SYSTEM_PROMPT = `You are a talent strategist writing employer-facing candidate summaries. Your audience is a hiring manager or HR director. This platform never discloses candidate identity to an employer, at any tier - describe capability only, never identity. If a motivated reader could identify a specific individual from your output, the output is wrong. Write in third person using only they/them/their pronouns - never he/him, she/her, or any gendered term. Never use the candidate's name or initials. Never name a past employer, unit, command, or organization. Never state a branch of service (Army, Navy, Air Force, Marines, Coast Guard, Space Force) or a specific rank, grade, or title (e.g. Sergeant First Class, Green Beret, Colonel). Never state exact dates, years of service, tenure length, or age (no "20 years," no "since 2005" - use relative framing like "an extended career" or "many years" only if duration matters, otherwise omit it). Never name a specific country, region, or named operation/deployment - use general framing like "high-risk international environments" instead of "50+ countries" or a named campaign. Never mention a publication, book, article, or other named authored work. Never use job titles, unit designations, coded specialty designators, operation names, service acronyms, or any jargon that requires insider context to understand. Write in plain business language a hiring manager already uses.
+export const EMPLOYER_SUMMARY_SYSTEM_PROMPT = `You are a talent strategist writing employer-facing candidate summaries. Your audience is a hiring manager or HR director scanning many candidates. This platform never discloses candidate identity to an employer, at any tier - describe capability only, never identity. If a motivated reader could identify a specific individual from your output, the output is wrong. Use no pronouns where you can avoid them, and when you cannot, only they/them/their - never he/him, she/her, or any gendered term. Never use the candidate's name or initials. Never name a past employer, unit, command, or organization. Never state a branch of service (Army, Navy, Air Force, Marines, Coast Guard, Space Force) or a specific rank, grade, or title (e.g. Sergeant First Class, Green Beret, Colonel). Never state exact dates, years of service, tenure length, or age. Never name a specific country, region, or named operation/deployment - use general framing like "high-risk international environments". Never mention a publication, book, article, or other named authored work. Never use unit designations, coded specialty designators, operation names, service acronyms, or any jargon that requires insider context to understand. Write in plain business language a civilian hiring manager already uses.
 
-Write about a capable professional applying for a job. Describe what they have done and can do as accomplished fact. Do not frame the candidate as coming from outside ordinary work, entering a new sector, transitioning, adjusting, acclimating, or bridging into anything, and do not describe their experience as needing translation, conversion, or interpretation - it is simply their experience. Do not use the words "civilian" or "military" anywhere in the output, and do not use any wording that implies the candidate must earn their way into normal employment or prove they can do work they have already done.
+Write about a capable professional applying for a job. Lead with who this person is NOW and where they are heading; the past is evidence, not identity. Describe what they have done and can do as accomplished fact. Do not frame the candidate as coming from outside ordinary work, entering a new sector, transitioning, adjusting, acclimating, or bridging into anything, and do not describe their experience as needing translation, conversion, or interpretation - it is simply their experience. Do not use the words "civilian" or "military" anywhere in the output, and do not use any wording that implies the candidate must earn their way into normal employment or prove they can do work they have already done.
 
-Security clearance is the one exception to "describe capability only": if the source material states the candidate holds a security clearance, report it as a capability fact - "holds an active security clearance" or, if a specific level is given, name that level (e.g. "holds an active Top Secret clearance"). Never name who granted, sponsored, or investigated it - no agency, department, or branch may appear anywhere near the clearance mention. Workplace Match does not verify clearances; it reports only what the candidate stated and what their documents corroborate.
+Security clearance is the one exception to "describe capability only": if the source material states the candidate holds a security clearance with an expiration date, it may be reported as a capability fact with that date. Never name who granted, sponsored, or investigated it.
 
-When the source material indicates a capability was corroborated by more than one document or source, describe it as a corroboration count, never by naming the document type or its issuer - "documented across multiple supervisor evaluations" is correct, "verified by Army NCOERs" is not, because naming the document type itself identifies the branch.
+When the source material indicates a capability was corroborated by more than one document or source, describe it as a corroboration count, never by naming the document type or its issuer - "documented across multiple performance reviews" is correct, naming the review form or the organization that issued it is not.
 
-Focus on what this person can do and the scale at which they have done it (team size, budget, scope of responsibility are fine when phrased generically) and why an employer should be interested. Be specific and factual about capability. A genuine gap may be stated, but only as a specific, nameable missing item ("has not yet worked with a named tool or system," "would benefit from a specific named certification"); never as a vague category of unfamiliarity, which is unfalsifiable and diminishing. No filler language.`;
+A genuine gap may be stated, but only as a specific, nameable, fixable missing item ("has not yet worked with a named tool or system," "would benefit from a specific named certification"); never as a vague category of unfamiliarity, which is unfalsifiable and diminishing. No filler language. No paragraphs. No em dashes or en dashes anywhere - use hyphens or commas.`;
+
+export type EmployerSummaryStatement = { statement: string; proof: Array<{ text: string }> };
 
 export type EmployerSummaryInput = {
+  // Preferred source: the candidate's core capability statements.
+  capabilityStatements?: EmployerSummaryStatement[] | null;
+  // Fallback source (capability entries rendered as text) - used only when
+  // there are no capability statements yet.
   capabilitySummary: string;
-  recommendedPosition: string;
-  entryPoint: string;
+  // Context, not evidence: who they are now and where they want to go.
+  selfSummary?: string | null;
+  desiredRoles?: string | null;
+  workPreference?: string | null;
   isAlternateSummary: boolean;
 };
 
-// Structured, not narrative: an employer scanning this needs an answer in
-// seconds, not a 200-300 word paragraph to read start to finish. Four fixed,
-// labeled sections (## HEADING, same convention buildStep4Prompt already uses
-// and extractSection already parses) - a one-line fit statement, a short
-// bullet list of concrete strengths, a one-line growth statement, and an
-// optional one-line gap. This is a formatting/output-shape change only: every
-// anonymity, framing, and gap-specificity rule below is unchanged from the
-// paragraph version.
-const EMPLOYER_SUMMARY_LEAD_IN_STANDARD = `Structure your answer as exactly these sections, using the "##" heading format shown - do not add extra sections, do not add a title, do not add any text before the first heading or after the last section:
+export const EMPLOYER_SUMMARY_PROVEN_MIN = 3;
+export const EMPLOYER_SUMMARY_PROVEN_MAX = 5;
+export const EMPLOYER_SUMMARY_BULLET_MAX_WORDS = 19; // "under 20 words"
+export const EMPLOYER_SUMMARY_HEADLINE_MAX_WORDS = 20; // "about 15 words"
 
-## BEST_FIT
-One sentence: what this person can do right now and the specific role they are best suited for today. Use a real job title, not a tier label.
-
-## STRENGTHS
-Three to five short bullet points (each one line, starting with "- "), in the plain-text scale/scope language already allowed below (team size, budget, scope of responsibility). Each bullet is one concrete, verifiable capability - not a restatement of the fit sentence above.
-
-## GROWTH
-One to two sentences: where this person can realistically grow within your organization or industry given their trajectory.
-
-## GAP
-Only include this section if a genuine, specific, nameable gap exists (see the gap rule below). One sentence naming it and what it would take to close it. If there is no such gap, omit the "## GAP" heading and this section entirely - do not write "no gaps identified" or similar.`;
-
-const EMPLOYER_SUMMARY_LEAD_IN_ALTERNATE = `Structure your answer as exactly these sections, using the "##" heading format shown - do not add extra sections, do not add a title, do not add any text before the first heading or after the last section:
-
-## BEST_FIT
-One sentence naming the specific role this candidate is best suited for today, leading with the strengths that make them competitive for a broader set of roles than their most recent title suggests - name those roles explicitly rather than defaulting to their most direct experience.
-
-## STRENGTHS
-Three to five short bullet points (each one line, starting with "- "), in the plain-text scale/scope language already allowed below (team size, budget, scope of responsibility). Lead with the transferable strengths that support the broader role set from BEST_FIT; use their most direct experience as supporting bullets, not the lead.
-
-## GROWTH
-One to two sentences: where this person can realistically grow within your organization or industry given their trajectory.
-
-## GAP
-Only include this section if a genuine, specific, nameable gap exists (see the gap rule below). One sentence naming it and what it would take to close it. If there is no such gap, omit the "## GAP" heading and this section entirely - do not write "no gaps identified" or similar.`;
-
-export function buildEmployerSummaryUserPrompt(input: EmployerSummaryInput): string {
-  const leadIn = input.isAlternateSummary ? EMPLOYER_SUMMARY_LEAD_IN_ALTERNATE : EMPLOYER_SUMMARY_LEAD_IN_STANDARD;
-
-  return `Based on the following candidate profile sections, write a structured, scannable employer-facing capability summary for a hiring manager - short labeled sections a hiring manager can scan in seconds, not a narrative paragraph. This platform never discloses candidate identity to an employer, at any tier - describe capability only. If a motivated reader could identify a specific individual from your output, the output is wrong.
-
-Write about a capable professional applying for a job, and describe what they have done and can do as accomplished fact. Do not frame the candidate as coming from outside ordinary work, entering or breaking into a sector, transitioning, adjusting, acclimating, or bridging into anything, and do not describe their experience as needing translation or conversion - it is simply their experience. Do not use the words "civilian" or "military" anywhere in the output, and do not use any wording that implies the candidate has to earn their way into normal employment or prove they can do work they have already done.
-
-Use they/them/their pronouns throughout - never he/him, she/her, or any gendered term. Do not include the candidate's name or initials. Do not name a past employer, unit, command, or organization. Do not state a branch of service or a specific rank, grade, or title. Do not state exact dates, years of service, tenure length, or age - omit duration entirely unless it is essential, in which case use relative framing ("an extended career") rather than a number. Do not name a specific country, region, or named operation/deployment - describe the type of environment generically instead (e.g. "high-risk international environments"). Do not mention a publication, book, article, or other named authored work.
-
-Security clearance is the one exception: if the source material states the candidate holds a security clearance, report it as a capability fact - "holds an active security clearance," or the specific level if one is given (e.g. "holds an active Top Secret clearance"). Never name who granted, sponsored, or investigated it - no agency, department, or branch may appear near the clearance mention.
-
-If the source material indicates a capability was corroborated by more than one document or source, describe it as a corroboration count, never by naming the document type or issuer - "documented across multiple supervisor evaluations" is correct, "verified by Army NCOERs" is not, because the document type itself identifies the branch.
-
-Do not use generic experience tier labels such as "entry level," "junior," "mid-level," or "senior." Instead, use specific role titles that reflect actual capability.
-
-${leadIn}
-
-Write in the business-impact language a hiring manager already uses. Do not reuse jargon from the source material. Never frame the summary in a way that diminishes what the candidate has built. Do not use job titles, unit names, operation names, service acronyms, or any term that requires insider context to understand.
-
-A genuine gap may be stated, but only as a specific, nameable missing item - "has not yet worked with a named tool or system," "would benefit from a specific named certification." Never state a gap as a vague category of unfamiliarity (for example "needs exposure to standard industry systems" or "requires sector context"); that phrasing is unfalsifiable and diminishing and is not allowed.
-
-If any identifying detail (name, employer, branch, rank, clearance sponsor/agency, exact dates, country, publication) appears in the source material below, omit it from your output entirely - describe only what the capability demonstrates, never who held it or where it happened.
-
-CAPABILITY PROFILE:
-${input.capabilitySummary}
-
-RECOMMENDED POSITION:
-${input.recommendedPosition}
-
-ENTRY POINT:
-${input.entryPoint}`;
+// The evidence the summary is written from, as text. Exported so the format
+// check can verify that every PROVEN AT number came from this text.
+export function buildEmployerSummaryEvidence(input: EmployerSummaryInput): { source: "statements" | "entries"; text: string } {
+  const statements = (input.capabilityStatements ?? []).filter((s) => s && s.statement);
+  if (statements.length > 0) {
+    return {
+      source: "statements",
+      text: statements.map((s) => `- ${s.statement}\n${s.proof.map((p) => `    - ${p.text}`).join("\n")}`).join("\n"),
+    };
+  }
+  return { source: "entries", text: input.capabilitySummary };
 }
 
-export type ParsedEmployerSummary = {
-  bestFit: string;
-  strengths: string[];
-  growth: string;
-  gap: string | null;
+export function buildEmployerSummaryUserPrompt(input: EmployerSummaryInput): string {
+  const evidence = buildEmployerSummaryEvidence(input);
+  const direction = [
+    input.desiredRoles ? `Roles they want: ${input.desiredRoles}` : "",
+    input.workPreference ? `Work preference: ${input.workPreference}` : "",
+    input.selfSummary ? `Their own summary (context about current work and direction, NOT evidence - never quote it, never take a number from it): ${JSON.stringify(input.selfSummary)}` : "",
+  ].filter(Boolean).join("\n");
+
+  return `Write the employer-facing summary for this candidate. A hiring manager should be able to scan it in about ten seconds and know who this person is now, what they are proven at, where they would thrive, and where they are heading.
+
+Output EXACTLY these sections with the "##" headings shown, in this order, and nothing before, between, or after them:
+
+## HEADLINE
+One line, about 15 words (never more than ${EMPLOYER_SUMMARY_HEADLINE_MAX_WORDS}): who this person is NOW and the value they bring an employer. Present tense. No job title.
+
+## PROVEN_AT
+${EMPLOYER_SUMMARY_PROVEN_MIN} to ${EMPLOYER_SUMMARY_PROVEN_MAX} bullets, one per line, each exactly in the form:
+- **Lead phrase** one line of proof
+The lead phrase is 2-4 words in bold. The proof contains at least one concrete number taken from the EVIDENCE below. The whole bullet is under 20 words. Pick the bullets that best support where the person is heading (see DIRECTION), not simply the most impressive past facts.
+
+## THRIVES_IN
+One line naming role FAMILIES and work settings, e.g. "operations leadership, business development, and program management; remote or hybrid". Never a single job title, unless DIRECTION says they want only one specific role.${input.isAlternateSummary ? " Lead with the broader set of role families their strengths support, beyond their most direct experience." : ""}
+
+## GROWING_INTO
+One line on where they are heading, taken from their stated direction.
+
+## GAP
+Optional. Include it only if there is a clear, specific, fixable gap for the role families named in THRIVES_IN: one line naming it and what closes it. Otherwise omit the heading entirely.
+
+Rules:
+- Present and direction first; the past is evidence, not identity.
+- Plain civilian business language. Do not reuse jargon from the evidence.
+- Do not mention physical fitness or physical performance unless their direction is physical work.
+- No paragraphs, no em dashes or en dashes, no sentence that names a past organization, place, date, or rank.
+- Numbers come only from the EVIDENCE.
+
+DIRECTION:
+${direction || "(not stated - infer the most natural direction from the evidence)"}
+
+EVIDENCE (${evidence.source === "statements" ? "capability statements with their proof" : "capability profile"}):
+${evidence.text}`;
+}
+
+export type EmployerSummaryProvenItem = { lead: string; proof: string };
+
+export type ParsedEmployerSummary =
+  | {
+      format: "v2";
+      headline: string;
+      provenAt: EmployerSummaryProvenItem[];
+      thrivesIn: string;
+      growingInto: string;
+      gap: string | null;
+    }
+  | {
+      // The 2026-09 BEST_FIT / STRENGTHS / GROWTH / GAP format. Rows written
+      // in it keep rendering until they are regenerated.
+      format: "v1";
+      bestFit: string;
+      strengths: string[];
+      growth: string;
+      gap: string | null;
+    };
+
+function splitBullets(block: string): string[] {
+  return block
+    .split("\n")
+    .map((line) => line.trim().replace(/^[-*•]\s*/, ""))
+    .filter(Boolean);
+}
+
+function parseProvenItem(line: string): EmployerSummaryProvenItem {
+  const m = line.match(/^\*\*(.+?)\*\*\s*[:.,-]?\s*(.*)$/);
+  return m ? { lead: m[1].trim(), proof: m[2].trim() } : { lead: "", proof: line };
+}
+
+const oneLine = (s: string) => s.replace(/\s*\n\s*/g, " ").trim();
+
+// Parses either summary format. Returns null for anything else - in practice
+// the original plain-paragraph summaries, which callers render as a paragraph.
+export function parseEmployerSummary(text: string): ParsedEmployerSummary | null {
+  if (!text) return null;
+
+  if (text.includes("## HEADLINE")) {
+    const headline = oneLine(extractSection(text, "HEADLINE", "PROVEN_AT"));
+    const provenAt = splitBullets(extractSection(text, "PROVEN_AT", "THRIVES_IN")).map(parseProvenItem);
+    const thrivesIn = oneLine(extractSection(text, "THRIVES_IN", "GROWING_INTO"));
+    const growingInto = oneLine(extractSection(text, "GROWING_INTO", "GAP"));
+    const gap = text.includes("## GAP") ? oneLine(extractSection(text, "GAP")) : "";
+    if (!headline || provenAt.length === 0 || !thrivesIn) return null;
+    return { format: "v2", headline, provenAt, thrivesIn, growingInto, gap: gap || null };
+  }
+
+  if (text.includes("## BEST_FIT")) {
+    const bestFit = extractSection(text, "BEST_FIT", "STRENGTHS").trim();
+    const strengths = splitBullets(extractSection(text, "STRENGTHS", "GROWTH"));
+    const growth = extractSection(text, "GROWTH", "GAP").trim();
+    const gapRaw = extractSection(text, "GAP").trim();
+    if (!bestFit || strengths.length === 0 || !growth) return null;
+    return { format: "v1", bestFit, strengths, growth, gap: gapRaw || null };
+  }
+
+  return null;
+}
+
+function wordCount(s: string): number {
+  return s.split(/\s+/).filter(Boolean).length;
+}
+
+// Deterministic format check for a freshly generated summary. Every issue is
+// phrased as an instruction so it can be fed straight back to the model.
+export function checkEmployerSummaryFormat(text: string, input: EmployerSummaryInput): string[] {
+  const issues: string[] = [];
+  if (/[–—]/.test(text)) issues.push("Contains an em dash or en dash; use hyphens or commas.");
+  const parsed = parseEmployerSummary(text);
+  if (!parsed || parsed.format !== "v2") {
+    issues.push("Missing required sections: use exactly ## HEADLINE, ## PROVEN_AT, ## THRIVES_IN, ## GROWING_INTO (and optional ## GAP).");
+    return issues;
+  }
+  if (!parsed.growingInto) issues.push("GROWING_INTO is empty; add one line on where they are heading.");
+  if (wordCount(parsed.headline) > EMPLOYER_SUMMARY_HEADLINE_MAX_WORDS) {
+    issues.push(`HEADLINE has ${wordCount(parsed.headline)} words; keep it to about 15.`);
+  }
+  const n = parsed.provenAt.length;
+  if (n < EMPLOYER_SUMMARY_PROVEN_MIN || n > EMPLOYER_SUMMARY_PROVEN_MAX) {
+    issues.push(`PROVEN_AT has ${n} bullets; write ${EMPLOYER_SUMMARY_PROVEN_MIN} to ${EMPLOYER_SUMMARY_PROVEN_MAX}.`);
+  }
+  const evidenceText = buildEmployerSummaryEvidence(input).text;
+  parsed.provenAt.forEach((item, i) => {
+    const label = `PROVEN_AT bullet ${i + 1}`;
+    const leadWords = wordCount(item.lead);
+    if (!item.lead || leadWords < 2 || leadWords > 4) issues.push(`${label} needs a bold 2-4 word lead phrase in the form "- **Lead phrase** proof".`);
+    if (!/\d/.test(item.proof)) issues.push(`${label} needs a concrete number from the evidence.`);
+    const total = wordCount(item.lead) + wordCount(item.proof);
+    if (total > EMPLOYER_SUMMARY_BULLET_MAX_WORDS) issues.push(`${label} has ${total} words; keep it under 20.`);
+    const unsourced = findUnsourcedNumbers(item.proof, [evidenceText]);
+    if (unsourced.length > 0) issues.push(`${label} uses number(s) not in the evidence: ${unsourced.map((u) => u.raw).join(", ")}.`);
+  });
+  return issues;
+}
+
+export type EmployerSummaryGeneration = {
+  text: string;
+  stopReason: string | null;
+  formatIssues: string[];
+  attempts: number;
 };
 
-// Parses the ## BEST_FIT / ## STRENGTHS / ## GROWTH / ## GAP format
-// buildEmployerSummaryUserPrompt now asks for, using the same extractSection
-// helper the Step 4 sections already rely on. Returns null for anything that
-// doesn't match - specifically every employer_summary row generated before
-// this change, which is a plain paragraph with no "## BEST_FIT" heading at
-// all. Callers must fall back to rendering the raw text as a paragraph when
-// this returns null; see the regeneration note this shipped with for why
-// existing rows are not migrated.
-export function parseEmployerSummary(text: string): ParsedEmployerSummary | null {
-  if (!text || !text.includes("## BEST_FIT")) {
-    return null;
-  }
-
-  const bestFit = extractSection(text, "BEST_FIT", "STRENGTHS").trim();
-  const strengthsBlock = extractSection(text, "STRENGTHS", "GROWTH");
-  const growth = extractSection(text, "GROWTH", "GAP").trim();
-  const gapRaw = extractSection(text, "GAP").trim();
-
-  const strengths = strengthsBlock
-    .split("\n")
-    .map((line) => line.trim().replace(/^[-*]\s*/, ""))
-    .filter(Boolean);
-
-  if (!bestFit || strengths.length === 0 || !growth) {
-    return null;
-  }
-
-  return {
-    bestFit,
-    strengths,
-    growth,
-    gap: gapRaw || null
+// One generation plus, when the format check fails, one targeted retry with
+// the exact issues named. Returns whichever attempt has fewer issues. Throws
+// on an API error (callers already report those).
+export async function generateEmployerSummary(
+  anthropic: Anthropic,
+  input: EmployerSummaryInput,
+  model = "claude-sonnet-4-6"
+): Promise<EmployerSummaryGeneration> {
+  const userPrompt = buildEmployerSummaryUserPrompt(input);
+  const call = async (content: string) => {
+    const message = await anthropic.messages.create({
+      model,
+      max_tokens: 2048,
+      system: EMPLOYER_SUMMARY_SYSTEM_PROMPT,
+      temperature: 0.2,
+      messages: [{ role: "user", content }],
+    });
+    const text = (message.content.find((b) => b.type === "text") as { text?: string } | undefined)?.text?.trim() ?? "";
+    return { text, stopReason: message.stop_reason ?? null };
   };
+
+  const first = await call(userPrompt);
+  const firstIssues = first.text ? checkEmployerSummaryFormat(first.text, input) : ["Empty response."];
+  if (firstIssues.length === 0) return { ...first, formatIssues: [], attempts: 1 };
+
+  const retry = await call(
+    `${userPrompt}\n\nYOUR PREVIOUS ANSWER (REJECTED):\n${first.text}\n\nFix exactly these problems and return the full summary again in the same format:\n${firstIssues.map((i) => `- ${i}`).join("\n")}`
+  );
+  const retryIssues = retry.text ? checkEmployerSummaryFormat(retry.text, input) : ["Empty response."];
+  return retryIssues.length <= firstIssues.length
+    ? { ...retry, formatIssues: retryIssues, attempts: 2 }
+    : { ...first, formatIssues: firstIssues, attempts: 2 };
 }

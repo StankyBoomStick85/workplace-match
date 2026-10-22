@@ -11,9 +11,11 @@
 //     -> createJob() inserts the row, triggers step 1, returns 202 immediately
 //   POST /api/admin/capability-statement-jobs/step  (server-to-server, HMAC token)
 //     -> responds 202 at once, then in the background claims the step, runs one
-//        model call, saves state, and triggers the next step - or finishes:
-//        stores the result, writes candidate_profiles unless dry_run, and
-//        reports any non-ok outcome to error_logs.
+//        model call, saves state, and triggers the next step. After a
+//        successful synthesis, one final step regenerates the employer summary
+//        from the new statements and - unless dry_run, and only if the
+//        evidence is unchanged - writes statements and summary together.
+//        Any non-ok outcome is reported to error_logs.
 //   admin GET /api/admin/synthesize-capability-statements?jobId=...
 //     -> getJobStatus(), which also fails and reports a stalled step.
 //
@@ -24,7 +26,8 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
-import type { EvidenceGroup, StoredDoc } from "@/lib/capabilityPipeline";
+import { buildGuardRewritePrompt, generateEmployerSummary, type EvidenceGroup, type StoredDoc } from "@/lib/capabilityPipeline";
+import { scanEmployerFacingText } from "@/lib/employerTextGuard";
 import {
   DEFAULT_SYNTHESIS_MODEL,
   createSynthesisState,
@@ -59,7 +62,7 @@ export type JobRow = {
   step_started_at: string | null;
   input: SynthesisInput;
   state: SynthesisState;
-  result: (SynthesisResult & { written?: boolean; writeError?: string | null }) | null;
+  result: (SynthesisResult & { written?: boolean; writeError?: string | null; employerSummary?: JobEmployerSummary }) | null;
   error: string | null;
 };
 
@@ -177,9 +180,26 @@ export type StepOutcome =
   | { kind: "continue"; nextSeq: number }
   | { kind: "finished"; status: JobStatus };
 
-// Claims step `seq`, runs exactly one synthesis step, and saves the result.
-// Claiming is an atomic conditional update: it succeeds only when the job is
-// still running and the previous step was seq - 1.
+// What the job did with the employer summary (written from the new statements).
+export type JobEmployerSummary = {
+  text: string | null;
+  formatIssues: string[];
+  guardViolations: Array<{ category: string; match: string }>;
+  guardRewriteAttempted: boolean;
+  written: boolean;
+  skippedReason: string | null;
+};
+
+// Claims step `seq` and runs exactly one unit of work. Claiming is an atomic
+// conditional update: it succeeds only when the job is still running and the
+// previous step was seq - 1.
+//
+// Steps: synthesis (one model call each, until the synthesis state is done),
+// then - only when synthesis succeeded - one final "summary" step that
+// regenerates the employer summary from the new statements and writes
+// everything. The summary is its own step so it never adds to a synthesis
+// call's time budget. A job whose result is stored but is still running is
+// waiting for that summary step.
 export async function runJobStep(adminClient: SupabaseClient, jobId: string, seq: number): Promise<StepOutcome> {
   const { data: claimed, error: claimError } = await adminClient
     .from(JOB_TABLE)
@@ -198,8 +218,11 @@ export async function runJobStep(adminClient: SupabaseClient, jobId: string, seq
     await failJob(adminClient, job, "capability_statements_step_failed", "ANTHROPIC_API_KEY not configured", { seq });
     return { kind: "finished", status: "failed" };
   }
+  const anthropic = new Anthropic({ apiKey });
 
-  const next = await runSynthesisStep(job.state, { ...job.input, anthropic: new Anthropic({ apiKey }) });
+  if (job.result) return runSummaryStep(adminClient, job, seq, anthropic);
+
+  const next = await runSynthesisStep(job.state, { ...job.input, anthropic });
 
   if (next.next !== "done") {
     const { error } = await adminClient
@@ -215,68 +238,19 @@ export async function runJobStep(adminClient: SupabaseClient, jobId: string, seq
 
   const result = finishSynthesis(next, job.input);
 
-  // Statements cite positional groupIds, so they are only valid against the
-  // exact evidence they were built from. If the profile was regenerated while
-  // this job ran, writing would attach statements to different evidence
-  // (regeneration already cleared the old ones - see generate-capability).
-  if (!job.dry_run && result.status === "ok") {
-    const { data: current, error: currentError } = await adminClient
-      .from("candidate_profiles")
-      .select("pending_evidence_groups")
-      .eq("user_id", job.user_id)
-      .maybeSingle();
-    const evidenceUnchanged =
-      !currentError && !!current && JSON.stringify(current.pending_evidence_groups ?? null) === JSON.stringify(job.input.groups);
-    if (!evidenceUnchanged) {
-      const message = currentError ? `could not re-read evidence before writing: ${currentError.message}` : "evidence changed during job";
-      await adminClient
-        .from(JOB_TABLE)
-        .update({ state: next, result: { ...result, written: false, writeError: message }, updated_at: new Date().toISOString() })
-        .eq("id", jobId);
-      await failJob(adminClient, job, "capability_statements_evidence_changed", message, {
-        seq,
-        snapshotGroupCount: job.input.groups.length,
-        currentGroupCount: Array.isArray(current?.pending_evidence_groups) ? current.pending_evidence_groups.length : null,
-      });
-      return { kind: "finished", status: "failed" };
-    }
-  }
-
-  let written = false;
-  let writeError: string | null = null;
-  if (!job.dry_run && result.status === "ok") {
-    const { error } = await adminClient
-      .from("candidate_profiles")
-      .update({
-        capability_statements: result.core,
-        niche_capabilities: result.niche,
-        capability_profile_generated_at: result.generatedAt,
-      })
-      .eq("user_id", job.user_id);
-    if (error) writeError = error.message;
-    else written = true;
-  }
-
-  const status: JobStatus = result.status === "ok" && !writeError ? "succeeded" : "failed";
-  const errorText =
-    result.status !== "ok"
-      ? `synthesis ${result.status}: ${result.notes.join("; ")}`
-      : writeError
-        ? `candidate_profiles write failed: ${writeError}`
-        : null;
-  const { error: saveError } = await adminClient
-    .from(JOB_TABLE)
-    .update({ state: next, result: { ...result, written, writeError }, status, error: errorText, updated_at: new Date().toISOString() })
-    .eq("id", jobId);
-  if (saveError) console.error(`[${JOB_ROUTE}] failed to save final result for job ${jobId}`, saveError);
-
-  if (status === "failed") {
+  if (result.status !== "ok") {
+    const errorText = `synthesis ${result.status}: ${result.notes.join("; ")}`;
+    const { error: saveError } = await adminClient
+      .from(JOB_TABLE)
+      .update({ state: next, result: { ...result, written: false, writeError: null }, status: "failed", error: errorText, updated_at: new Date().toISOString() })
+      .eq("id", jobId);
+    if (saveError) console.error(`[${JOB_ROUTE}] failed to save final result for job ${jobId}`, saveError);
     await reportGenerationFailure({
       adminClient,
       sendEmailFn: sendEmail,
       route: JOB_ROUTE,
-      errorType: writeError ? "capability_statements_write_failed" : `capability_statements_${result.status}`,
-      message: errorText ?? "capability statement job failed",
+      errorType: `capability_statements_${result.status}`,
+      message: errorText,
       userId: job.user_id,
       severity: result.status === "insufficient" ? "medium" : "high",
       metadata: {
@@ -290,9 +264,153 @@ export async function runJobStep(adminClient: SupabaseClient, jobId: string, seq
         notes: result.notes,
       },
     });
+    return { kind: "finished", status: "failed" };
+  }
+
+  // Synthesis succeeded: park the result and hand off to the summary step.
+  const { error: parkError } = await adminClient
+    .from(JOB_TABLE)
+    .update({ state: next, result: { ...result, written: false, writeError: null }, updated_at: new Date().toISOString() })
+    .eq("id", jobId);
+  if (parkError) {
+    await failJob(adminClient, job, "capability_statements_step_failed", `Failed to save synthesis result: ${parkError.message}`, { seq });
+    return { kind: "finished", status: "failed" };
+  }
+  return { kind: "continue", nextSeq: seq + 1 };
+}
+
+async function runSummaryStep(adminClient: SupabaseClient, job: JobRow, seq: number, anthropic: Anthropic): Promise<StepOutcome> {
+  const result = job.result!;
+
+  const { data: profile, error: profileError } = await adminClient
+    .from("candidate_profiles")
+    .select("pending_evidence_groups, summary, job_types, work_preference, summary_priority")
+    .eq("user_id", job.user_id)
+    .maybeSingle();
+
+  // Statements cite positional groupIds, so they are only valid against the
+  // exact evidence they were built from. If the profile was regenerated while
+  // this job ran, writing would attach statements to different evidence
+  // (regeneration already cleared the old ones - see generate-capability).
+  if (!job.dry_run) {
+    const evidenceUnchanged =
+      !profileError && !!profile && JSON.stringify(profile.pending_evidence_groups ?? null) === JSON.stringify(job.input.groups);
+    if (!evidenceUnchanged) {
+      const message = profileError ? `could not re-read evidence before writing: ${profileError.message}` : "evidence changed during job";
+      await adminClient
+        .from(JOB_TABLE)
+        .update({ result: { ...result, written: false, writeError: message }, updated_at: new Date().toISOString() })
+        .eq("id", job.id);
+      await failJob(adminClient, job, "capability_statements_evidence_changed", message, {
+        seq,
+        snapshotGroupCount: job.input.groups.length,
+        currentGroupCount: Array.isArray(profile?.pending_evidence_groups) ? profile.pending_evidence_groups.length : null,
+      });
+      return { kind: "finished", status: "failed" };
+    }
+  }
+
+  // Employer summary from the new statements. A failure here never blocks the
+  // statements: the previous summary simply stays in place, and it is logged.
+  const summary: JobEmployerSummary = {
+    text: null,
+    formatIssues: [],
+    guardViolations: [],
+    guardRewriteAttempted: false,
+    written: false,
+    skippedReason: null,
+  };
+  const knownFullName = job.input.knownFullName;
+  try {
+    const generated = await generateEmployerSummary(anthropic, {
+      capabilityStatements: result.core,
+      capabilitySummary: "",
+      selfSummary: profile?.summary ?? job.input.context?.summary ?? null,
+      desiredRoles: Array.isArray(profile?.job_types) && profile.job_types.length > 0 ? profile.job_types.join(", ") : null,
+      workPreference: profile?.work_preference ?? null,
+      isAlternateSummary: profile?.summary_priority === "alternate",
+    });
+    summary.formatIssues = generated.formatIssues;
+    let text = generated.text;
+    let violations = text ? scanEmployerFacingText(text, { knownFullName }) : [];
+    if (text && violations.length > 0) {
+      // Same targeted rewrite the finalize route uses for this field.
+      summary.guardRewriteAttempted = true;
+      const flags = violations.map((v) => ({ category: v.category, match: v.match }));
+      const rewrite = await anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 2048,
+        temperature: 0.2,
+        messages: [{ role: "user", content: buildGuardRewritePrompt("employer_summary", text, flags) }],
+      });
+      const rewritten = (rewrite.content.find((b) => b.type === "text") as { text?: string } | undefined)?.text?.trim() ?? "";
+      const rewrittenViolations = rewritten ? scanEmployerFacingText(rewritten, { knownFullName }) : violations;
+      if (rewritten && rewrittenViolations.length === 0) {
+        text = rewritten;
+        violations = [];
+      } else {
+        violations = rewrittenViolations;
+      }
+    }
+    summary.guardViolations = violations.map((v) => ({ category: v.category, match: v.match }));
+    if (!text) summary.skippedReason = "empty response";
+    else if (violations.length > 0) summary.skippedReason = "identity guard still flagged the summary after one rewrite";
+    else summary.text = text;
+  } catch (err) {
+    summary.skippedReason = `employer summary call failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  if (summary.skippedReason) {
+    await reportGenerationFailure({
+      adminClient,
+      sendEmailFn: sendEmail,
+      route: JOB_ROUTE,
+      errorType: "capability_statements_summary_not_updated",
+      message: `Employer summary not regenerated: ${summary.skippedReason}`,
+      userId: job.user_id,
+      severity: "medium",
+      metadata: { jobId: job.id, dryRun: job.dry_run, formatIssues: summary.formatIssues, guardViolations: summary.guardViolations },
+    });
+  }
+
+  let written = false;
+  let writeError: string | null = null;
+  if (!job.dry_run) {
+    const update: Record<string, unknown> = {
+      capability_statements: result.core,
+      niche_capabilities: result.niche,
+      capability_profile_generated_at: result.generatedAt,
+    };
+    if (summary.text) update.employer_summary = summary.text;
+    const { error } = await adminClient.from("candidate_profiles").update(update).eq("user_id", job.user_id);
+    if (error) writeError = error.message;
+    else {
+      written = true;
+      summary.written = Boolean(summary.text);
+    }
+  }
+
+  const status: JobStatus = writeError ? "failed" : "succeeded";
+  const errorText = writeError ? `candidate_profiles write failed: ${writeError}` : null;
+  const { error: saveError } = await adminClient
+    .from(JOB_TABLE)
+    .update({ result: { ...result, written, writeError, employerSummary: summary }, status, error: errorText, updated_at: new Date().toISOString() })
+    .eq("id", job.id);
+  if (saveError) console.error(`[${JOB_ROUTE}] failed to save final result for job ${job.id}`, saveError);
+
+  if (writeError) {
+    await reportGenerationFailure({
+      adminClient,
+      sendEmailFn: sendEmail,
+      route: JOB_ROUTE,
+      errorType: "capability_statements_write_failed",
+      message: errorText!,
+      userId: job.user_id,
+      metadata: { jobId: job.id, model: job.model },
+    });
   }
   return { kind: "finished", status };
 }
+
 
 // Status for the admin route. A running job whose current step is older than
 // the function limit was killed by the platform: mark it failed and report it

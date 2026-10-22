@@ -9,9 +9,6 @@ import {
   type ContactMethod
 } from "../lib/contactPreferences";
 import { logAdminEvent } from "../lib/adminEvents";
-import { logError } from "../lib/logError";
-import { scanEmployerFacingText, formatViolations, scanCapabilityEntries } from "../lib/employerTextGuard";
-import type { CapabilityEntry } from "../lib/capabilityPipeline";
 import {
   addInterest as addSupabaseInterest,
   addMutualMatch as addSupabaseMutualMatch,
@@ -25,8 +22,7 @@ import {
 } from "../lib/supabaseMvpData";
 import { RemoveInterestConfirmationModal } from "./RemoveInterestConfirmationModal";
 import { HeartToggleButton } from "./HeartToggleButton";
-import { EmployerSummaryContent } from "./EmployerSummaryContent";
-import { CapabilityEntryChips } from "./CapabilityEntryChips";
+import { EmployerFacingSummary } from "./EmployerFacingSummary";
 import { CollapsibleText } from "./CollapsibleText";
 
 type EmployerAccount = {
@@ -73,12 +69,9 @@ type applicantProfile = {
   // file may ever render to an employer. capabilitySummary above is the
   // candidate's own draft and may contain PII - never render it here.
   employerSummary?: string;
-  // Structured per-capability entries - the PUBLIC-layer, AI-derived,
-  // verification-tagged replacement for showing raw topSkills chips directly
-  // (see CapabilityEntryChips). Rendered via CapabilityEntryChips, which
-  // gates through isCapabilityEntriesSafe itself - never render these
-  // directly without that gate.
-  capabilityEntries?: CapabilityEntry[];
+  // No capability entries or statements: employers see the employer summary
+  // only, at every stage (decision 2026-10-22). They stay internal - they feed
+  // the summary and matching - and the API no longer sends them.
   // topSkills (capability_tags) is EVIDENCE, not PUBLIC: a free-text field the
   // candidate types on their own profile form, never scanned by the identity
   // guard. It stays in this type only because calculateSkillMatch still uses
@@ -1315,6 +1308,12 @@ function ApplicantMatchPopup({
           <p className="mt-1 text-xs text-zinc-600">{applicant.locationLabel}</p>
         </div>
       )}
+      {/* The employer summary is what employers browse: shown at every stage
+          (before interest, pending, matched). It is identity-blind by design
+          and the only capability content an employer sees. */}
+      <div className="rounded-md border border-gray-200 bg-white p-3">
+        <EmployerFacingSummary candidateId={applicant.id} text={applicant.profile.employerSummary} route="EmployerFindApplicants" />
+      </div>
       {orderedJobMatches.length === 0 ? (
         <p className="rounded-md border border-dashed border-gray-300 bg-gray-50 p-3 text-sm text-zinc-600">
           No active job listings to match against yet. This candidate's basic info is still shown.
@@ -1368,7 +1367,7 @@ function ApplicantMatchPopup({
               />
             </div>
             {interestState === "mutual_match" ? (
-              <EmployerMutualMatchActions applicantId={applicant.id} profile={applicant.profile} />
+              <EmployerMutualMatchActions />
             ) : null}
           </div>
           );
@@ -1379,96 +1378,18 @@ function ApplicantMatchPopup({
   );
 }
 
-function EmployerMutualMatchActions({
-  applicantId,
-  profile
-}: {
-  applicantId: string;
-  profile: applicantProfile;
-}) {
-  // Defense in depth: catches an employer_summary row that was generated
-  // before the identity-guard fix and still has PII baked into its stored
-  // text (fixing the render path doesn't fix content already in the DB).
-  // This is a render-time check, not just a generation-time one, because a
-  // tainted row can be read here regardless of when it was written.
-  useEffect(() => {
-    const violations = scanEmployerFacingText(profile.employerSummary ?? "");
-    if (violations.length > 0) {
-      console.error("[EmployerFindApplicants] employer_summary failed identity guard at render time", {
-        candidateId: applicantId,
-        violations
-      });
-      logError({
-        route: "EmployerFindApplicants",
-        errorMessage: `Stored employer_summary failed identity guard: ${formatViolations(violations)}`,
-        errorType: "privacy_violation",
-        severity: "high",
-        userId: applicantId,
-        metadata: { violations }
-      });
-    }
-  }, [applicantId, profile.employerSummary]);
-
-  // Same defense-in-depth as the employer_summary check above, for
-  // capability_entries: this field isn't rendered anywhere in this file today,
-  // but the "candidate-profiles" read endpoint sent it raw to every approved
-  // employer view before the generation-time/API-gate fixes existed, so
-  // existing stored rows can carry PII regardless of when they were generated.
-  useEffect(() => {
-    const entries = profile.capabilityEntries ?? [];
-    if (entries.length === 0) return;
-    const violations = scanCapabilityEntries(entries);
-    if (violations.length > 0) {
-      console.error("[EmployerFindApplicants] capability_entries failed identity guard at render time", {
-        candidateId: applicantId,
-        violations
-      });
-      logError({
-        route: "EmployerFindApplicants",
-        errorMessage: `Stored capability_entries failed identity guard: ${violations.length} entry field(s) flagged`,
-        errorType: "privacy_violation",
-        severity: "high",
-        userId: applicantId,
-        metadata: { violations }
-      });
-    }
-  }, [applicantId, profile.capabilityEntries]);
-
+function EmployerMutualMatchActions() {
+  // The employer summary is rendered once at the top of the panel at every
+  // stage (see EmployerFacingSummary); a mutual match adds messaging on the
+  // Matches page, never identity. Workplace Match never discloses name,
+  // pronouns, employer names, branch, rank, clearance, dates/year counts,
+  // publications, or locations served to an employer, at any tier.
+  // No action buttons here - the heart toggle above (on the job row) is the
+  // only control on this surface.
   return (
-    <div className="mt-3 space-y-2 border-t border-gray-100 pt-3">
-      {/* Mutual match unlocks fuller CAPABILITY detail only - never identity.
-          Workplace Match never discloses name, pronouns, employer names,
-          branch, rank, clearance, dates/year counts, publications, or
-          locations served to an employer, at any tier. employerSummary is
-          the only summary field this block may render - it is generated
-          specifically to be capability-only and pronoun-neutral.
-          No action buttons here - the heart toggle above (on the job row) is
-          the only control on this surface; messaging lives on the Matches
-          page, not Find Applicants. */}
-      <div className="space-y-1.5 rounded-md border border-red-100 bg-red-50 p-3">
-        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-red-800">Mutual match unlocked</p>
-        <p className="text-sm font-bold text-zinc-950">Matched candidate</p>
-        {/* experienceLevel is deliberately not shown here: it's a self-selected
-            tier with no evidence behind it, and the recommended-role framing
-            inside employerSummary already communicates seniority with actual
-            reasoning attached - a bare tier label would be exactly the kind of
-            unverified self-assertion this platform exists to move past.
-            capability_entries (not raw topSkills) below for the same reason -
-            see CapabilityEntryChips for the provenance rationale. Chip
-            backgrounds are bg-red-900/bg-red-100 (not bg-white/bg-gray-*)
-            deliberately: in dark mode, globals.css forces `color` to
-            near-black on every descendant of this bg-red-50 wrapper, while
-            bg-white/bg-gray-* are separately forced to a near-black
-            background - combined, that produces black text on a black chip.
-            Neither red shade has a dark-mode override, so this is safe
-            regardless of nesting. */}
-        <CapabilityEntryChips entries={profile.capabilityEntries} limit={12} />
-        {profile.employerSummary && scanEmployerFacingText(profile.employerSummary).length === 0 ? (
-          <EmployerSummaryContent text={profile.employerSummary} />
-        ) : (
-          <p className="text-xs text-zinc-500">Capability summary unavailable - pending review.</p>
-        )}
-      </div>
+    <div className="mt-3 rounded-md border border-red-100 bg-red-50 p-3">
+      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-red-800">Mutual match unlocked</p>
+      <p className="mt-1 text-sm text-zinc-800">Message this candidate from your Matches page.</p>
     </div>
   );
 }

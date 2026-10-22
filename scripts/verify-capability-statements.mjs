@@ -413,7 +413,7 @@ function expect(name, cond, detail = "") {
 
 // ───────────── self-reported evidence is context / absorbed (2026-10-22) ─────────────
 {
-  const pipeline = await loadTsModules(["capabilityPipeline", "documentLabels"], "capabilityPipeline");
+  const pipeline = await loadTsModules(["capabilityPipeline", "documentLabels", "capabilityStatementChecks"], "capabilityPipeline");
 
   const items = pipeline.buildSelfReportedEvidenceItems({ summary: "Retired senior leader with 20 years", capabilityTags: ["Budget & Asset Accountability", "Cybersecurity"] });
   expect("self-reported items: summary is not evidence", items.length === 2 && items.every((i) => i.claim !== "Retired senior leader with 20 years"));
@@ -469,6 +469,60 @@ function expect(name, cond, detail = "") {
   expect("synthesis prompt: no context block when there is no context", !/NOT EVIDENCE/.test(synth.buildSynthesisPrompt([], undefined, {})));
   const fromContext = { statement: "Leads teams.", proof: [{ text: "Led teams across 50 countries", groupIds: ["d"] }, { text: "Ranked #2 of 6 peers", groupIds: ["e"] }] };
   expect("synthesis: a number that exists only in the context is unsourced", codesOf(fromContext).includes("number_not_in_claims"));
+}
+
+// ───────────────────────── employer summary v2 (2026-10-22) ─────────────────────────
+{
+  const pipeline = await loadTsModules(["capabilityPipeline", "documentLabels", "capabilityStatementChecks"], "capabilityPipeline");
+  const input = {
+    capabilityStatements: [
+      { statement: "Keeps equipment accountable.", proof: [{ text: "Accountable for $3.5M in equipment with zero loss" }, { text: "Trained over 500 people across 5 rounds" }] },
+      { statement: "Recruits against quota.", proof: [{ text: "Delivered 134% of the annual target" }] },
+    ],
+    capabilitySummary: "",
+    selfSummary: "Moving into operations leadership and business development",
+    desiredRoles: "Operations Manager",
+    workPreference: "remote",
+    isAlternateSummary: false,
+  };
+  const good = [
+    "## HEADLINE",
+    "Operations leader who builds accountable teams and delivers measurable results under pressure.",
+    "## PROVEN_AT",
+    "- **Asset accountability** Kept $3.5M in equipment fully accounted for with zero loss",
+    "- **Training at scale** Trained over 500 people across 5 program rounds",
+    "- **Quota delivery** Delivered 134% of an annual recruiting target",
+    "## THRIVES_IN",
+    "Operations leadership, business development, and program management; remote or hybrid",
+    "## GROWING_INTO",
+    "Leading operations and growth for a mission-driven company",
+  ].join("\n");
+
+  const parsed = pipeline.parseEmployerSummary(good);
+  expect("summary v2: parses", parsed && parsed.format === "v2" && parsed.provenAt.length === 3 && parsed.gap === null, JSON.stringify(parsed));
+  expect("summary v2: bold lead phrase split from proof", parsed.provenAt[0].lead === "Asset accountability" && parsed.provenAt[0].proof.startsWith("Kept $3.5M"));
+  expect("summary v2: valid summary has no format issues", pipeline.checkEmployerSummaryFormat(good, input).length === 0, JSON.stringify(pipeline.checkEmployerSummaryFormat(good, input)));
+  const withGap = good + "\n## GAP\nHas not yet used a named ERP system; a short vendor course closes it";
+  expect("summary v2: optional GAP parsed", pipeline.parseEmployerSummary(withGap).gap.startsWith("Has not yet"));
+
+  const issues = (t) => pipeline.checkEmployerSummaryFormat(t, input).join(" | ");
+  expect("summary check: em dash rejected", /dash/.test(issues(good.replace("measurable results", "results — measurable"))));
+  expect("summary check: invented number rejected", /not in the evidence/.test(issues(good.replace("134%", "150%"))));
+  expect("summary check: bullet without number rejected", /concrete number/.test(issues(good.replace("Trained over 500 people across 5 program rounds", "Trained many people across program rounds"))));
+  expect("summary check: missing bold lead rejected", /lead phrase/.test(issues(good.replace("**Quota delivery** ", ""))));
+  expect("summary check: too few bullets rejected", /PROVEN_AT has 2/.test(issues(good.replace(/- \*\*Quota delivery\*\*.*\n/, ""))));
+  expect("summary check: long bullet rejected", /keep it under 20/.test(issues(good.replace("Trained over 500 people across 5 program rounds", "Trained over 500 people across 5 program rounds while also building curriculum, coaching instructors, and measuring every result"))));
+  expect("summary check: old-format text is reported as missing sections", /Missing required sections/.test(issues("## BEST_FIT\nx\n## STRENGTHS\n- y\n## GROWTH\nz")));
+
+  const v1 = pipeline.parseEmployerSummary("## BEST_FIT\nOperations Manager\n## STRENGTHS\n- One\n- Two\n## GROWTH\nGrows");
+  expect("summary v1 (old format) still parses", v1 && v1.format === "v1" && v1.strengths.length === 2);
+  expect("summary legacy paragraph returns null", pipeline.parseEmployerSummary("A capable professional with many strengths.") === null);
+
+  const prompt = pipeline.buildEmployerSummaryUserPrompt(input);
+  expect("summary prompt: written from statements, self summary is context", prompt.includes("capability statements with their proof") && prompt.includes("NOT evidence") && prompt.includes("Accountable for $3.5M"));
+  const fallbackPrompt = pipeline.buildEmployerSummaryUserPrompt({ ...input, capabilityStatements: null, capabilitySummary: "ENTRIES TEXT" });
+  expect("summary prompt: falls back to entries only without statements", fallbackPrompt.includes("ENTRIES TEXT") && !fallbackPrompt.includes("Accountable for $3.5M"));
+  expect("summary prompt: role families, fitness rule, no dashes", /role FAMILIES/.test(prompt) && /physical fitness/.test(prompt) && /no em dashes or en dashes/i.test(prompt));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

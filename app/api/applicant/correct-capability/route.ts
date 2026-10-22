@@ -6,10 +6,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import {
   buildStep3Prompt,
   buildStep4Prompt,
-  buildEmployerSummaryUserPrompt,
+  generateEmployerSummary,
   parseStep3Response,
   extractStep4Sections,
-  EMPLOYER_SUMMARY_SYSTEM_PROMPT,
   type EvidenceGroup,
   type StoredDoc,
   type Step3Result
@@ -60,7 +59,7 @@ export async function POST(request: Request) {
 
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("display_name, job_types, experience_level, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, document_metadata")
+    .select("display_name, job_types, experience_level, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, document_metadata, capability_statements")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -226,18 +225,21 @@ export async function POST(request: Request) {
   const isAlternateSummary = profile.summary_priority === "alternate";
   let employerSummary = "";
   try {
-    const employerMessage = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 2048,
-      system: EMPLOYER_SUMMARY_SYSTEM_PROMPT,
-      temperature: 0.2,
-      messages: [{
-        role: "user",
-        content: buildEmployerSummaryUserPrompt({ capabilitySummary, recommendedPosition, entryPoint, isAlternateSummary })
-      }],
+    // A Tier 1 correction never changes grouping, so stored capability
+    // statements (if any) are still valid and are the preferred source.
+    const generated = await generateEmployerSummary(anthropic, {
+      capabilityStatements: Array.isArray(profile.capability_statements) ? profile.capability_statements : null,
+      capabilitySummary,
+      selfSummary: profile.summary ?? null,
+      desiredRoles: Array.isArray(profile.job_types) && profile.job_types.length > 0 ? profile.job_types.join(", ") : null,
+      workPreference: profile.work_preference ?? null,
+      isAlternateSummary
     });
-    const employerStopReason = employerMessage.stop_reason;
-    employerSummary = employerMessage.content.find((b) => b.type === "text")?.text ?? "";
+    const employerStopReason = generated.stopReason;
+    employerSummary = generated.text;
+    if (generated.formatIssues.length > 0) {
+      console.error("[correct-capability] employer summary format issues after retry", generated.formatIssues);
+    }
 
     if (!employerSummary) {
       await reportGenerationFailure({

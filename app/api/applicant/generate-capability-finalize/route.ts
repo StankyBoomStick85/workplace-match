@@ -8,10 +8,9 @@ import {
   buildStep3GuardRetryPrompt,
   buildGuardRewritePrompt,
   buildStep4Prompt,
-  buildEmployerSummaryUserPrompt,
+  generateEmployerSummary,
   parseStep3Response,
   extractStep4Sections,
-  EMPLOYER_SUMMARY_SYSTEM_PROMPT,
   STEP3_CATEGORY_RANK,
   type Step3Category,
   type EvidenceGroup,
@@ -162,7 +161,7 @@ async function finalize(ctx: GenerationRunContext, t0: number): Promise<Response
   ctx.stage = "load_profile";
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("display_name, job_types, experience_level, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, capability_generation_status, document_metadata")
+    .select("display_name, job_types, experience_level, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, capability_generation_status, document_metadata, capability_statements")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -719,19 +718,23 @@ async function finalize(ctx: GenerationRunContext, t0: number): Promise<Response
   const isAlternateSummary = profile.summary_priority === "alternate";
 
   try {
-    const employerMessage = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 2048,
-      system: EMPLOYER_SUMMARY_SYSTEM_PROMPT,
-      temperature: 0.2,
-      messages: [{
-        role: "user",
-        content: buildEmployerSummaryUserPrompt({ capabilitySummary, recommendedPosition, entryPoint, isAlternateSummary })
-      }],
+    // Written from capability statements when they exist (a regenerate clears
+    // them, so here this normally falls back to the entries just written; the
+    // synthesis job rewrites the summary from statements once it finishes).
+    const generated = await generateEmployerSummary(anthropic, {
+      capabilityStatements: Array.isArray(profile.capability_statements) ? profile.capability_statements : null,
+      capabilitySummary,
+      selfSummary: profile.summary ?? null,
+      desiredRoles: Array.isArray(profile.job_types) && profile.job_types.length > 0 ? profile.job_types.join(", ") : null,
+      workPreference: profile.work_preference ?? null,
+      isAlternateSummary
     });
-    employerStopReason = employerMessage.stop_reason;
-    rawEmployerText = employerMessage.content.find((b) => b.type === "text")?.text ?? "";
+    employerStopReason = generated.stopReason;
+    rawEmployerText = generated.text;
     employerSummary = rawEmployerText;
+    if (generated.formatIssues.length > 0) {
+      console.error("[generate-capability-finalize] employer summary format issues after retry", generated.formatIssues);
+    }
 
     if (!employerSummary) {
       // The call succeeded (no exception) but returned no usable text block - a

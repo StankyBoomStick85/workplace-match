@@ -114,6 +114,8 @@ export async function GET(request: Request) {
       // Employers and admins only. Previously this branch had no session or
       // role check at all, so any logged-out caller could read every approved
       // candidate's capability_entries and employer_summary.
+      // capability_tags is still sent for client-side match scoring only (see
+      // getApplicantMatchSignals); no employer view renders it.
       if (!user) return notAuthenticated();
       if (!canSeeCandidateProfiles(await getCaller())) return forbidden();
 
@@ -129,7 +131,7 @@ export async function GET(request: Request) {
       // server-side only.
       const { data, error } = await adminClient
         .from("candidate_profiles")
-        .select("user_id, zip_code, job_types, work_preference, capability_tags, experience_level, employer_summary, capability_entries, is_approved");
+        .select("user_id, zip_code, job_types, work_preference, capability_tags, experience_level, employer_summary, is_approved");
       if (error) throw error;
       const gated = (data ?? []).map((row: Record<string, unknown>) => ({
         user_id: row.user_id,
@@ -138,12 +140,13 @@ export async function GET(request: Request) {
         work_preference: row.work_preference,
         capability_tags: row.capability_tags,
         experience_level: row.experience_level,
-        // AI-generated content is withheld until a human approves it - same
-        // policy this table's other AI fields have always had, just now scoped
-        // to the only two AI fields an employer can see here at all, instead of
-        // a list that had to be kept in sync with every field that must NOT be.
-        employer_summary: row.is_approved ? row.employer_summary : null,
-        capability_entries: row.is_approved ? row.capability_entries : null
+        // AI-generated content is withheld until a human approves it. The
+        // employer summary is the ONLY AI field an employer ever receives:
+        // capability_entries, capability_statements, and niche_capabilities
+        // are internal (they feed the summary and matching, and the candidate
+        // sees them on their own profile) and are deliberately not on this
+        // allowlist (decision 2026-10-22: employers see the summary only).
+        employer_summary: row.is_approved ? row.employer_summary : null
       }));
       return NextResponse.json({ data: gated });
     }

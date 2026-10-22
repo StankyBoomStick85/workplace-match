@@ -4,8 +4,6 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { attemptPreferredContact } from "../lib/contactPreferences";
 import { logAdminEvent } from "../lib/adminEvents";
-import { logError } from "../lib/logError";
-import { scanEmployerFacingText, formatViolations, scanCapabilityEntries, isCapabilityEntriesSafe } from "../lib/employerTextGuard";
 import {
   addMatchThreadMessage,
   formatMessageTimestamp,
@@ -17,7 +15,6 @@ import {
 import { useMatchThreadRealtime } from "../lib/useMatchThreadRealtime";
 import { useAutoScrollToBottom } from "../lib/useAutoScrollToBottom";
 import { calculateSkillMatch, getApplicantMatchSignals } from "../lib/skillMatch";
-import type { CapabilityEntry } from "../lib/capabilityPipeline";
 import {
   addNotificationByUserId,
   getAllApplicantProfiles,
@@ -32,8 +29,7 @@ import {
   type MvpMatch
 } from "../lib/supabaseMvpData";
 import { RemoveInterestConfirmationModal } from "./RemoveInterestConfirmationModal";
-import { EmployerSummaryContent } from "./EmployerSummaryContent";
-import { CapabilityEntryChips } from "./CapabilityEntryChips";
+import { EmployerFacingSummary } from "./EmployerFacingSummary";
 
 type Role = "candidate" | "employer";
 type MatchRecord = {
@@ -46,16 +42,19 @@ type MatchRecord = {
 // Employer-only: a candidate who has expressed interest in one of this
 // employer's jobs, but there's no mutual match yet. Privacy: only fields
 // already visible pre-mutual-match on Find Applicants are read here -
-// zipCode, capabilityEntries (PUBLIC, AI-derived - see CapabilityEntryChips),
-// a computed match % - fullName and candidateEmail are deliberately never
-// read into this record at all, so there's nothing to accidentally render.
-// No experienceLevel: a self-selected tier with no evidence behind it is not
-// shown to an employer at any stage, matched or not.
+// zipCode and a computed match % - fullName and candidateEmail are
+// deliberately never read into this record at all, so there's nothing to
+// accidentally render. No experienceLevel: a self-selected tier with no
+// evidence behind it is not shown to an employer at any stage, matched or not.
+// No skill chips or capability entries either: employers see the employer
+// summary only, and they see it at every stage including this one - it is
+// identity-blind by design (decision 2026-10-22).
 type PendingInterestRecord = {
   key: string;
   job: MvpJobListing;
+  candidateId: string;
   zipCode: string;
-  capabilityEntries: CapabilityEntry[];
+  employerSummary: string;
   matchPercent: number;
 };
 
@@ -173,60 +172,9 @@ export function MyMatches({ role }: { role: Role }) {
         }, {})
       );
 
-      // Defense in depth: catches an employer_summary row that was generated
-      // before the identity-guard fix and still has PII baked into its
-      // stored text (fixing the render path doesn't fix content already in
-      // the DB - see the regeneration note in the mutual-match unlock). This
-      // is a render-time check, not just a generation-time one, because a
-      // tainted row can be read here regardless of when it was written.
-      if (role === "employer") {
-        for (const record of nextMatches) {
-          const violations = scanEmployerFacingText(record.candidateProfile?.employerSummary ?? "");
-          if (violations.length > 0) {
-            console.error("[MyMatches] employer_summary failed identity guard at render time", {
-              candidateId: record.match.candidateId,
-              violations
-            });
-            logError({
-              route: "MyMatches",
-              errorMessage: `Stored employer_summary failed identity guard: ${formatViolations(violations)}`,
-              errorType: "privacy_violation",
-              severity: "high",
-              userId: record.match.candidateId,
-              metadata: { violations }
-            });
-          }
-        }
-      }
-
-      // Same defense-in-depth as the employer_summary check above, for
-      // capability_entries: this field isn't rendered anywhere in this file
-      // today, but the "candidate-profiles" read endpoint sent it raw to every
-      // approved employer view before the generation-time/API-gate fixes
-      // existed, so existing stored rows can carry PII regardless of when
-      // they were generated.
-      if (role === "employer") {
-        for (const record of nextMatches) {
-          const entries = record.candidateProfile?.capabilityEntries ?? [];
-          if (entries.length === 0) continue;
-          const violations = scanCapabilityEntries(entries);
-          if (violations.length > 0) {
-            console.error("[MyMatches] capability_entries failed identity guard at render time", {
-              candidateId: record.match.candidateId,
-              violations
-            });
-            logError({
-              route: "MyMatches",
-              errorMessage: `Stored capability_entries failed identity guard: ${violations.length} entry field(s) flagged`,
-              errorType: "privacy_violation",
-              severity: "high",
-              userId: record.match.candidateId,
-              metadata: { violations }
-            });
-          }
-        }
-      }
-
+      // The employer summary's render-time identity check (defense in depth
+      // against rows stored before a guard fix) lives in EmployerFacingSummary,
+      // which every employer-facing summary on this page renders through.
       if (role === "employer") {
         const mutualPairKeys = new Set(scopedMatches.map((match) => `${match.jobId}:${match.candidateId}`));
 
@@ -249,8 +197,9 @@ export function MyMatches({ role }: { role: Role }) {
               return {
                 key: `${interest.employerId}:${interest.jobId}:${interest.candidateId}`,
                 job,
+                candidateId: interest.candidateId,
                 zipCode: candidateProfile?.zipCode || "",
-                capabilityEntries: candidateProfile?.capabilityEntries ?? [],
+                employerSummary: candidateProfile?.employerSummary ?? "",
                 matchPercent
               };
             })
@@ -437,35 +386,20 @@ export function MyMatches({ role }: { role: Role }) {
                                 employer names, branch, rank, clearance, dates/year counts,
                                 publications, or locations served to an employer, at any
                                 tier. employerSummary is the only summary field this block
-                                may render - see PendingInterestRecord above for the
-                                pre-match field allowlist. */}
+                                may render, and it is the ONLY capability content an
+                                employer sees (no skill chips or capability entries) -
+                                see PendingInterestRecord above for the pre-match field
+                                allowlist. */}
                             <div className="rounded-md border border-red-100 bg-red-50 p-3">
                               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-red-800">Mutual match unlocked</p>
                               <p className="mt-1 text-sm font-bold text-zinc-950">Matched candidate</p>
-                              {record.candidateProfile?.employerSummary &&
-                              scanEmployerFacingText(record.candidateProfile.employerSummary).length === 0 ? (
-                                <div className="mt-1">
-                                  <EmployerSummaryContent text={record.candidateProfile.employerSummary} />
-                                </div>
-                              ) : (
-                                <p className="mt-1 text-sm text-zinc-500">Capability summary unavailable - pending review.</p>
-                              )}
-                            </div>
-                            <div className="rounded-md border border-gray-200 bg-white p-3">
-                              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Skills</p>
-                              {/* capability_entries (AI-derived, verification-tagged), not raw
-                                  topSkills - topSkills is a free-text field the candidate types
-                                  on their own profile form, never scanned, and was showing the
-                                  six self-entered signup skills verbatim here. See
-                                  CapabilityEntryChips for the provenance rationale. */}
-                              {record.candidateProfile?.capabilityEntries?.length &&
-                              isCapabilityEntriesSafe(record.candidateProfile.capabilityEntries) ? (
-                                <div className="mt-1">
-                                  <CapabilityEntryChips entries={record.candidateProfile.capabilityEntries} limit={12} />
-                                </div>
-                              ) : (
-                                <p className="mt-1 text-sm text-zinc-600">Not listed</p>
-                              )}
+                              <div className="mt-1">
+                                <EmployerFacingSummary
+                                  candidateId={record.match.candidateId}
+                                  text={record.candidateProfile?.employerSummary}
+                                  route="MyMatches"
+                                />
+                              </div>
                             </div>
                           </div>
                         ) : null}
@@ -581,17 +515,9 @@ export function MyMatches({ role }: { role: Role }) {
                           <div className="grid gap-3 text-sm">
                             <Detail label="Applicant area" value={record.zipCode || "Generalized ZIP area"} />
                           </div>
-                          {record.capabilityEntries.length > 0 && isCapabilityEntriesSafe(record.capabilityEntries) ? (
-                            <div>
-                              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Skills</p>
-                              <div className="mt-2">
-                                <CapabilityEntryChips entries={record.capabilityEntries} limit={12} />
-                              </div>
-                            </div>
-                          ) : null}
+                          <EmployerFacingSummary candidateId={record.candidateId} text={record.employerSummary} route="MyMatches" />
                           <p className="text-xs text-zinc-500">
-                            Full profile details (name, exact location, AI summary) unlock once you mark interest
-                            back on Find Applicants and it becomes a mutual match.
+                            Mark interest back on Find Applicants to make this a mutual match and start messaging.
                           </p>
                         </div>
                       ) : null}
