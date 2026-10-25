@@ -37,7 +37,9 @@ export type TextGuardCategory =
   | "explicit_year"
   | "tenure_count"
   | "publication_reference"
-  | "outsider_framing";
+  | "outsider_framing"
+  | "recruiting_officer_term"
+  | "oversight_office";
 
 export type TextGuardViolation = {
   category: TextGuardCategory;
@@ -587,6 +589,22 @@ export function scanEmployerFacingText(
       }
     }
   }
+
+  // ── "Officer" in a recruiting context ──────────────────────────────
+  // "officer production" / "officer recruiting" names a commissioning
+  // pipeline - an insider term that also signals the organization. Plain
+  // "officer" elsewhere (compliance officer, loan officer) is untouched.
+  pushMatches(
+    violations,
+    text,
+    "recruiting_officer_term",
+    /\bofficers?[\s-]+(?:production|recruit(?:ing|ment|ers?|s)?|accessions?|candidates?|prospects?|selection)\b|\b(?:recruit(?:ing|ment|ed|s)?|accessions?)\s+(?:of\s+)?(?:new\s+)?officers?\b/gi
+  );
+
+  // ── Government oversight office ───────────────────────────────────
+  // "inspector general" names a government oversight office; say "an
+  // external compliance audit" instead.
+  pushMatches(violations, text, "oversight_office", /\binspectors?[\s-]+general\b/gi);
 
   // ── Honorific + name ────────────────────────────────────────────────
   pushMatches(violations, text, "honorific_name", /\b(Mr|Mrs|Ms|Dr)\.\s+[A-Z][a-z]+/g);

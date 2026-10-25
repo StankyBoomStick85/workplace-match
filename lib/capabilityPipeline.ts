@@ -1198,7 +1198,9 @@ const GUARD_CATEGORY_CORRECTIONS: Record<string, string> = {
   explicit_year: "Do not state any calendar year or date.",
   tenure_count: "Do not state any duration, tenure length, or number of years. Describe scope, scale, and outcomes instead.",
   publication_reference: "Do not mention any publication, book, article, or authored work.",
-  outsider_framing: "Do not use the words \"military\" or \"civilian\", and do not frame the candidate as transitioning, bridging, translating, or entering a new sector. It is simply their experience."
+  outsider_framing: "Do not use the words \"military\" or \"civilian\", and do not frame the candidate as transitioning, bridging, translating, or entering a new sector. It is simply their experience.",
+  recruiting_officer_term: "Do not say \"officer production\" or \"officer recruiting\". Say \"recruiting targets\" (e.g. \"exceeded annual recruiting targets by 34%\").",
+  oversight_office: "Do not name an oversight office such as an inspector general. Say \"an external compliance audit\" or \"a formal external inspection\"."
 };
 
 export type GuardFlaggedPhrase = { category: string; match: string };
@@ -1492,11 +1494,33 @@ export type ParsedEmployerSummary =
       gap: string | null;
     };
 
+// Every leading list marker on a line ("- ", "• ", "- • ", "1. "), so a line
+// the model double-marked never renders with two bullets. A single "*" is a
+// marker; "**" opens the bold lead phrase and is kept.
+const LIST_MARKERS = /^(?:(?:[-–—•·▪◦]|\*(?!\*))\s*|\d{1,2}[.)]\s+)+/;
+
 function splitBullets(block: string): string[] {
   return block
     .split("\n")
-    .map((line) => line.trim().replace(/^[-*•]\s*/, ""))
+    .map((line) => line.trim().replace(LIST_MARKERS, "").trim())
     .filter(Boolean);
+}
+
+// Splits "## NAME" sections into a map keyed by NAME (spaces read as
+// underscores: "## PROVEN AT" is PROVEN_AT). Each section runs to the next
+// heading of ANY name, so a section the model emits out of order, or a
+// missing one, never swallows its neighbours.
+function sectionMap(text: string): Map<string, string> {
+  const map = new Map<string, string>();
+  const re = /^[ \t]*##[ \t]+([A-Za-z][A-Za-z _]*?)[ \t]*:?[ \t]*$/gm;
+  const heads = [...text.matchAll(re)];
+  heads.forEach((m, i) => {
+    const key = m[1].trim().toUpperCase().replace(/\s+/g, "_");
+    const start = (m.index ?? 0) + m[0].length;
+    const end = i + 1 < heads.length ? heads[i + 1].index ?? text.length : text.length;
+    if (!map.has(key)) map.set(key, text.slice(start, end).trim());
+  });
+  return map;
 }
 
 function parseProvenItem(line: string): EmployerSummaryProvenItem {
@@ -1512,21 +1536,23 @@ const oneLine = (s: string) => s.replace(/\s*\n\s*/g, " ").trim();
 export function parseEmployerSummary(text: string): ParsedEmployerSummary | null {
   if (!text) return null;
 
-  if (text.includes("## HEADLINE")) {
-    const headline = oneLine(extractSection(text, "HEADLINE", "PROVEN_AT"));
-    const provenAt = splitBullets(extractSection(text, "PROVEN_AT", "THRIVES_IN")).map(parseProvenItem);
-    const thrivesIn = oneLine(extractSection(text, "THRIVES_IN", "GROWING_INTO"));
-    const growingInto = oneLine(extractSection(text, "GROWING_INTO", "GAP"));
-    const gap = text.includes("## GAP") ? oneLine(extractSection(text, "GAP")) : "";
+  const sections = sectionMap(text);
+
+  if (sections.has("HEADLINE")) {
+    const headline = oneLine(sections.get("HEADLINE") ?? "");
+    const provenAt = splitBullets(sections.get("PROVEN_AT") ?? "").map(parseProvenItem);
+    const thrivesIn = oneLine(sections.get("THRIVES_IN") ?? "");
+    const growingInto = oneLine(sections.get("GROWING_INTO") ?? "");
+    const gap = oneLine(sections.get("GAP") ?? "");
     if (!headline || provenAt.length === 0 || !thrivesIn) return null;
     return { format: "v2", headline, provenAt, thrivesIn, growingInto, gap: gap || null };
   }
 
-  if (text.includes("## BEST_FIT")) {
-    const bestFit = extractSection(text, "BEST_FIT", "STRENGTHS").trim();
-    const strengths = splitBullets(extractSection(text, "STRENGTHS", "GROWTH"));
-    const growth = extractSection(text, "GROWTH", "GAP").trim();
-    const gapRaw = extractSection(text, "GAP").trim();
+  if (sections.has("BEST_FIT")) {
+    const bestFit = (sections.get("BEST_FIT") ?? "").trim();
+    const strengths = splitBullets(sections.get("STRENGTHS") ?? "");
+    const growth = (sections.get("GROWTH") ?? "").trim();
+    const gapRaw = (sections.get("GAP") ?? "").trim();
     if (!bestFit || strengths.length === 0 || !growth) return null;
     return { format: "v1", bestFit, strengths, growth, gap: gapRaw || null };
   }

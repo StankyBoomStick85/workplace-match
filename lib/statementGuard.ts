@@ -306,6 +306,8 @@ export function scanStatementText(text: string, options?: { knownFullName?: stri
 
 // Plain-language rewrite instruction per category, for the targeted retry.
 export const STATEMENT_GUARD_CORRECTIONS: Record<string, string> = {
+  recruiting_officer_term: "Do not say \"officer production\" or \"officer recruiting\". Say \"recruiting targets\".",
+  oversight_office: "Do not name an oversight office such as an inspector general. Say \"an external compliance audit\".",
   candidate_name: "Never include the person's name or initials.",
   honorific_name: "Never use an honorific with a name.",
   gendered_pronoun: "Use no pronouns at all - plain present tense with no subject.",

@@ -12,6 +12,7 @@ import { loadTsModules } from "./lib/loadTsModules.mjs";
 
 const checks = await loadTsModules(["capabilityStatementChecks"], "capabilityStatementChecks");
 const guard = await loadTsModules(["statementGuard", "employerTextGuard"], "statementGuard");
+const employerGuard = await loadTsModules(["statementGuard", "employerTextGuard"], "employerTextGuard");
 const synth = await loadTsModules(
   ["capabilityStatements", "capabilityStatementChecks", "statementGuard", "employerTextGuard", "translationGlossary", "documentLabels"],
   "capabilityStatements"
@@ -569,6 +570,38 @@ function expect(name, cond, detail = "") {
   const colonLead = pipeline.parseEmployerSummary(good.replace("**Asset accountability** ", "**Asset accountability:** ").replace("**Training at scale** ", "**Training at scale**: "));
   expect("summary v2: colon after lead, inside or outside the bold, is not part of lead or proof", colonLead.provenAt[0].lead === "Asset accountability" && colonLead.provenAt[0].proof.startsWith("Kept") && colonLead.provenAt[1].lead === "Training at scale" && colonLead.provenAt[1].proof.startsWith("Trained"), JSON.stringify(colonLead.provenAt.slice(0, 2)));
   expect("summary prompt: lead phrase followed by a colon; scale, recruiting, filler rules", /\*\*Lead phrase\*\*: one line of proof/.test(pipeline.buildEmployerSummaryUserPrompt(input)) && /never inflate/.test(pipeline.buildEmployerSummaryUserPrompt(input)) && /Recruiting is recruiting/.test(pipeline.buildEmployerSummaryUserPrompt(input)) && /No filler tails/.test(pipeline.buildEmployerSummaryUserPrompt(input)));
+  {
+    const g = (t) => employerGuard.scanEmployerFacingText(t, {}).map((v) => v.category);
+    expect("guard: 'officer production' flagged", g("Exceeded annual officer production targets by 34%").includes("recruiting_officer_term"));
+    expect("guard: 'officer recruiting' flagged", g("Led officer recruiting across a region").includes("recruiting_officer_term"));
+    expect("guard: 'recruiting of officers' flagged", g("Ran recruiting of new officers for 2 regions").includes("recruiting_officer_term"));
+    expect("guard: 'compliance officer' not flagged", !g("Works closely with a compliance officer and loan officers").includes("recruiting_officer_term"));
+    expect("guard: 'inspector general' flagged", g("Prepared for an inspector general audit").includes("oversight_office"));
+    expect("guard: new categories have rewrite instructions", /recruiting targets/.test(pipeline.buildGuardRewritePrompt("employer_summary", "x", [{ category: "recruiting_officer_term", match: "officer production" }])));
+  }
+  {
+    const outOfOrder = [
+      "## HEADLINE", "Operations leader.",
+      "## THRIVES_IN", "Operations leadership; remote",
+      "## GAP", "Has not yet used a named ERP system",
+      "## PROVEN_AT",
+      "- • **Asset accountability**: Kept $3.5M accounted for",
+      "* **Training at scale**: Trained 500 people",
+      "1. **Quota delivery**: Delivered 134% of target",
+      "**No marker**: Line 4 with 2 numbers",
+      "## GROWING_INTO", "Director of Operations",
+    ].join("\n");
+    const p = pipeline.parseEmployerSummary(outOfOrder);
+    expect("summary parse: out-of-order sections each land in their own field",
+      p && p.format === "v2" && p.thrivesIn === "Operations leadership; remote" && p.gap === "Has not yet used a named ERP system" && p.growingInto === "Director of Operations" && p.provenAt.length === 4,
+      JSON.stringify(p));
+    expect("summary parse: double and numbered bullet markers stripped, bold kept",
+      p.provenAt.map((x) => x.lead).join("|") === "Asset accountability|Training at scale|Quota delivery|No marker" && p.provenAt.every((x) => !/^[-•*\d]/.test(x.proof)),
+      JSON.stringify(p.provenAt));
+    const noGap = pipeline.parseEmployerSummary(good);
+    expect("summary parse: missing GAP stays null and does not swallow GROWING_INTO", noGap.gap === null && noGap.growingInto === "Leading operations and growth for a mission-driven company");
+    expect("summary parse: '## PROVEN AT' with a space is read as PROVEN_AT", pipeline.parseEmployerSummary(good.replace("## PROVEN_AT", "## PROVEN AT")).provenAt.length === 3);
+  }
   expect("summary system prompt: no longer suggests 'documented across multiple performance reviews'", !/"documented across multiple performance reviews" is correct/.test(pipeline.EMPLOYER_SUMMARY_SYSTEM_PROMPT));
 
   const v1 = pipeline.parseEmployerSummary("## BEST_FIT\nOperations Manager\n## STRENGTHS\n- One\n- Two\n## GROWTH\nGrows");
