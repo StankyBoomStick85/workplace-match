@@ -271,13 +271,16 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
   }
 
   async function performSave(data: ApplicantProfileState) {
+    // Target roles and work setting are owned by "Where I'm heading" on the
+    // profile page (/api/applicant/direction); this form never writes them.
+    const { jobType: _jobType, workSetting: _workSetting, ...editable } = data;
     const response = await fetch("/api/mvp/write", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         resource: "candidate-profile",
         data: {
-          ...data,
+          ...editable,
           topSkills: splitTags(data.topSkills)
         }
       })
@@ -476,15 +479,6 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
                     <option value="salary">Salary</option>
                   </select>
                 </ProfileField>
-                <ProfileField label="Job type" id="jobType">
-                  <select id="jobType" value={draftProfile.jobType} onChange={(event) => updateDraft("jobType", event.target.value)} disabled={!isEditing} className="field">
-                    <option value="">Select type</option>
-                    <option value="full-time">Full-time</option>
-                    <option value="part-time">Part-time</option>
-                    <option value="contract">Contract</option>
-                    <option value="temporary">Temporary</option>
-                  </select>
-                </ProfileField>
                 <ProfileField label="Shift preference" id="shiftPreference">
                   <select id="shiftPreference" value={draftProfile.shiftPreference} onChange={(event) => updateDraft("shiftPreference", event.target.value)} disabled={!isEditing} className="field">
                     <option value="">Select shift</option>
@@ -493,14 +487,6 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
                     <option value="swing">Swing</option>
                     <option value="weekends">Weekends</option>
                     <option value="flexible">Flexible</option>
-                  </select>
-                </ProfileField>
-                <ProfileField label="Work setting" id="workSetting">
-                  <select id="workSetting" value={draftProfile.workSetting} onChange={(event) => updateDraft("workSetting", event.target.value)} disabled={!isEditing} className="field">
-                    <option value="">Select setting</option>
-                    <option value="on-site">On-site</option>
-                    <option value="hybrid">Hybrid</option>
-                    <option value="remote">Remote</option>
                   </select>
                 </ProfileField>
               </ProfileSection>
@@ -560,9 +546,9 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
                 <DashboardCard label="ZIP code" value={profile.zipCode || "Not set"} />
                 <DashboardCard label="Search radius" value={profile.searchRadius ? (driveTimeDisplay ?? `${profile.searchRadius} miles`) : "Not set"} />
                 <DashboardCard label="Desired pay" value={formatPay(profile.desiredPayMin, profile.payType)} />
-                <DashboardCard label="Job type" value={profile.jobType || "Not set"} />
+                <DashboardCard label="Target roles" value={profile.jobType || "Set on your profile"} />
                 <DashboardCard label="Shift preference" value={profile.shiftPreference || "Not set"} />
-                <DashboardCard label="Work setting" value={profile.workSetting || "Not set"} />
+                <DashboardCard label="Work setting" value={profile.workSetting || "Set on your profile"} />
                 <DashboardCard label="Experience Level" value={profile.experienceLevel || "Not set"} />
                 <DashboardCard label="Industries of interest" value={profile.industriesOfInterest || "Not set"} />
                 <DashboardCard label="Available start date" value={profile.availableStartDate || "Not set"} />
@@ -656,7 +642,7 @@ function mapProfileData(data: any): ApplicantProfileState {
     searchRadius: data?.search_radius ? String(data.search_radius) : "",
     desiredPayMin: data?.desired_pay_min ? String(data.desired_pay_min) : "",
     payType: data?.pay_type || "hourly",
-    jobType: Array.isArray(data?.job_types) ? data.job_types[0] ?? "" : "",
+    jobType: Array.isArray(data?.job_types) ? data.job_types.join(", ") : "",
     shiftPreference: Array.isArray(data?.shifts) ? data.shifts[0] ?? "" : "",
     workSetting: data?.work_preference ?? "",
     capabilitySummary: data?.summary ?? "",

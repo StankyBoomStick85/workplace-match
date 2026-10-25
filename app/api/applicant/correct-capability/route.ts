@@ -18,6 +18,7 @@ import {
 import { scanEmployerFacingText, reportTextGuardViolation, scanCapabilityEntries, buildGuardAbortViolationRows } from "@/lib/employerTextGuard";
 import { reportGenerationFailure } from "@/lib/generationAlerts";
 import { sendEmail } from "@/lib/email";
+import { readStoredDirection } from "@/lib/candidateDirection";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -61,7 +62,7 @@ export async function POST(request: Request) {
 
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("display_name, job_types, experience_level, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, document_metadata, capability_statements, employer_summary")
+    .select("display_name, job_types, direction, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, document_metadata, capability_statements, employer_summary")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -172,7 +173,7 @@ export async function POST(request: Request) {
         role: "user",
         content: buildStep4Prompt({
           desiredRole,
-          experienceLevel: profile.experience_level ?? "Not specified",
+          direction: readStoredDirection(profile.direction),
           workPreference: profile.work_preference ?? "Not specified",
           skills,
           summary: profile.summary ?? "Not provided",
@@ -232,6 +233,7 @@ export async function POST(request: Request) {
     capabilityStatements: Array.isArray(profile.capability_statements) ? profile.capability_statements : null,
     capabilitySummary,
     selfSummary: profile.summary ?? null,
+    direction: readStoredDirection(profile.direction),
     desiredRoles: Array.isArray(profile.job_types) && profile.job_types.length > 0 ? profile.job_types.join(", ") : null,
     workPreference: profile.work_preference ?? null,
     isAlternateSummary

@@ -4,6 +4,8 @@ import { useState, useEffect, type FormEvent } from "react";
 import { supabase } from "../lib/supabase";
 import { EmployerSummaryContent } from "./EmployerSummaryContent";
 import { CapabilityStatementsSection } from "./CapabilityStatementsSection";
+import { DirectionCard } from "./DirectionCard";
+import { readStoredDirection } from "../lib/candidateDirection";
 
 const PROFILE_PICTURE_BUCKET = "profile-pictures";
 const DOCUMENTS_BUCKET = "candidate-documents";
@@ -422,8 +424,9 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
         profilePictureUrl: displayPictureUrl,
         fullName: String(formData.get("fullName") ?? "").trim(),
         zipCode: profile?.zipCode ?? "",
-        desiredJobType: String(formData.get("desiredJobType") ?? "").trim(),
-        workPreference: String(formData.get("workPreference") ?? "open"),
+        // Set in "Where I'm heading" (DirectionCard), not this form.
+        desiredJobType: profile?.desiredJobType ?? "",
+        workPreference: profile?.workPreference ?? "open",
         capabilitySummary: String(formData.get("capabilitySummary") ?? "").trim(),
         topSkills: splitSkills(String(formData.get("topSkills") ?? "")),
         experienceLevel: String(formData.get("experienceLevel") ?? ""),
@@ -445,8 +448,6 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
           data: {
             fullName: nextProfile.fullName,
             zipCode: nextProfile.zipCode,
-            jobType: nextProfile.desiredJobType,
-            workSetting: nextProfile.workPreference,
             capabilitySummary: nextProfile.capabilitySummary,
             topSkills: nextProfile.topSkills,
             experienceLevel: nextProfile.experienceLevel,
@@ -954,6 +955,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
         </div>
       ) : null}
       <section className={`mx-auto max-w-3xl space-y-6 px-4${isEditing ? " pt-20 pb-14" : " py-14"}`}>
+      <DirectionCard initialDirection={readStoredDirection(initialProfile?.direction)} />
       <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-soft">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -1024,21 +1026,6 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="desiredJobType" className="label">Desired job type</label>
-              <input id="desiredJobType" name="desiredJobType" placeholder="Operations, customer support, warehouse" defaultValue={profile?.desiredJobType ?? ""} className="field" />
-            </div>
-
-            <div className="space-y-2">
-              <label htmlFor="workPreference" className="label">Work preference</label>
-              <select id="workPreference" name="workPreference" required defaultValue={profile?.workPreference ?? "open"} className="field">
-                <option value="onsite">Onsite</option>
-                <option value="hybrid">Hybrid</option>
-                <option value="remote">Remote</option>
-                <option value="open">Open</option>
-              </select>
-            </div>
-
-            <div className="space-y-2">
               <label htmlFor="experienceLevel" className="label">Experience level</label>
               <select id="experienceLevel" name="experienceLevel" defaultValue={profile?.experienceLevel ?? ""} className="field">
                 <option value="">Select level</option>
@@ -1083,8 +1070,6 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
             {profile ? (
               <dl className="grid gap-4 md:grid-cols-2">
                 <ViewField label="Full name" value={profile.fullName} />
-                <ViewField label="Desired job type" value={profile.desiredJobType} />
-                <ViewField label="Work preference" value={profile.workPreference} />
                 <ViewField label="Experience level" value={profile.experienceLevel} />
                 <div className="space-y-1 md:col-span-2">
                   <dt className="label">Short capability summary</dt>

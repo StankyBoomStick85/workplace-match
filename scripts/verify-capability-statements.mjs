@@ -14,7 +14,7 @@ const checks = await loadTsModules(["capabilityStatementChecks"], "capabilitySta
 const guard = await loadTsModules(["statementGuard", "employerTextGuard"], "statementGuard");
 const employerGuard = await loadTsModules(["statementGuard", "employerTextGuard"], "employerTextGuard");
 const synth = await loadTsModules(
-  ["capabilityStatements", "capabilityStatementChecks", "statementGuard", "employerTextGuard", "translationGlossary", "documentLabels"],
+  ["capabilityStatements", "capabilityStatementChecks", "statementGuard", "employerTextGuard", "translationGlossary", "documentLabels", "candidateDirection", "roleFamilies"],
   "capabilityStatements"
 );
 
@@ -472,7 +472,7 @@ function expect(name, cond, detail = "") {
 
 // ───────────── self-reported evidence is context / absorbed (2026-10-22) ─────────────
 {
-  const pipeline = await loadTsModules(["capabilityPipeline", "documentLabels", "capabilityStatementChecks"], "capabilityPipeline");
+  const pipeline = await loadTsModules(["capabilityPipeline", "documentLabels", "capabilityStatementChecks", "candidateDirection", "roleFamilies"], "capabilityPipeline");
 
   const items = pipeline.buildSelfReportedEvidenceItems({ summary: "Retired senior leader with 20 years", capabilityTags: ["Budget & Asset Accountability", "Cybersecurity"] });
   expect("self-reported items: summary is not evidence", items.length === 2 && items.every((i) => i.claim !== "Retired senior leader with 20 years"));
@@ -532,7 +532,7 @@ function expect(name, cond, detail = "") {
 
 // ───────────────────────── employer summary v2 (2026-10-22) ─────────────────────────
 {
-  const pipeline = await loadTsModules(["capabilityPipeline", "documentLabels", "capabilityStatementChecks"], "capabilityPipeline");
+  const pipeline = await loadTsModules(["capabilityPipeline", "documentLabels", "capabilityStatementChecks", "candidateDirection", "roleFamilies"], "capabilityPipeline");
   const input = {
     capabilityStatements: [
       { statement: "Keeps equipment accountable.", proof: [{ text: "Accountable for $3.5M in equipment with zero loss" }, { text: "Trained over 500 people across 5 rounds" }] },

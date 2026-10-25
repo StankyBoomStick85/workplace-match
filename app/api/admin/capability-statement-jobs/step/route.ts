@@ -3,10 +3,12 @@ import { createClient } from "@supabase/supabase-js";
 import { waitUntil } from "@vercel/functions";
 import { createRunContext, runWithGenerationGuard } from "@/lib/generationRunGuard";
 import { JOB_ROUTE, runJobStep, triggerStep, verifyStepToken } from "@/lib/capabilityStatementJobs";
+import { startQueuedRebuild } from "@/lib/profileRebuilds";
 
 // One step of a capability statement job (see lib/capabilityStatementJobs.ts).
-// Called server-to-server only - by the admin route for step 1, and by the
-// previous step for every step after. Authenticated by an HMAC token, not a
+// Called server-to-server only - for step 1 by the admin route or a candidate
+// rebuild (lib/profileRebuilds.ts), and by the previous step for every step
+// after. Authenticated by an HMAC token, not a
 // session. Answers 202 immediately and does the work in the background, so the
 // caller never waits on a model call.
 //
@@ -46,6 +48,15 @@ export async function POST(request: Request) {
       if (outcome.kind === "continue") {
         const { data: job } = await adminClient.from("capability_statement_jobs").select("id, user_id").eq("id", jobId).single();
         if (job) await triggerStep(adminClient, origin, job, outcome.nextSeq);
+      } else if (outcome.kind === "finished") {
+        // A rebuild the candidate asked for while this job ran was queued;
+        // start it now (lib/profileRebuilds.ts). Never fails this step.
+        const { data: job } = await adminClient.from("capability_statement_jobs").select("user_id").eq("id", jobId).single();
+        if (job) {
+          await startQueuedRebuild(adminClient, origin, job.user_id).catch((err) =>
+            console.error(`[${JOB_ROUTE}/step] could not start queued rebuild`, err)
+          );
+        }
       }
       // A finished-but-failed job has already been reported by runJobStep;
       // the response stays ok so the guard does not log it a second time.

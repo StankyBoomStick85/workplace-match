@@ -5,6 +5,7 @@ import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
 import { logError } from "../../../../lib/logError";
+import { canonicalDirection, directionForScoring, readStoredDirection } from "../../../../lib/candidateDirection";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -52,15 +53,16 @@ function candidateContentHash(profile: {
   employer_summary: string | null;
   capability_entries: unknown;
   capability_tags: string[] | null;
-  experience_level: string | null;
+  direction: unknown;
   job_types: string[] | null;
   work_preference: string | null;
 }) {
+  // direction is part of the hash, so changing it re-scores the candidate.
   return hashContent({
     employer_summary: profile.employer_summary ?? "",
     capability_entries: profile.capability_entries ?? null,
     capability_tags: profile.capability_tags ?? [],
-    experience_level: profile.experience_level ?? "",
+    direction: canonicalDirection(readStoredDirection(profile.direction)),
     job_types: profile.job_types ?? [],
     work_preference: profile.work_preference ?? ""
   });
@@ -169,7 +171,7 @@ export async function POST(request: Request) {
 
   const { data: profiles, error: profilesError } = await adminClient
     .from("candidate_profiles")
-    .select("user_id, employer_summary, capability_entries, capability_tags, experience_level, job_types, work_preference, is_approved")
+    .select("user_id, employer_summary, capability_entries, capability_tags, direction, job_types, work_preference, is_approved")
     .in("user_id", candidateIds);
 
   if (profilesError) {
@@ -323,19 +325,24 @@ function buildCandidateSummary(profile: {
   employer_summary: string | null;
   capability_entries: unknown;
   capability_tags: string[] | null;
-  experience_level: string | null;
+  direction: unknown;
   job_types: string[] | null;
   work_preference: string | null;
 }) {
   const entries = parseCapabilityEntries(profile.capability_entries);
+  const direction = readStoredDirection(profile.direction);
   return {
     employer_summary: profile.employer_summary || "Not provided",
     capabilities: entries.length > 0
       ? entries.map((e) => `[${e.verificationStatus}] ${e.name}: ${e.description}`)
       : [],
     capability_tags: Array.isArray(profile.capability_tags) ? profile.capability_tags : [],
-    experience_level: profile.experience_level || "Not specified",
-    desired_job_types: Array.isArray(profile.job_types) ? profile.job_types : [],
-    work_preference: profile.work_preference || "Not specified"
+    // Where the candidate wants to go: context for fit, never evidence of capability.
+    ...(direction
+      ? { direction: directionForScoring(direction) }
+      : {
+          desired_job_types: Array.isArray(profile.job_types) ? profile.job_types : [],
+          work_preference: profile.work_preference || "Not specified"
+        })
   };
 }

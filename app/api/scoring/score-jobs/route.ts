@@ -5,6 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
 import { logError } from "../../../../lib/logError";
 import { isGigJob } from "../../../../lib/jobCategories";
+import { formatDirectionForPrompt, readStoredDirection } from "@/lib/candidateDirection";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -58,7 +59,7 @@ export async function POST(request: Request) {
   // Fetch candidate profile
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("capability_summary, capability_tags, recommended_position, experience_level, desired_pay_min, pay_type, job_types, work_preference, city, state")
+    .select("capability_summary, capability_tags, recommended_position, direction, desired_pay_min, pay_type, job_types, work_preference, city, state")
     .eq("user_id", candidateId)
     .maybeSingle();
 
@@ -238,6 +239,7 @@ export async function POST(request: Request) {
 
   const capabilityTags = Array.isArray(profile.capability_tags) ? profile.capability_tags.join(", ") : "Not specified";
   const jobTypes = Array.isArray(profile.job_types) ? profile.job_types.join(", ") : "Not specified";
+  const direction = readStoredDirection(profile.direction);
 
   if (scoringMode === "quick") {
     console.log("[score-jobs] quick mode: no candidate fields sent — binary job classifier, job data only");
@@ -245,7 +247,6 @@ export async function POST(request: Request) {
     console.log("[score-jobs] profile fields sent to Claude:");
     console.log("  capability_summary:", profile.capability_summary ?? "(null)");
     console.log("  recommended_position:", profile.recommended_position ?? "(null)");
-    console.log("  experience_level:", profile.experience_level ?? "(null)");
     console.log("  capabilityTags:", capabilityTags);
   }
 
@@ -307,11 +308,11 @@ Return ONLY: [{"job_id": string, "score": number}] where score is 100 if the ans
 CANDIDATE:
 - Capability summary: ${profile.capability_summary ?? "Not provided"}
 - Recommended role: ${profile.recommended_position ?? "Not provided"}
-- Experience level: ${profile.experience_level ?? "Not specified"}
 - Capability tags: ${capabilityTags}
+${direction ? `- Where they want to go (context for fit, not evidence):\n${formatDirectionForPrompt(direction).split("\n").map((l) => `  ${l}`).join("\n")}` : `- Desired role: ${jobTypes}`}
 
 SCORING:
-- 75-95: Strong career fit - role matches their experience level and advances their trajectory
+- 75-95: Strong career fit - role matches their demonstrated capability, advances their trajectory, and fits where they want to go
 - 50-74: Partial fit - related field or one level below their demonstrated experience
 - 25-49: Weak fit - significant underutilization relative to their background
 - 10-24: Poor fit - entry-level role for a candidate with meaningful experience

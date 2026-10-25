@@ -5,6 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
 import { scanEmployerFacingText, reportTextGuardViolation } from "@/lib/employerTextGuard";
 import { sendEmail } from "@/lib/email";
+import { formatDirectionForPrompt, readStoredDirection } from "@/lib/candidateDirection";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -62,7 +63,7 @@ export async function POST() {
 
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("display_name, job_types, experience_level, capability_tags, summary, alternate_paths")
+    .select("display_name, job_types, direction, capability_tags, summary, alternate_paths")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -89,6 +90,7 @@ export async function POST() {
   const skills = Array.isArray(profile.capability_tags) && profile.capability_tags.length > 0
     ? profile.capability_tags.join(", ")
     : "Not specified";
+  const direction = readStoredDirection(profile.direction);
 
   const systemPrompt = `You are a career intelligence engine. Your job is NOT to find roles similar to what this person has already done. Your job is to read the entire profile — every field, every detail, every implied skill — and ask: what kind of person is capable of all of this?
 
@@ -109,8 +111,7 @@ Do not use the words entry level, junior, senior, or any tier label. Do not pige
 
   const prompt = `Here is the candidate's complete profile:
 
-- Desired role/industry: ${desiredRole}
-- Experience level: ${profile.experience_level ?? "Not specified"}
+${direction ? `- Where they want to go (context, not evidence):\n${formatDirectionForPrompt(direction).split("\n").map((l) => `  ${l}`).join("\n")}` : `- Desired role/industry: ${desiredRole}`}
 - Skills: ${skills}
 - Background summary: ${profile.summary ?? "Not provided"}
 

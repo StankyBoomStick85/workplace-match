@@ -37,6 +37,7 @@ import {
   type StoredDoc,
 } from "@/lib/capabilityPipeline";
 import { scanEmployerFacingText } from "@/lib/employerTextGuard";
+import { readStoredDirection } from "@/lib/candidateDirection";
 import {
   DEFAULT_SYNTHESIS_MODEL,
   createSynthesisState,
@@ -125,7 +126,7 @@ export async function createJob(
 ): Promise<{ job: JobRow } | { error: string; httpStatus: number }> {
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("display_name, summary, capability_tags, pending_evidence_groups, document_metadata, capability_statements, niche_capabilities, capability_profile_generated_at")
+    .select("display_name, summary, capability_tags, direction, pending_evidence_groups, document_metadata, capability_statements, niche_capabilities, capability_profile_generated_at")
     .eq("user_id", args.userId)
     .maybeSingle();
   if (profileError) return { error: `Failed to load profile: ${profileError.message}`, httpStatus: 500 };
@@ -144,6 +145,7 @@ export async function createJob(
     context: {
       summary: profile.summary ?? null,
       capabilityTags: Array.isArray(profile.capability_tags) ? (profile.capability_tags as string[]) : null,
+      direction: readStoredDirection(profile.direction),
     },
   };
   const model = args.model ?? DEFAULT_SYNTHESIS_MODEL;
@@ -325,7 +327,7 @@ async function runSummaryStep(adminClient: SupabaseClient, job: JobRow, seq: num
 
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("pending_evidence_groups, summary, job_types, work_preference, summary_priority")
+    .select("pending_evidence_groups, summary, direction, job_types, work_preference, summary_priority")
     .eq("user_id", job.user_id)
     .maybeSingle();
 
@@ -367,6 +369,9 @@ async function runSummaryStep(adminClient: SupabaseClient, job: JobRow, seq: num
       capabilityStatements: result.core,
       capabilitySummary: "",
       selfSummary: profile?.summary ?? job.input.context?.summary ?? null,
+      // Read fresh, not from the snapshot: a direction change made while the
+      // job ran is what the new summary should reflect.
+      direction: readStoredDirection(profile?.direction),
       desiredRoles: Array.isArray(profile?.job_types) && profile.job_types.length > 0 ? profile.job_types.join(", ") : null,
       workPreference: profile?.work_preference ?? null,
       isAlternateSummary: profile?.summary_priority === "alternate",

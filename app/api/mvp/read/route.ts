@@ -132,14 +132,13 @@ export async function GET(request: Request) {
       // server-side only.
       const { data, error } = await adminClient
         .from("candidate_profiles")
-        .select("user_id, zip_code, job_types, work_preference, experience_level, employer_summary, is_approved");
+        .select("user_id, zip_code, job_types, work_preference, employer_summary, is_approved");
       if (error) throw error;
       const gated = (data ?? []).map((row: Record<string, unknown>) => ({
         user_id: row.user_id,
         zip_code: row.zip_code,
         job_types: row.job_types,
         work_preference: row.work_preference,
-        experience_level: row.experience_level,
         // AI-generated content is withheld until a human approves it. The
         // employer summary is the ONLY AI field an employer ever receives:
         // capability_entries, capability_statements, and niche_capabilities

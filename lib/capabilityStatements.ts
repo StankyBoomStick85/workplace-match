@@ -44,6 +44,7 @@ import {
 } from "@/lib/capabilityStatementChecks";
 import { STATEMENT_GUARD_CORRECTIONS, scanCoreOnlyText, scanStatementText, type StatementGuardViolation } from "@/lib/statementGuard";
 import { TRANSLATION_GLOSSARY, formatGlossaryForPrompt, matchGlossaryEntries, type GlossaryEntry } from "@/lib/translationGlossary";
+import { formatDirectionForPrompt, type CandidateDirection } from "@/lib/candidateDirection";
 
 // Chosen 2026-10-22 from the Phase 1 comparison (vs claude-sonnet-4-6): more
 // statements pass the checks, and the translation of scope is markedly better.
@@ -216,19 +217,25 @@ CORE STATEMENTS ALREADY WRITTEN:
 ${JSON.stringify(acceptedCore.map((c) => c.statement))}`;
 }
 
-// The self-written summary and signup skill tags describe who the person is
-// and what they want to be known for. They help decide emphasis and wording,
-// but they are not evidence: they are never cited, and a number in them can
-// never appear in a proof line (the provenance check only sources numbers from
-// cited claims, so this is enforced in code as well as asked for here).
-export type PersonContext = { summary?: string | null; capabilityTags?: string[] | null };
+// The self-written summary, signup skill tags, and direction ("Where I'm
+// heading") describe who the person is and where they want to go. They help
+// decide emphasis, order, and wording, but they are not evidence: they are
+// never cited, and a number in them can never appear in a proof line (the
+// provenance check only sources numbers from cited claims, so this is enforced
+// in code as well as asked for here).
+export type PersonContext = {
+  summary?: string | null;
+  capabilityTags?: string[] | null;
+  direction?: CandidateDirection | null;
+};
 
 function formatPersonContext(context?: PersonContext): string {
   const summary = context?.summary?.trim();
   const tags = (context?.capabilityTags ?? []).filter((t) => t && t.trim());
-  if (!summary && tags.length === 0) return "";
-  return `CONTEXT ABOUT THE PERSON - NOT EVIDENCE. Use it only to understand who this person is and which capabilities they want to lead with. Never cite it, never take a fact or number from it, and never write a statement or proof line that exists only because of it. Every statement and proof line comes from the evidence groups below.
-${summary ? `Self-written summary: ${JSON.stringify(summary)}\n` : ""}${tags.length ? `Skills they listed at signup: ${JSON.stringify(tags)}\n` : ""}
+  const direction = context?.direction ?? null;
+  if (!summary && tags.length === 0 && !direction) return "";
+  return `CONTEXT ABOUT THE PERSON - NOT EVIDENCE. Use it only to understand who this person is, where they want to go, and which capabilities they want to lead with. Never cite it, never take a fact or number from it, and never write a statement or proof line that exists only because of it. Every statement and proof line comes from the evidence groups below.
+${direction ? `Where they want to go (decides emphasis and order - put the capabilities those roles are judged on first):\n${formatDirectionForPrompt(direction)}\n` : ""}${summary ? `Self-written summary: ${JSON.stringify(summary)}\n` : ""}${tags.length ? `Skills they listed at signup: ${JSON.stringify(tags)}\n` : ""}
 `;
 }
 

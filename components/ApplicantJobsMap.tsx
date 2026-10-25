@@ -4530,8 +4530,7 @@ function getApplicantMatchSignals(profile: ApplicantProfile | null) {
   return [
     ...(profile.topSkills ?? []),
     profile.desiredJobType ?? "",
-    profile.capabilitySummary ?? "",
-    profile.experienceLevel ?? ""
+    profile.capabilitySummary ?? ""
   ].filter(Boolean);
 }
 

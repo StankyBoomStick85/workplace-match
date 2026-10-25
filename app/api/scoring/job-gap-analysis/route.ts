@@ -188,7 +188,7 @@ export async function POST(request: Request) {
 
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("capability_summary, capability_tags, capability_entries, recommended_position, experience_level")
+    .select("capability_summary, capability_tags, capability_entries, recommended_position")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -254,7 +254,6 @@ ${candidateCapabilitiesSection}
 ${hasCapabilityEntries ? `\nBackground summary (supporting context only, not the primary source): ${profile.capability_summary ?? "Not provided"}\n` : ""}
 - Capability tags: ${capabilityTags}
 - Recommended role: ${profile.recommended_position ?? "Not provided"}
-- Experience level: ${profile.experience_level ?? "Not specified"}
 
 JOB:
 - Title: ${jobTitle}

@@ -2,6 +2,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
 import { getCivilianDocLabel } from "@/lib/documentLabels";
 import { findScaleInflation, findUnsourcedNumbers, relabelsRecruitingAsSales } from "@/lib/capabilityStatementChecks";
+import {
+  familiesNamedIn,
+  findTitleWords,
+  formatDirectionForPrompt,
+  roleFamilyLabels,
+  type CandidateDirection,
+} from "@/lib/candidateDirection";
 
 export type EvidenceItem = {
   claim: string;
@@ -1272,7 +1279,9 @@ Output ONLY the rewritten text - no preamble, no explanation, no delimiters.`;
 
 export type Step4Input = {
   desiredRole: string;
-  experienceLevel: string;
+  // Structured direction when the candidate has set one; desiredRole and
+  // workPreference are the legacy single-field fallback.
+  direction?: CandidateDirection | null;
   workPreference: string;
   skills: string;
   summary: string;
@@ -1282,9 +1291,7 @@ export type Step4Input = {
 export function buildStep4Prompt(input: Step4Input): string {
   return `An applicant has provided the following profile information:
 
-- Desired role/industry: ${input.desiredRole}
-- Experience level: ${input.experienceLevel}
-- Work preference: ${input.workPreference}
+${input.direction ? `- Where they want to go (context, not evidence):\n${formatDirectionForPrompt(input.direction).split("\n").map((l) => `  ${l}`).join("\n")}` : `- Desired role/industry: ${input.desiredRole}\n- Work preference: ${input.workPreference}`}
 - Skills they listed: ${input.skills}
 - Background summary they wrote: ${input.summary}
 
@@ -1404,6 +1411,10 @@ export type EmployerSummaryInput = {
   capabilitySummary: string;
   // Context, not evidence: who they are now and where they want to go.
   selfSummary?: string | null;
+  // Structured direction ("Where I'm heading"). When set it drives THRIVES IN
+  // and GROWING INTO; desiredRoles / workPreference are the legacy fallback
+  // for profiles that have not set one.
+  direction?: CandidateDirection | null;
   desiredRoles?: string | null;
   workPreference?: string | null;
   isAlternateSummary: boolean;
@@ -1429,11 +1440,25 @@ export function buildEmployerSummaryEvidence(input: EmployerSummaryInput): { sou
 
 export function buildEmployerSummaryUserPrompt(input: EmployerSummaryInput): string {
   const evidence = buildEmployerSummaryEvidence(input);
+  const d = input.direction ?? null;
   const direction = [
-    input.desiredRoles ? `Roles they want: ${input.desiredRoles}` : "",
-    input.workPreference ? `Work preference: ${input.workPreference}` : "",
+    d ? formatDirectionForPrompt(d) : "",
+    !d && input.desiredRoles ? `Roles they want: ${input.desiredRoles}` : "",
+    !d && input.workPreference ? `Work preference: ${input.workPreference}` : "",
     input.selfSummary ? `Their own summary (context about current work and direction, NOT evidence - never quote it, never take a number from it): ${JSON.stringify(input.selfSummary)}` : "",
   ].filter(Boolean).join("\n");
+  const families = d ? roleFamilyLabels(d) : [];
+  const onlyThese = d?.scope === "only_these";
+  const thrivesIn = d
+    ? `One line: the target role families from DIRECTION (${families.map((f) => `"${f}"`).join(", ")}), named in those words, then the work setting ("${d.workSetting}"), e.g. "${families.slice(0, 3).join(", ").toLowerCase()}; ${d.workSetting}".${
+        onlyThese
+          ? ` They want ONLY these roles, so name them too: ${(d.titles ?? []).map((t) => `"${t}"`).join(", ")}.`
+          : " Never a specific job title (no director, manager, officer, chief, or similar): they are open to related roles across these families."
+      }`
+    : `One line naming role FAMILIES and work settings, e.g. "operations leadership, business development, and program management; remote or hybrid". Never a single job title, unless DIRECTION says they want only one specific role.`;
+  const growingInto = d
+    ? `One line on where they are heading, built from the target role families and how they want to work${d.howIWantToWork ? ` ("${d.howIWantToWork}")` : ""}.${onlyThese ? "" : " No specific job title."}`
+    : "One line on where they are heading, taken from their stated direction.";
 
   return `Write the employer-facing summary for this candidate. A hiring manager should be able to scan it in about ten seconds and know who this person is now, what they are proven at, where they would thrive, and where they are heading.
 
@@ -1452,10 +1477,10 @@ Choosing the bullets: pick by relevance to DIRECTION, never by how easy a fact i
 - Every bullet still needs a number from the EVIDENCE. If the most relevant capability has a number anywhere in its proof, use that number; do not swap in a less relevant fact because its number is cleaner.
 
 ## THRIVES_IN
-One line naming role FAMILIES and work settings, e.g. "operations leadership, business development, and program management; remote or hybrid". Never a single job title, unless DIRECTION says they want only one specific role.${input.isAlternateSummary ? " Lead with the broader set of role families their strengths support, beyond their most direct experience." : ""}
+${thrivesIn}${input.isAlternateSummary ? " Lead with the broader set of role families their strengths support, beyond their most direct experience." : ""}
 
 ## GROWING_INTO
-One line on where they are heading, taken from their stated direction.
+${growingInto}
 
 ## GAP
 Optional. Include it only if there is a clear, specific, fixable gap for the role families named in THRIVES_IN: one line naming it and what closes it. Otherwise omit the heading entirely.
@@ -1621,6 +1646,20 @@ export function checkEmployerSummaryFormat(text: string, input: EmployerSummaryI
   }
   if (relabelsRecruitingAsSales(claimText, [evidenceText])) {
     issues.push('Calls recruiting work "sales". Name it as recruiting or talent acquisition.');
+  }
+  // Direction: THRIVES_IN is written from the selected role families, and
+  // names a specific title only when the candidate wants only those roles.
+  if (input.direction) {
+    const labels = roleFamilyLabels(input.direction);
+    if (familiesNamedIn(parsed.thrivesIn, input.direction).length === 0) {
+      issues.push(`THRIVES_IN must name at least one of the selected role families: ${labels.map((l) => `"${l}"`).join(", ")}.`);
+    }
+    if (input.direction.scope !== "only_these") {
+      const titleWords = findTitleWords(parsed.thrivesIn);
+      if (titleWords.length > 0) {
+        issues.push(`THRIVES_IN names a specific job title (${titleWords.map((w) => `"${w}"`).join(", ")}); they are open to related roles, so name role families only.`);
+      }
+    }
   }
   return issues;
 }

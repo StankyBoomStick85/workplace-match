@@ -30,6 +30,9 @@ import { reportGenerationFailure } from "@/lib/generationAlerts";
 import { createRunContext, runWithGenerationGuard, type GenerationRunContext } from "@/lib/generationRunGuard";
 import { sendEmail } from "@/lib/email";
 import { insertNotification } from "@/lib/serverNotifications";
+import { waitUntil } from "@vercel/functions";
+import { readStoredDirection } from "@/lib/candidateDirection";
+import { requestRebuild } from "@/lib/profileRebuilds";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -101,13 +104,14 @@ function buildCapabilitySummary(entries: CapabilityEntry[]): string {
   return entries.map((e) => `**${e.name}** [${e.verificationStatus}]: ${e.description}`).join("\n\n");
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   const t0 = Date.now();
   const ctx = createRunContext(ROUTE, t0);
-  return runWithGenerationGuard(ctx, maxDuration, () => finalize(ctx, t0));
+  const origin = new URL(request.url).origin;
+  return runWithGenerationGuard(ctx, maxDuration, () => finalize(ctx, t0, origin));
 }
 
-async function finalize(ctx: GenerationRunContext, t0: number): Promise<Response> {
+async function finalize(ctx: GenerationRunContext, t0: number, origin: string): Promise<Response> {
   console.log("[generate-capability-finalize][timing] START t0=" + t0);
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -163,7 +167,7 @@ async function finalize(ctx: GenerationRunContext, t0: number): Promise<Response
   ctx.stage = "load_profile";
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("display_name, job_types, experience_level, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, capability_generation_status, document_metadata, capability_statements, employer_summary")
+    .select("display_name, job_types, direction, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, capability_generation_status, document_metadata, capability_statements, employer_summary")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -588,7 +592,7 @@ async function finalize(ctx: GenerationRunContext, t0: number): Promise<Response
         role: "user",
         content: buildStep4Prompt({
           desiredRole,
-          experienceLevel: profile.experience_level ?? "Not specified",
+          direction: readStoredDirection(profile.direction),
           workPreference: profile.work_preference ?? "Not specified",
           skills,
           summary: profile.summary ?? "Not provided",
@@ -728,6 +732,7 @@ async function finalize(ctx: GenerationRunContext, t0: number): Promise<Response
       capabilityStatements: Array.isArray(profile.capability_statements) ? profile.capability_statements : null,
       capabilitySummary,
       selfSummary: profile.summary ?? null,
+      direction: readStoredDirection(profile.direction),
       desiredRoles: Array.isArray(profile.job_types) && profile.job_types.length > 0 ? profile.job_types.join(", ") : null,
       workPreference: profile.work_preference ?? null,
       isAlternateSummary
@@ -1040,6 +1045,18 @@ async function finalize(ctx: GenerationRunContext, t0: number): Promise<Response
   if (notifyError) {
     console.error("[generate-capability-finalize] Failed to send completion notification", notifyError);
   }
+
+  // Auto-chain: generation cleared the capability statements (they cite the
+  // old evidence), so start the synthesis job now - it rebuilds statements and
+  // niche skills, then rewrites the employer summary from them. Subject to the
+  // candidate's daily full-rebuild limit, and queued if a job is already
+  // running (lib/profileRebuilds.ts). Runs after the response; never fails
+  // generation.
+  waitUntil(
+    requestRebuild(adminClient, origin, user.id, "full", "after_generation")
+      .then((outcome) => console.log("[generate-capability-finalize] synthesis auto-chain:", outcome))
+      .catch((err) => console.error("[generate-capability-finalize] synthesis auto-chain failed", err))
+  );
 
   const tEnd = Date.now();
   console.log("[generate-capability-finalize][timing] phase2 complete tEnd=" + tEnd + " totalDelta=" + (tEnd - t0) + "ms entryCount=" + capabilityEntries.length);

@@ -82,16 +82,13 @@ export async function POST(request: Request) {
       if ("payType" in data) {
         upsertData.pay_type = typeof data.payType === "string" ? data.payType : "";
       }
-      if ("jobType" in data) {
-        upsertData.job_types = typeof data.jobType === "string" && data.jobType.trim()
-          ? [data.jobType.trim()] : [];
-      }
+      // job_types and work_preference are written only by
+      // /api/applicant/direction, from the candidate's direction ("Where I'm
+      // heading"), so they can never drift from it. jobType / workSetting sent
+      // here are ignored.
       if ("shiftPreference" in data) {
         upsertData.shifts = typeof data.shiftPreference === "string" && data.shiftPreference.trim()
           ? [data.shiftPreference.trim()] : [];
-      }
-      if ("workSetting" in data) {
-        upsertData.work_preference = typeof data.workSetting === "string" ? data.workSetting : "";
       }
       if ("topSkills" in data) {
         upsertData.capability_tags = Array.isArray(data.topSkills)
