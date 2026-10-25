@@ -32,7 +32,8 @@ import { sendEmail } from "@/lib/email";
 import { insertNotification } from "@/lib/serverNotifications";
 import { waitUntil } from "@vercel/functions";
 import { readStoredDirection } from "@/lib/candidateDirection";
-import { requestRebuild } from "@/lib/profileRebuilds";
+import { requestRebuildSafely } from "@/lib/profileRebuilds";
+import { buildSummaryNotice } from "@/lib/summaryNotice";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -997,6 +998,7 @@ async function finalize(ctx: GenerationRunContext, t0: number, origin: string): 
     });
   }
   const savedEmployerSummary: string = storeEmployerSummary ? employerSummary : profile.employer_summary ?? "";
+  const employerSummaryNotice = storeEmployerSummary ? null : buildSummaryNotice("blocked", ROUTE, Boolean(profile.employer_summary));
 
   traceStage("before-db-write");
 
@@ -1011,6 +1013,8 @@ async function finalize(ctx: GenerationRunContext, t0: number, origin: string): 
       entry_point: entryPoint,
       future_positions: futurePositions,
       ...(storeEmployerSummary ? { employer_summary: employerSummary } : {}),
+      // Blocked: the previous summary stays and the candidate is told so.
+      employer_summary_notice: employerSummaryNotice,
       // pending_evidence_groups is retained (not cleared) so the correction flow
       // (correct-capability/route.ts) has a stable EvidenceGroup[] to reuse for
       // naming-only corrections instead of re-running extraction from scratch.
@@ -1054,14 +1058,16 @@ async function finalize(ctx: GenerationRunContext, t0: number, origin: string): 
   // candidate's daily full-rebuild limit, and queued if a job is already
   // running (lib/profileRebuilds.ts). Runs after the response; never fails
   // generation.
+  // A rebuild that cannot start is logged and shown to the candidate
+  // (requestRebuildSafely), never just written to the console.
   waitUntil(
-    requestRebuild(adminClient, origin, user.id, "full", "after_generation")
-      .then((outcome) => console.log("[generate-capability-finalize] synthesis auto-chain:", outcome))
-      .catch((err) => console.error("[generate-capability-finalize] synthesis auto-chain failed", err))
+    requestRebuildSafely(adminClient, origin, user.id, "full", "after_generation").then((outcome) =>
+      console.log("[generate-capability-finalize] synthesis auto-chain:", outcome)
+    )
   );
 
   const tEnd = Date.now();
   console.log("[generate-capability-finalize][timing] phase2 complete tEnd=" + tEnd + " totalDelta=" + (tEnd - t0) + "ms entryCount=" + capabilityEntries.length);
 
-  return NextResponse.json({ success: true, capabilitySummary, capabilityEntries, recommendedPosition, entryPoint, futurePositions, employerSummary: savedEmployerSummary });
+  return NextResponse.json({ success: true, capabilitySummary, capabilityEntries, recommendedPosition, entryPoint, futurePositions, employerSummary: savedEmployerSummary, employerSummaryNotice });
 }

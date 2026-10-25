@@ -19,6 +19,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { JOB_TABLE, STEP_STALE_MS, createJob, getJobStatus, triggerStep } from "@/lib/capabilityStatementJobs";
 import { reportGenerationFailure } from "@/lib/generationAlerts";
 import { sendEmail } from "@/lib/email";
+import { buildSummaryNotice, setSummaryNotice } from "@/lib/summaryNotice";
 
 export type RebuildKind = "summary" | "full";
 export type RebuildSource = "direction_change" | "after_generation" | "candidate_request" | "queued_follow_up";
@@ -31,7 +32,8 @@ export type RebuildOutcome =
   | { status: "started"; kind: RebuildKind; jobId: string }
   | { status: "queued"; kind: RebuildKind }
   | { status: "limited"; kind: RebuildKind; limit: number }
-  | { status: "skipped"; kind: RebuildKind; reason: string };
+  | { status: "skipped"; kind: RebuildKind; reason: string }
+  | { status: "failed"; kind: RebuildKind; reason: string };
 
 async function log(
   adminClient: SupabaseClient,
@@ -116,6 +118,7 @@ async function start(
       severity: "medium",
       metadata: { kind, source, limit },
     });
+    await setSummaryNotice(adminClient, userId, buildSummaryNotice("limited", `profile-rebuild/${source}`, true, limit));
     return { status: "limited", kind, limit };
   }
 
@@ -159,6 +162,35 @@ export async function requestRebuild(
     await adminClient.from(REBUILD_LOG_TABLE).update({ status: "superseded" }).eq("id", queued.id);
   }
   return start(adminClient, origin, userId, effectiveKind, source);
+}
+
+// requestRebuild that never throws. A rebuild that cannot be started is
+// logged to error_logs (the admin record) and shown to the candidate as a
+// notice on their profile, so it never fails silently.
+export async function requestRebuildSafely(
+  adminClient: SupabaseClient,
+  origin: string,
+  userId: string,
+  kind: RebuildKind,
+  source: RebuildSource
+): Promise<RebuildOutcome> {
+  try {
+    return await requestRebuild(adminClient, origin, userId, kind, source);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    await reportGenerationFailure({
+      adminClient,
+      sendEmailFn: sendEmail,
+      route: "profile-rebuild",
+      errorType: "profile_rebuild_failed",
+      message: `${kind} rebuild (${source}) could not be started: ${reason}`,
+      userId,
+      severity: "high",
+      metadata: { kind, source },
+    });
+    await setSummaryNotice(adminClient, userId, buildSummaryNotice("failed", `profile-rebuild/${source}`, true));
+    return { status: "failed", kind, reason };
+  }
 }
 
 // Called when a candidate's job finishes (step route): starts the queued

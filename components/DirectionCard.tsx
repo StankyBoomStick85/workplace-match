@@ -37,6 +37,7 @@ type RebuildOutcome =
   | { status: "started" | "queued"; kind: string }
   | { status: "limited"; kind: string; limit: number }
   | { status: "skipped"; kind: string; reason: string }
+  | { status: "failed"; kind: string; reason: string }
   | null;
 
 function savedMessage(changed: boolean, rebuild: RebuildOutcome): string {
@@ -46,6 +47,8 @@ function savedMessage(changed: boolean, rebuild: RebuildOutcome): string {
       return "Saved. Your employer summary is being rewritten for your new direction and will update in a few minutes.";
     case "queued":
       return "Saved. Your profile is already being rebuilt; your employer summary will update for your new direction right after.";
+    case "failed":
+      return "Saved, but your summary couldn't be updated right now; showing the previous version. We've been notified.";
     case "limited":
       return `Saved. You've reached today's limit of ${rebuild.limit} summary updates, so your employer summary will reflect this on the next rebuild.`;
     default:

@@ -19,6 +19,7 @@ import { scanEmployerFacingText, reportTextGuardViolation, scanCapabilityEntries
 import { reportGenerationFailure } from "@/lib/generationAlerts";
 import { sendEmail } from "@/lib/email";
 import { readStoredDirection } from "@/lib/candidateDirection";
+import { buildSummaryNotice } from "@/lib/summaryNotice";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -368,6 +369,7 @@ export async function POST(request: Request) {
     });
   }
   const savedEmployerSummary: string = storeEmployerSummary ? employerSummary : profile.employer_summary ?? "";
+  const employerSummaryNotice = storeEmployerSummary ? null : buildSummaryNotice("blocked", "correct-capability", Boolean(profile.employer_summary));
 
   // Tier 1 never changes grouping, so pending_evidence_groups is left exactly as it
   // was for the next correction to reuse.
@@ -380,6 +382,7 @@ export async function POST(request: Request) {
       entry_point: entryPoint,
       future_positions: futurePositions,
       ...(storeEmployerSummary ? { employer_summary: employerSummary } : {}),
+      employer_summary_notice: employerSummaryNotice,
       is_approved: false,
       correction_notes: correctionMessage,
     })
@@ -401,6 +404,7 @@ export async function POST(request: Request) {
     recommendedPosition,
     entryPoint,
     futurePositions,
-    employerSummary: savedEmployerSummary
+    employerSummary: savedEmployerSummary,
+    employerSummaryNotice
   });
 }

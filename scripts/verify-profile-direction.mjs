@@ -15,7 +15,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test-service-role-key";
 const ALL = [
   "profileRebuilds", "capabilityStatementJobs", "capabilityPipeline", "capabilityStatements", "capabilityStatementChecks",
   "statementGuard", "employerTextGuard", "translationGlossary", "documentLabels", "generationAlerts", "email",
-  "candidateDirection", "roleFamilies", "civilianLanguage", "candidateTools",
+  "candidateDirection", "roleFamilies", "civilianLanguage", "candidateTools", "summaryNotice",
 ];
 const dir = await loadTsModules(ALL, "candidateDirection");
 const fam = await loadTsModules(ALL, "roleFamilies");
@@ -166,7 +166,7 @@ const summary = (thrives, growing = "Leading operations for a company where tech
 }
 
 // ───────────────────────── rebuild limits + queue ─────────────────────────
-function fakeDb(seed) {
+function fakeDb(seed, denied = []) {
   const tables = JSON.parse(JSON.stringify(seed));
   let n = 0;
   class Q {
@@ -183,6 +183,7 @@ function fakeDb(seed) {
     single() { this.one = "one"; return this.run(); }
     then(a, b) { return this.run().then(a, b); }
     async run() {
+      if (denied.includes(this.t)) return { data: null, count: null, error: { message: `permission denied for table ${this.t}` } };
       const rows = (tables[this.t] ??= []);
       const match = () => rows.filter((r) => this.f.every((fn) => fn(r)));
       const shape = (list) => (this.one ? { data: list[0] ?? null, error: this.one === "one" && !list[0] ? { message: "no row" } : null } : { data: list, error: null });
@@ -297,6 +298,22 @@ try {
     expect("stale: killed and never-started jobs do not block", r.status === "started", JSON.stringify(r));
     expect("stale: both marked failed", jobs(db).filter((j) => j.id !== r.jobId).every((j) => j.status === "failed"));
     expect("stale: orphaned queued full request folded in (starts as full)", r.kind === "full" && logs(db).find((l) => l.id === "q1")?.status === "superseded");
+  }
+  {
+    // The production failure (2026-10-25): no service_role grant on the log.
+    const db = fakeDb({ candidate_profiles: [profileRow()] }, ["profile_rebuild_log"]);
+    const r = await rebuilds.requestRebuildSafely(db, "https://app.test", U, "full", "after_generation");
+    expect("failed start: reported as failed, not thrown", r.status === "failed" && /permission denied/.test(r.reason), JSON.stringify(r));
+    expect("failed start: admin log entry written", (db.tables.error_logs ?? []).some((e) => e.error_type === "profile_rebuild_failed"), JSON.stringify(db.tables.error_logs));
+    const notice = db.tables.candidate_profiles[0].employer_summary_notice;
+    expect("failed start: candidate notice set", notice?.message === "Your summary couldn't be updated; showing the previous version." && /went wrong/.test(notice.reason), JSON.stringify(notice));
+    expect("failed start: no job created", jobs(db).length === 0);
+  }
+  {
+    const recent = new Date(Date.now() - 3600 * 1000).toISOString();
+    const db = fakeDb({ candidate_profiles: [profileRow()], profile_rebuild_log: Array.from({ length: 20 }, (_, i) => ({ id: `s${i}`, user_id: U, kind: "summary", status: "started", source: "x", created_at: recent })) });
+    await rebuilds.requestRebuildSafely(db, "https://app.test", U, "summary", "direction_change");
+    expect("limited: candidate notice says so", /limit of 20/.test(db.tables.candidate_profiles[0].employer_summary_notice?.reason ?? ""));
   }
 } finally {
   console.error = silence;

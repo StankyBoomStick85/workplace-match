@@ -708,6 +708,8 @@ function expect(name, cond, detail = "") {
   expect("summary: shared result stated as own -> attribute it", /shared \(team- or contract-level\) result/.test(issues(summary([...okBullets, "**Capacity growth**: Raised peak bid week 57% above baseline"]))));
   expect("summary: shared result attributed passes", !/shared \(team/.test(issues(summary([...okBullets, "**Capacity growth**: Helped raise the team's peak bid week 57% above baseline"]))));
 
+  expect("summary: 'helping raise' counts as attribution (the 16:09 false positive)", !/shared \(team/.test(issues(summary([...okBullets, "**Capacity growth**: Screened bids, helping raise the peak bid week 57% above baseline"]))));
+  expect("statement: 'helping' counts as attribution", !codes(sc.checkCoreStatement(stmt({ text: "Helping push the peak bid week 57% above baseline", groupIds: ["t1"] }, bidOk), ctx)).includes("unattributed_shared_result"));
   // Tools list and GAP verification.
   expect("tools: parse + dedupe", JSON.stringify(tools.parseToolsOutput('{"tools":["Salesforce"," salesforce ","Govly",""]}')) === JSON.stringify(["Salesforce", "Govly"]));
   expect("tools: candidate list is the union across documents", JSON.stringify(tools.collectCandidateTools([{ tools: ["Salesforce", "Excel"] }, { tools: ["excel", "Govly"] }, {}])) === JSON.stringify(["Salesforce", "Excel", "Govly"]));

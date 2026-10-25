@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import { canonicalDirection, directionCompatColumns, normalizeDirection, readStoredDirection } from "@/lib/candidateDirection";
-import { requestRebuild } from "@/lib/profileRebuilds";
+import { requestRebuildSafely } from "@/lib/profileRebuilds";
 
 // Saves the candidate's direction ("Where I'm heading") - the only writer of
 // candidate_profiles.direction, and of job_types / work_preference, which are
@@ -85,12 +85,8 @@ export async function POST(request: Request) {
     .eq("scoring_mode", "career");
   if (scoreError) console.error("[applicant/direction] could not clear cached career scores", scoreError);
 
-  try {
-    const rebuild = await requestRebuild(adminClient, new URL(request.url).origin, user.id, "summary", "direction_change");
-    return NextResponse.json({ direction, changed: true, rebuild });
-  } catch (err) {
-    console.error("[applicant/direction] rebuild request failed", err);
-    // The direction is saved either way; the summary catches up on the next rebuild.
-    return NextResponse.json({ direction, changed: true, rebuild: { status: "skipped", kind: "summary", reason: "rebuild could not be requested" } });
-  }
+  // The direction is saved either way. A rebuild that cannot start is logged
+  // and shown on the profile (requestRebuildSafely).
+  const rebuild = await requestRebuildSafely(adminClient, new URL(request.url).origin, user.id, "summary", "direction_change");
+  return NextResponse.json({ direction, changed: true, rebuild });
 }

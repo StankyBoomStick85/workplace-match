@@ -1695,7 +1695,7 @@ export function checkEmployerSummaryFormat(text: string, input: EmployerSummaryI
         const scored = units.map((u) => ({ u, score: [...words(u)].filter((w) => bulletWords.has(w)).length }));
         const top = Math.max(...scored.map((x) => x.score));
         const source = scored.filter((x) => x.score === top).map((x) => x.u);
-        const shared = (u: string) => SHARED_RESULT_MARKER.test(u) || /\b(?:helped|contributed to|as part of)\b/i.test(u);
+        const shared = (u: string) => SHARED_RESULT_MARKER.test(u) || /\b(?:help(?:s|ed|ing)?|contribut(?:ed|es|ing) to|as part of)\b/i.test(u);
         if (source.every(shared)) {
           issues.push(`${label} presents a shared (team- or contract-level) result as theirs alone; attribute it, e.g. "helped raise..." or "as one of two...".`);
         }

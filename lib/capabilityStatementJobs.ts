@@ -38,6 +38,7 @@ import {
 } from "@/lib/capabilityPipeline";
 import { scanEmployerFacingText } from "@/lib/employerTextGuard";
 import { readStoredDirection } from "@/lib/candidateDirection";
+import { buildSummaryNotice } from "@/lib/summaryNotice";
 import {
   DEFAULT_SYNTHESIS_MODEL,
   createSynthesisState,
@@ -440,6 +441,11 @@ async function runSummaryStep(adminClient: SupabaseClient, job: JobRow, seq: num
           capability_profile_generated_at: result.generatedAt,
         };
     if (summary.text) update.employer_summary = summary.text;
+    // The candidate sees whether this worked: a stored summary clears the
+    // notice; a blocked one sets it (the previous summary stays).
+    update.employer_summary_notice = summary.text
+      ? null
+      : buildSummaryNotice(summary.skippedReason?.startsWith("employer summary call failed") ? "failed" : "blocked", JOB_ROUTE, true);
     if (Object.keys(update).length > 0) {
       const { error } = await adminClient.from("candidate_profiles").update(update).eq("user_id", job.user_id);
       if (error) writeError = error.message;

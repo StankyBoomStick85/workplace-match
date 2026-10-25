@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
-import { requestRebuild, type RebuildKind } from "@/lib/profileRebuilds";
+import { requestRebuildSafely, type RebuildKind } from "@/lib/profileRebuilds";
 
 // Candidate-triggered rebuild of their own profile.
 //   kind "summary": regenerate the employer summary from stored statements.
@@ -41,12 +41,8 @@ export async function POST(request: Request) {
     auth: { autoRefreshToken: false, persistSession: false }
   });
 
-  try {
-    const outcome = await requestRebuild(adminClient, new URL(request.url).origin, user.id, kind, "candidate_request");
-    const httpStatus = outcome.status === "limited" ? 429 : outcome.status === "skipped" ? 409 : 202;
-    return NextResponse.json(outcome, { status: httpStatus });
-  } catch (err) {
-    console.error("[applicant/rebuild-profile] failed", err);
-    return NextResponse.json({ error: "Could not start the rebuild. Please try again." }, { status: 500 });
-  }
+  const outcome = await requestRebuildSafely(adminClient, new URL(request.url).origin, user.id, kind, "candidate_request");
+  const httpStatus =
+    outcome.status === "limited" ? 429 : outcome.status === "skipped" ? 409 : outcome.status === "failed" ? 500 : 202;
+  return NextResponse.json(outcome, { status: httpStatus });
 }

@@ -446,7 +446,7 @@ export const SHARED_RESULT_MARKER =
 
 // Wording that attributes a result as shared.
 export const SHARED_ATTRIBUTION_WORDING =
-  /\b(?:helped|contributed|as part of|team(?:'s|s')?|shared|jointly|co-[a-z]+|one of (?:two|three|four|several|\d+)|alongside|together with|with (?:a|the|his|her|their) (?:team|colleagues?|partners?))\b/i;
+  /\b(?:help(?:s|ed|ing)?|contribut(?:ed|es|ing)|as part of|team(?:'s|s')?|shared|jointly|co-[a-z]+|one of (?:two|three|four|several|\d+)|alongside|together with|with (?:a|the|his|her|their) (?:team|colleagues?|partners?))\b/i;
 
 // Every number in `text` can be sourced from `unit` alone.
 export function allNumbersFrom(text: string, unit: string): boolean {

@@ -6,6 +6,7 @@ import { EmployerSummaryContent } from "./EmployerSummaryContent";
 import { CapabilityStatementsSection } from "./CapabilityStatementsSection";
 import { DirectionCard } from "./DirectionCard";
 import { readStoredDirection } from "../lib/candidateDirection";
+import { readSummaryNotice, type SummaryNotice } from "../lib/summaryNotice";
 
 const PROFILE_PICTURE_BUCKET = "profile-pictures";
 const DOCUMENTS_BUCKET = "candidate-documents";
@@ -336,6 +337,9 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
     (mappedInitial?.summaryPriority as "primary" | "alternate") || "primary"
   );
   const [alternatePaths, setAlternatePaths] = useState<AlternatePath[] | null>(null);
+  // Set when the last summary rebuild was blocked or could not start and the
+  // previous summary is still showing (candidate_profiles.employer_summary_notice).
+  const [summaryNotice, setSummaryNotice] = useState<SummaryNotice | null>(readSummaryNotice(initialProfile?.employer_summary_notice));
   const [isGeneratingAlternate, setIsGeneratingAlternate] = useState(false);
   const [alternatePathsError, setAlternatePathsError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -690,6 +694,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
           isApproved: false,
         };
       });
+      setSummaryNotice(readSummaryNotice(result.employerSummaryNotice));
       setIsApproved(false);
       setCanRetryFinalize(false);
       setPendingReviewMessage("");
@@ -871,6 +876,7 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
           employerSummary: result.employerSummary ?? "",
           isApproved: false,
         } : prev);
+        setSummaryNotice(readSummaryNotice(result.employerSummaryNotice));
         setIsApproved(false);
       }
 
@@ -1302,6 +1308,12 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
                   {activePathTab === "primary" ? (
                     <div>
                       <h3 className="text-sm font-semibold text-zinc-900">Employer-Facing Summary</h3>
+                      {summaryNotice ? (
+                        <div role="status" className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                          <p className="font-semibold">{summaryNotice.message}</p>
+                          {summaryNotice.reason ? <p className="mt-1">{summaryNotice.reason}</p> : null}
+                        </div>
+                      ) : null}
                       <div className="mt-2 rounded-md border border-gray-200 bg-gray-50 p-4">
                         {profile.employerSummary ? (
                           <EmployerSummaryContent text={profile.employerSummary} collapsible={false} />
