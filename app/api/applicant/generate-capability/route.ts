@@ -7,6 +7,7 @@ import { extractEvidenceFromDocuments, runEvidenceGrouping, buildSelfReportedEvi
 import { reportGenerationFailure } from "@/lib/generationAlerts";
 import { createRunContext, runWithGenerationGuard, type GenerationRunContext } from "@/lib/generationRunGuard";
 import { sendEmail } from "@/lib/email";
+import { collectCandidateTools, extractDocumentTools } from "@/lib/candidateTools";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -130,7 +131,7 @@ async function generate(request: Request, ctx: GenerationRunContext, t0: number)
   // final write, below) means a concurrent add/delete is never clobbered by
   // a stale full-array overwrite from the snapshot read at the top of this
   // request.
-  const cachePatchByDocId = new Map<string, Pick<StoredDoc, "evidenceItems" | "evidenceStatus" | "evidenceExtractedAt">>();
+  const cachePatchByDocId = new Map<string, Partial<Pick<StoredDoc, "evidenceItems" | "evidenceStatus" | "evidenceExtractedAt" | "tools" | "toolsStatus">>>();
 
   if (correctionMessage) {
     const result = await extractEvidenceFromDocuments(storedDocs, adminClient, anthropic, correctionMessage);
@@ -195,6 +196,18 @@ async function generate(request: Request, ctx: GenerationRunContext, t0: number)
     allEvidenceItems = [...cachedItems, ...backfilledItems];
     unreadableDocLabels = backfillUnreadable;
     evidenceExtractionFailures = backfillFailures;
+  }
+
+  // Tools backfill: documents uploaded before tool extraction existed (or whose
+  // extraction failed) get their named tools now, once, and keep them.
+  const needsTools = storedDocs.filter((doc) => doc.toolsStatus !== "complete" && (doc.extractedText ?? "").trim());
+  for (let i = 0; i < needsTools.length; i += 6) {
+    await Promise.all(
+      needsTools.slice(i, i + 6).map(async (doc) => {
+        const result = await extractDocumentTools(anthropic, doc.extractedText ?? "");
+        cachePatchByDocId.set(doc.id, { ...(cachePatchByDocId.get(doc.id) ?? {}), tools: result.tools, toolsStatus: result.status });
+      })
+    );
   }
 
   const t4 = Date.now();
@@ -417,7 +430,10 @@ async function generate(request: Request, ctx: GenerationRunContext, t0: number)
         const patch = cachePatchByDocId.get(doc.id);
         return patch ? { ...doc, ...patch } : doc;
       });
+      updatePayload.tools = collectCandidateTools(updatePayload.document_metadata as StoredDoc[]);
     }
+  } else {
+    updatePayload.tools = collectCandidateTools(storedDocs);
   }
 
   ctx.stage = "db_write";

@@ -558,17 +558,19 @@ export function ApplicantProfileForm({ userEmail, initialProfile }: Props) {
       const extractResult = await extractRes.json().catch(() => ({}));
       if (extractRes.ok && extractResult.extracted) {
         const ex = extractResult.extracted as Record<string, string | null>;
-        setProfile((prev) =>
-          prev
-            ? {
-                ...prev,
-                ...(ex.capabilitySummary ? { capabilitySummary: ex.capabilitySummary } : {}),
-                ...(ex.topSkills ? { topSkills: splitSkills(ex.topSkills) } : {}),
-                ...(ex.experienceLevel ? { experienceLevel: ex.experienceLevel } : {}),
-                updatedAt: new Date().toISOString(),
-              }
-            : prev
-        );
+        // Autofill only ever fills an EMPTY field - never text the candidate
+        // wrote. It writes into the open form's fields directly (checking their
+        // live values, so unsaved typing counts as written) instead of
+        // re-keying the form, which used to replace the summary and skills
+        // with extracted text and then save it on the next Save.
+        const form = document.getElementById("applicant-profile-form") as HTMLFormElement | null;
+        const fillIfEmpty = (name: string, value: string | null | undefined) => {
+          const field = form?.elements.namedItem(name) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+          if (field && value && !field.value.trim()) field.value = value;
+        };
+        fillIfEmpty("capabilitySummary", ex.capabilitySummary);
+        fillIfEmpty("topSkills", ex.topSkills ? splitSkills(ex.topSkills).join(", ") : null);
+        fillIfEmpty("experienceLevel", ex.experienceLevel);
       }
     } catch (err) {
       console.error("[handleAddDocument] extraction failed, skipping pre-fill", err);

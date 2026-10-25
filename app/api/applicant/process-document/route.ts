@@ -5,6 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
 import { extractDocumentText } from "../../../../lib/documentExtraction";
 import { extractEvidenceFromOneDocument, type StoredDoc } from "../../../../lib/capabilityPipeline";
+import { collectCandidateTools, extractDocumentTools } from "../../../../lib/candidateTools";
 
 export const dynamic = "force-dynamic";
 // Raised from 60s: this route now runs up to two sequential Anthropic calls per
@@ -107,9 +108,15 @@ export async function POST(request: Request) {
   let evidenceStatus: "complete" | "failed" = "failed";
   let evidenceItems: unknown[] = [];
   let evidenceExtractedAt = "";
+  let tools: string[] = [];
+  let toolsStatus: "complete" | "failed" = "failed";
 
   if (existingDoc && anthropicApiKey) {
     const anthropic = new Anthropic({ apiKey: anthropicApiKey });
+    // Named tools and platforms, as their own list (no number required).
+    const toolsResult = await extractDocumentTools(anthropic, extractedText);
+    tools = toolsResult.tools;
+    toolsStatus = toolsResult.status;
     const syntheticDoc: StoredDoc = {
       id: docId,
       label: existingDoc.label ?? "",
@@ -142,7 +149,9 @@ export async function POST(request: Request) {
           extractionStatus,
           evidenceItems,
           evidenceStatus,
-          evidenceExtractedAt
+          evidenceExtractedAt,
+          tools,
+          toolsStatus
         };
       }
       return doc;
@@ -150,7 +159,7 @@ export async function POST(request: Request) {
 
     const { error: updateErr } = await adminClient
       .from("candidate_profiles")
-      .update({ document_metadata: updatedMetadata })
+      .update({ document_metadata: updatedMetadata, tools: collectCandidateTools(updatedMetadata) })
       .eq("user_id", user.id);
 
     if (updateErr) throw updateErr;
@@ -161,7 +170,9 @@ export async function POST(request: Request) {
       extractedTextLength: extractedText.length,
       evidenceStatus,
       evidenceCount: evidenceItems.length,
-      evidenceExtractedAt
+      evidenceExtractedAt,
+      toolsStatus,
+      toolCount: tools.length
     });
   } catch (err) {
     console.error("[process-document] metadata update failed", err);

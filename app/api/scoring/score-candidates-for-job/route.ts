@@ -54,11 +54,13 @@ function candidateContentHash(profile: {
   capability_entries: unknown;
   capability_tags: string[] | null;
   direction: unknown;
+  tools: string[] | null;
   job_types: string[] | null;
   work_preference: string | null;
 }) {
-  // direction is part of the hash, so changing it re-scores the candidate.
+  // direction and tools are part of the hash, so changing either re-scores.
   return hashContent({
+    tools: profile.tools ?? [],
     employer_summary: profile.employer_summary ?? "",
     capability_entries: profile.capability_entries ?? null,
     capability_tags: profile.capability_tags ?? [],
@@ -171,7 +173,7 @@ export async function POST(request: Request) {
 
   const { data: profiles, error: profilesError } = await adminClient
     .from("candidate_profiles")
-    .select("user_id, employer_summary, capability_entries, capability_tags, direction, job_types, work_preference, is_approved")
+    .select("user_id, employer_summary, capability_entries, capability_tags, direction, tools, job_types, work_preference, is_approved")
     .in("user_id", candidateIds);
 
   if (profilesError) {
@@ -326,6 +328,7 @@ function buildCandidateSummary(profile: {
   capability_entries: unknown;
   capability_tags: string[] | null;
   direction: unknown;
+  tools: string[] | null;
   job_types: string[] | null;
   work_preference: string | null;
 }) {
@@ -337,6 +340,7 @@ function buildCandidateSummary(profile: {
       ? entries.map((e) => `[${e.verificationStatus}] ${e.name}: ${e.description}`)
       : [],
     capability_tags: Array.isArray(profile.capability_tags) ? profile.capability_tags : [],
+    tools_and_systems: Array.isArray(profile.tools) ? profile.tools : [],
     // Where the candidate wants to go: context for fit, never evidence of capability.
     ...(direction
       ? { direction: directionForScoring(direction) }

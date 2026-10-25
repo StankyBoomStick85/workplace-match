@@ -234,15 +234,17 @@ export type PersonContext = {
   summary?: string | null;
   capabilityTags?: string[] | null;
   direction?: CandidateDirection | null;
+  tools?: string[] | null;
 };
 
 function formatPersonContext(context?: PersonContext): string {
   const summary = context?.summary?.trim();
   const tags = (context?.capabilityTags ?? []).filter((t) => t && t.trim());
   const direction = context?.direction ?? null;
-  if (!summary && tags.length === 0 && !direction) return "";
+  const tools = (context?.tools ?? []).filter((t) => t && t.trim());
+  if (!summary && tags.length === 0 && !direction && tools.length === 0) return "";
   return `CONTEXT ABOUT THE PERSON - NOT EVIDENCE. Use it only to understand who this person is, where they want to go, and which capabilities they want to lead with. Never cite it, never take a fact or number from it, and never write a statement or proof line that exists only because of it. Every statement and proof line comes from the evidence groups below.
-${direction ? `Where they want to go (decides emphasis and order - put the capabilities those roles are judged on first):\n${formatDirectionForPrompt(direction)}\n` : ""}${summary ? `Self-written summary: ${JSON.stringify(summary)}\n` : ""}${tags.length ? `Skills they listed at signup: ${JSON.stringify(tags)}\n` : ""}
+${direction ? `Where they want to go (decides emphasis and order - put the capabilities those roles are judged on first):\n${formatDirectionForPrompt(direction)}\n` : ""}${summary ? `Self-written summary: ${JSON.stringify(summary)}\n` : ""}${tags.length ? `Skills they listed at signup: ${JSON.stringify(tags)}\n` : ""}${tools.length ? `Tools and systems named in their documents: ${JSON.stringify(tools)}\n` : ""}
 `;
 }
 

@@ -73,7 +73,9 @@ export type StatementIssueCode =
   | "mixed_citation"
   | "inflated_scale"
   | "recruiting_as_sales"
-  | "setting_language";
+  | "setting_language"
+  | "merged_facts"
+  | "unattributed_shared_result";
 
 export type StatementIssue = {
   code: StatementIssueCode;
@@ -239,6 +241,32 @@ function checkProofLines(
         detail: `numbers not found in the cited claims: ${unsourced.map((n) => n.raw).join(", ")}`,
         proofIndex: i,
       });
+    }
+    // One fact per line: with two or more numbers, one cited group must
+    // source all of them - never a number from one group beside another's.
+    const text = line.text ?? "";
+    if (unsourced.length === 0 && known.length > 1 && extractNumbers(text).length > 1) {
+      if (!known.some((id) => findUnsourcedNumbers(text, sourceTextsFor([id])).length === 0)) {
+        issues.push({
+          code: "merged_facts",
+          detail: "combines numbers from different evidence groups in one line; keep each line to one fact (one group's numbers)",
+          proofIndex: i,
+        });
+      }
+    }
+    // Shared results stay attributed: if the claims that supply this line's
+    // numbers say the result was the team's, the line must say so too.
+    if (unsourced.length === 0 && extractNumbers(text).length > 0 && !SHARED_ATTRIBUTION_WORDING.test(text)) {
+      const supplying = known
+        .flatMap((id) => groupsById.get(id)?.claims ?? [])
+        .filter((claim) => extractNumbers(text).some((n) => extractClaimNumbers(claim).some((c) => numberDerivableFrom(n.value, c, text.slice(n.end, n.end + 20)))));
+      if (supplying.length > 0 && supplying.every((claim) => SHARED_RESULT_MARKER.test(claim))) {
+        issues.push({
+          code: "unattributed_shared_result",
+          detail: 'the evidence marks this result as shared (team- or contract-level); attribute it, e.g. "helped raise...", "as one of two..."',
+          proofIndex: i,
+        });
+      }
     }
     if (known.length > 0 && deriveEvidenceBasis(known, groupsById) === "self_reported" && VERIFICATION_WORDING.test(line.text ?? "")) {
       issues.push({
@@ -408,6 +436,21 @@ const SALES_WORDS = /\b(?:sales|sell(?:s|ing)?|sold)\b/i;
 export function relabelsRecruitingAsSales(text: string, evidenceTexts: string[]): boolean {
   const evidence = evidenceTexts.join("\n");
   return /\brecruit/i.test(evidence) && !SALES_WORDS.test(evidence) && SALES_WORDS.test(text);
+}
+
+// ---------- attribution and one fact per line ----------
+
+// Evidence that marks a result as shared rather than the person's alone.
+export const SHARED_RESULT_MARKER =
+  /\b(?:team(?:'s|s')?\s+(?:result|results|totals?|peak|performance|output|record|bid|rate|numbers?)|team[\s-]level|contract[\s-]level|program[\s-]level|company[\s-]level|not (?:his|her|their|my) alone|shared (?:result|results|credit|effort|responsibility)|one of (?:two|three|four|several|\d+) (?:\w+\s+){0,3}(?:managers|leads|members|people|account managers|recruiters)|jointly|co-(?:led|owned|managed|authored))\b/i;
+
+// Wording that attributes a result as shared.
+export const SHARED_ATTRIBUTION_WORDING =
+  /\b(?:helped|contributed|as part of|team(?:'s|s')?|shared|jointly|co-[a-z]+|one of (?:two|three|four|several|\d+)|alongside|together with|with (?:a|the|his|her|their) (?:team|colleagues?|partners?))\b/i;
+
+// Every number in `text` can be sourced from `unit` alone.
+export function allNumbersFrom(text: string, unit: string): boolean {
+  return findUnsourcedNumbers(text, [unit]).length === 0;
 }
 
 function checkFidelity(texts: string[], evidenceTexts: string[]): StatementIssue[] {

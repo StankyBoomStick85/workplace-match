@@ -15,7 +15,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test-service-role-key";
 const ALL = [
   "profileRebuilds", "capabilityStatementJobs", "capabilityPipeline", "capabilityStatements", "capabilityStatementChecks",
   "statementGuard", "employerTextGuard", "translationGlossary", "documentLabels", "generationAlerts", "email",
-  "candidateDirection", "roleFamilies", "civilianLanguage",
+  "candidateDirection", "roleFamilies", "civilianLanguage", "candidateTools",
 ];
 const dir = await loadTsModules(ALL, "candidateDirection");
 const fam = await loadTsModules(ALL, "roleFamilies");

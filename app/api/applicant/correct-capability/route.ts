@@ -62,7 +62,7 @@ export async function POST(request: Request) {
 
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("display_name, job_types, direction, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, document_metadata, capability_statements, employer_summary")
+    .select("display_name, job_types, direction, tools, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, document_metadata, capability_statements, employer_summary")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -236,7 +236,9 @@ export async function POST(request: Request) {
     direction: readStoredDirection(profile.direction),
     desiredRoles: Array.isArray(profile.job_types) && profile.job_types.length > 0 ? profile.job_types.join(", ") : null,
     workPreference: profile.work_preference ?? null,
-    isAlternateSummary
+    isAlternateSummary,
+    tools: Array.isArray(profile.tools) ? (profile.tools as string[]) : null,
+    gapEvidence: (Array.isArray(profile.pending_evidence_groups) ? (profile.pending_evidence_groups as EvidenceGroup[]) : []).flatMap((g) => g.claims).join("\n")
   };
   try {
     const generated = await generateEmployerSummary(anthropic, employerSummaryInput);

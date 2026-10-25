@@ -8,6 +8,8 @@ export const CIVILIAN_LANGUAGE_RULES = `CIVILIAN LANGUAGE:
 - Describe the work the way a civilian manager would describe the same responsibility, keeping every number. Test each line: would it read naturally on a resume at a civilian company in that field?
 - Drop words that reveal the setting without adding meaning: "high-risk" and "high-threat" (say "zero room for error" when the stakes matter), "ground leader" ("led" already says it), "no capability loss" (say "zero losses" or "no disruption"), "cross-border" (say "international").
 - "Operation" as a countable thing is military vocabulary. Translate it by what it was: a time-bound effort with a goal is a project, assignment, or initiative; moving people or equipment is a shipment, move, or delivery; an event with a start and end is an event or exercise. "Operations" as a business FUNCTION (operations leadership, director of operations) is fine.
+- Attribute shared results honestly. When the evidence says a result was team-level, contract-level, or shared ("team results, not his alone"), say so: "helped raise the team's bid rate to 36%", "one of two account managers carrying most of the quoting". Never present a team result as the person's alone.
+- One fact per line. Every number in a bullet or proof line comes from the same evidence claim or group. Never pair a number from one program, role, or result with a number from another (a training audience of 500 from one program and a 57% rate from another never share a line).
 - Examples of the target:
   "Led 14 time-critical projects with a 100% success rate, no supervision, and zero room for error."
   "Led transport teams moving people and high-value equipment by road and air across multiple countries for 8 months, with zero losses."`;

@@ -59,7 +59,7 @@ export async function POST(request: Request) {
   // Fetch candidate profile
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("capability_summary, capability_tags, recommended_position, direction, desired_pay_min, pay_type, job_types, work_preference, city, state")
+    .select("capability_summary, capability_tags, recommended_position, direction, tools, desired_pay_min, pay_type, job_types, work_preference, city, state")
     .eq("user_id", candidateId)
     .maybeSingle();
 
@@ -309,6 +309,7 @@ CANDIDATE:
 - Capability summary: ${profile.capability_summary ?? "Not provided"}
 - Recommended role: ${profile.recommended_position ?? "Not provided"}
 - Capability tags: ${capabilityTags}
+- Tools and systems: ${Array.isArray(profile.tools) && profile.tools.length ? profile.tools.join(", ") : "Not specified"}
 ${direction ? `- Where they want to go (context for fit, not evidence):\n${formatDirectionForPrompt(direction).split("\n").map((l) => `  ${l}`).join("\n")}` : `- Desired role: ${jobTypes}`}
 
 SCORING:

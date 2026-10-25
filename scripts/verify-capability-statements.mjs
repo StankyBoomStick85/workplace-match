@@ -473,7 +473,7 @@ function expect(name, cond, detail = "") {
 
 // ───────────── self-reported evidence is context / absorbed (2026-10-22) ─────────────
 {
-  const pipeline = await loadTsModules(["capabilityPipeline", "documentLabels", "capabilityStatementChecks", "candidateDirection", "roleFamilies", "civilianLanguage"], "capabilityPipeline");
+  const pipeline = await loadTsModules(["capabilityPipeline", "documentLabels", "capabilityStatementChecks", "candidateDirection", "roleFamilies", "civilianLanguage", "candidateTools"], "capabilityPipeline");
 
   const items = pipeline.buildSelfReportedEvidenceItems({ summary: "Retired senior leader with 20 years", capabilityTags: ["Budget & Asset Accountability", "Cybersecurity"] });
   expect("self-reported items: summary is not evidence", items.length === 2 && items.every((i) => i.claim !== "Retired senior leader with 20 years"));
@@ -533,7 +533,7 @@ function expect(name, cond, detail = "") {
 
 // ───────────────────────── employer summary v2 (2026-10-22) ─────────────────────────
 {
-  const pipeline = await loadTsModules(["capabilityPipeline", "documentLabels", "capabilityStatementChecks", "candidateDirection", "roleFamilies", "civilianLanguage"], "capabilityPipeline");
+  const pipeline = await loadTsModules(["capabilityPipeline", "documentLabels", "capabilityStatementChecks", "candidateDirection", "roleFamilies", "civilianLanguage", "candidateTools"], "capabilityPipeline");
   const input = {
     capabilityStatements: [
       { statement: "Keeps equipment accountable.", proof: [{ text: "Accountable for $3.5M in equipment with zero loss" }, { text: "Trained over 500 people across 5 rounds" }] },
@@ -657,6 +657,82 @@ function expect(name, cond, detail = "") {
   const fallbackPrompt = pipeline.buildEmployerSummaryUserPrompt({ ...input, capabilityStatements: null, capabilitySummary: "ENTRIES TEXT" });
   expect("summary prompt: falls back to entries only without statements", fallbackPrompt.includes("ENTRIES TEXT") && !fallbackPrompt.includes("Accountable for $3.5M"));
   expect("summary prompt: role families, fitness rule, no dashes", /role FAMILIES/.test(prompt) && /physical fitness/.test(prompt) && /no em dashes or en dashes/i.test(prompt));
+}
+
+// ───────────── attribution, one fact per line, tools, verified GAP (2026-10-25) ─────────────
+{
+  const mods = ["capabilityPipeline", "documentLabels", "capabilityStatementChecks", "civilianLanguage", "candidateDirection", "roleFamilies", "candidateTools"];
+  const pipeline = await loadTsModules(mods, "capabilityPipeline");
+  const tools = await loadTsModules(mods, "candidateTools");
+  const codes = (issues) => issues.map((i) => i.code);
+
+  // Statements: shared results attributed; one group's numbers per line.
+  const groups = [
+    { groupId: "t1", verificationStatus: "USER_PROVIDED", claims: ["Team's peak bid week was 57% above the week before he started (contract-level team result)"] },
+    { groupId: "t2", verificationStatus: "USER_PROVIDED", claims: ["Monthly bid rate held at 33% to 35% across 3 months"] },
+    { groupId: "p1", verificationStatus: "USER_PROVIDED", claims: ["Trained 500 partner personnel in 6 weeks"] },
+    { groupId: "p2", verificationStatus: "USER_PROVIDED", claims: ["Pre-selection course graduates were selected at a 57% rate"] },
+  ];
+  const ctx = { groupsById: new Map(groups.map((g) => [g.groupId, g])) };
+  const stmt = (p1, p2) => ({ statement: "Builds capacity under deadline pressure.", proof: [p1, p2] });
+  const bidOk = { text: "Kept the monthly bid rate at 33% to 35% for 3 months", groupIds: ["t2"] };
+  const sc = await loadTsModules(mods, "capabilityStatementChecks");
+  expect("attribution: shared result stated as own -> unattributed_shared_result",
+    codes(sc.checkCoreStatement(stmt({ text: "Raised peak bid volume 57% above baseline", groupIds: ["t1"] }, bidOk), ctx)).includes("unattributed_shared_result"));
+  expect("attribution: 'helped raise the team's...' passes",
+    !codes(sc.checkCoreStatement(stmt({ text: "Helped raise the team's peak bid week 57% above baseline", groupIds: ["t1"] }, bidOk), ctx)).includes("unattributed_shared_result"));
+  expect("merged facts: 500 from one program + 57% from another in one line -> merged_facts",
+    codes(sc.checkCoreStatement(stmt({ text: "Trained 500 partner personnel with a 57% selection rate", groupIds: ["p1", "p2"] }, bidOk), ctx)).includes("merged_facts"));
+  expect("merged facts: two numbers from one group pass",
+    !codes(sc.checkCoreStatement(stmt({ text: "Trained 500 partner personnel in 6 weeks", groupIds: ["p1"] }, bidOk), ctx)).includes("merged_facts"));
+
+  // Summary: one fact per bullet; shared results attributed.
+  const input = {
+    capabilityStatements: [
+      { statement: "Trains at scale.", proof: [{ text: "Trained 500 partner personnel in 6 weeks" }, { text: "Course graduates were selected at a 57% rate" }] },
+      { statement: "Scales bid capacity.", proof: [{ text: "Helped raise the team's peak bid week 57% above baseline" }, { text: "Kept the monthly bid rate at 33% to 35% for 3 months" }] },
+    ],
+    capabilitySummary: "",
+    isAlternateSummary: false,
+    tools: ["Salesforce", "Govly", "Microsoft 365"],
+    gapEvidence: "Uses Salesforce daily for opportunity and quote records\nHolds a CompTIA Security+ certification",
+  };
+  const summary = (bullets, gap = "") =>
+    ["## HEADLINE", "Builds teams and pipelines that keep delivering under deadline pressure.", "## PROVEN_AT", ...bullets.map((b) => `- ${b}`),
+      "## THRIVES_IN", "Program management and business development; remote", "## GROWING_INTO", "Leading programs where technology and people meet",
+      ...(gap ? ["## GAP", gap] : [])].join("\n");
+  const okBullets = ["**Training at scale**: Trained 500 partner personnel in 6 weeks", "**Selection results**: Course graduates were selected at a 57% rate", "**Bid compliance**: Kept the monthly bid rate at 33% to 35% for 3 months"];
+  const issues = (text) => pipeline.checkEmployerSummaryFormat(text, input).join(" | ");
+  expect("summary: one fact per bullet passes", issues(summary(okBullets)) === "", issues(summary(okBullets)));
+  expect("summary: 500 + 57% from different proof lines -> combines numbers", /combines numbers from different facts/.test(issues(summary(["**Training at scale**: Trained 500 people with a 57% selection rate", ...okBullets.slice(1)]))));
+  expect("summary: shared result stated as own -> attribute it", /shared \(team- or contract-level\) result/.test(issues(summary([...okBullets, "**Capacity growth**: Raised peak bid week 57% above baseline"]))));
+  expect("summary: shared result attributed passes", !/shared \(team/.test(issues(summary([...okBullets, "**Capacity growth**: Helped raise the team's peak bid week 57% above baseline"]))));
+
+  // Tools list and GAP verification.
+  expect("tools: parse + dedupe", JSON.stringify(tools.parseToolsOutput('{"tools":["Salesforce"," salesforce ","Govly",""]}')) === JSON.stringify(["Salesforce", "Govly"]));
+  expect("tools: candidate list is the union across documents", JSON.stringify(tools.collectCandidateTools([{ tools: ["Salesforce", "Excel"] }, { tools: ["excel", "Govly"] }, {}])) === JSON.stringify(["Salesforce", "Excel", "Govly"]));
+  const gapHits = tools.findGapContradictions("No hands-on experience with enterprise CRM or ATS platforms", input.gapEvidence, input.tools);
+  expect("gap: 'no CRM' contradicted by Salesforce; ATS genuinely absent", gapHits.length === 1 && /CRM.*Salesforce/.test(gapHits[0]), JSON.stringify(gapHits));
+  expect("gap: naming a listed tool is contradicted", tools.findGapContradictions("Has not used Govly for contract research", "", input.tools).length === 1);
+  expect("gap: credential already in the evidence is contradicted", tools.findGapContradictions("Would benefit from a Security+ certification", input.gapEvidence, []).some((h) => /Security/.test(h)));
+  expect("gap: genuine gap passes", tools.findGapContradictions("Has not yet earned a PMP certification; a 3-month prep course closes it", input.gapEvidence, input.tools).length === 0);
+  expect("gap: title-only gap passes", tools.findGapContradictions("Has not yet held a formal COO or Director of Operations title", input.gapEvidence, input.tools).length === 0);
+  expect("summary: contradicted GAP rejected", /GAP names something the evidence already shows/.test(issues(summary(okBullets, "No hands-on experience with enterprise CRM platforms; onboarding closes it"))));
+  const prompt = pipeline.buildEmployerSummaryUserPrompt(input);
+  expect("summary prompt: tools listed, GAP may not name them", /TOOLS AND SYSTEMS THEY USE[\s\S]*Salesforce, Govly, Microsoft 365/.test(prompt) && /never name a tool, system, skill, or credential that appears in the EVIDENCE or in TOOLS AND SYSTEMS/.test(prompt));
+
+  // GAP that stays contradicted after every retry is dropped, not the summary.
+  const badGap = summary(okBullets, "No hands-on experience with enterprise CRM platforms; onboarding closes it");
+  const fake = { messages: { create: async () => ({ stop_reason: "end_turn", content: [{ type: "text", text: badGap }] }) } };
+  const gen = await pipeline.generateEmployerSummary(fake, input);
+  expect("gap fallback: contradicted GAP dropped, rest of summary kept", gen.formatIssues.length === 0 && !/## GAP/.test(gen.text) && /## GROWING_INTO/.test(gen.text) && gen.attempts === 3, JSON.stringify({ issues: gen.formatIssues, attempts: gen.attempts }));
+  const outOfOrder = badGap.replace("## GROWING_INTO\nLeading programs where technology and people meet\n## GAP\nNo hands-on experience with enterprise CRM platforms; onboarding closes it", "## GAP\nNo hands-on experience with enterprise CRM platforms; onboarding closes it\n## GROWING_INTO\nLeading programs where technology and people meet");
+  const gen2 = await pipeline.generateEmployerSummary({ messages: { create: async () => ({ stop_reason: "end_turn", content: [{ type: "text", text: outOfOrder }] }) } }, input);
+  expect("gap fallback: works when GAP is not the last section", gen2.formatIssues.length === 0 && !/## GAP/.test(gen2.text) && /## GROWING_INTO\nLeading programs/.test(gen2.text), gen2.text);
+
+  // Shared rules are in both prompts.
+  const civ = await loadTsModules(["civilianLanguage"], "civilianLanguage");
+  expect("rules: attribution + one fact per line in the shared rules", /Attribute shared results honestly/.test(civ.CIVILIAN_LANGUAGE_RULES) && /One fact per line/.test(civ.CIVILIAN_LANGUAGE_RULES));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

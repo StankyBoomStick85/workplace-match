@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
+import { collectCandidateTools } from "@/lib/candidateTools";
 
 export const dynamic = "force-dynamic";
 
@@ -132,6 +133,20 @@ export async function POST(request: Request) {
       }
       if ("documentMetadata" in data) {
         upsertData.document_metadata = Array.isArray(data.documentMetadata) ? data.documentMetadata : [];
+        // Candidate tools follow the document list (a deleted document's tools
+        // go with it). Tools come from the server's own copy of each document -
+        // the browser's copy can predate tool extraction.
+        const { data: current } = await adminClient
+          .from("candidate_profiles")
+          .select("document_metadata")
+          .eq("user_id", user.id)
+          .maybeSingle();
+        const serverDocs = new Map(
+          (Array.isArray(current?.document_metadata) ? current.document_metadata : []).map((d: { id?: string; tools?: unknown }) => [d.id, d])
+        );
+        upsertData.tools = collectCandidateTools(
+          (upsertData.document_metadata as Array<{ id?: string; tools?: unknown }>).map((d) => serverDocs.get(d.id) ?? d)
+        );
       }
       if ("summaryPriority" in data) {
         upsertData.summary_priority = typeof data.summaryPriority === "string" ? data.summaryPriority : null;

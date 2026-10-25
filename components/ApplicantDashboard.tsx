@@ -210,16 +210,17 @@ export function ApplicantDashboard({ redirectOnSave }: { redirectOnSave?: string
           const ex = extractResult.extracted as Record<string, string | null>;
 
           const merged: Partial<ApplicantProfileState> = {};
-          if (ex.fullName) merged.fullName = ex.fullName;
-          if (ex.zipCode) merged.zipCode = ex.zipCode;
-          if (ex.city) merged.city = ex.city;
-          if (ex.state) merged.state = ex.state;
+          if (ex.fullName && !draftProfile.fullName) merged.fullName = ex.fullName;
+          if (ex.zipCode && !draftProfile.zipCode) merged.zipCode = ex.zipCode;
+          if (ex.city && !draftProfile.city) merged.city = ex.city;
+          if (ex.state && !draftProfile.state) merged.state = ex.state;
           if (ex.capabilitySummary && !draftProfile.capabilitySummary) merged.capabilitySummary = ex.capabilitySummary;
           if (ex.topSkills && (!draftProfile.topSkills || draftProfile.topSkills.length === 0)) merged.topSkills = ex.topSkills;
-          if (ex.experienceLevel) merged.experienceLevel = ex.experienceLevel;
-          if (ex.educationLevel) merged.educationLevel = ex.educationLevel;
-          if (ex.industriesOfInterest) merged.industriesOfInterest = ex.industriesOfInterest;
-          if (ex.phoneNumber) merged.phone = ex.phoneNumber as string;
+          // Every autofill fills an EMPTY field only - never overwrites what the candidate entered.
+          if (ex.experienceLevel && !draftProfile.experienceLevel) merged.experienceLevel = ex.experienceLevel;
+          if (ex.educationLevel && !draftProfile.educationLevel) merged.educationLevel = ex.educationLevel;
+          if (ex.industriesOfInterest && !draftProfile.industriesOfInterest) merged.industriesOfInterest = ex.industriesOfInterest;
+          if (ex.phoneNumber && !draftProfile.phone) merged.phone = ex.phoneNumber as string;
 
           setDraftProfile((prev) => ({ ...prev, ...merged }));
           setMessage("");

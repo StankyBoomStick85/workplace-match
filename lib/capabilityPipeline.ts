@@ -1,7 +1,15 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
 import { getCivilianDocLabel } from "@/lib/documentLabels";
-import { findScaleInflation, findUnsourcedNumbers, relabelsRecruitingAsSales } from "@/lib/capabilityStatementChecks";
+import {
+  SHARED_ATTRIBUTION_WORDING,
+  SHARED_RESULT_MARKER,
+  allNumbersFrom,
+  extractNumbers,
+  findScaleInflation,
+  findUnsourcedNumbers,
+  relabelsRecruitingAsSales,
+} from "@/lib/capabilityStatementChecks";
 import {
   THRIVES_IN_MAX_FAMILIES,
   familiesNamedIn,
@@ -12,6 +20,7 @@ import {
   type CandidateDirection,
 } from "@/lib/candidateDirection";
 import { CIVILIAN_LANGUAGE_RULES, GUIDING_PRINCIPLE, describeSettingLanguage, findSettingLanguage } from "@/lib/civilianLanguage";
+import { findGapContradictions } from "@/lib/candidateTools";
 
 export type EvidenceItem = {
   claim: string;
@@ -46,6 +55,10 @@ export type StoredDoc = {
   evidenceItems?: EvidenceItem[];
   evidenceStatus?: "pending" | "complete" | "failed";
   evidenceExtractedAt?: string;
+  // Named tools and platforms in this document (lib/candidateTools.ts) -
+  // extracted separately from claims, since a tool needs no number.
+  tools?: string[];
+  toolsStatus?: "complete" | "failed";
 };
 
 export type CapabilityEntry = {
@@ -192,7 +205,8 @@ Extraction rules:
 - Each distinct capability, duty, role responsibility, or achievement gets its own claim object.
 - Preserve specific language: named organizations, scope (personnel count, budget, unit level), and specific outcomes. "Supervised 15 soldiers during multi-week field operations" is better than "leadership."
 - Include ALL evidence: leadership, technical, operational, administrative, educational, credentialed.
-- Do NOT summarize or abstract: keep the specific evidence as stated.${correctionSection}
+- Do NOT summarize or abstract: keep the specific evidence as stated.
+- Keep attribution with each result. When the document says results are shared, team-level, or contract-level (e.g. "these are contract-level team results", "not his alone", "one of two account managers"), carry that qualifier into EVERY claim it applies to, e.g. "Team's monthly bid rate ran 33% to 35% (contract-level team result)". Never let a team result read as the person's alone.${correctionSection}
 
 Return ONLY a valid JSON array. Each object must have exactly these five fields:
 claim, sourceDocId, sourceDocLabel, sourceDocType, isOfficialDocument
@@ -1423,6 +1437,11 @@ export type EmployerSummaryInput = {
   desiredRoles?: string | null;
   workPreference?: string | null;
   isAlternateSummary: boolean;
+  // Named tools and platforms from their documents (candidate_profiles.tools).
+  tools?: string[] | null;
+  // Every evidence claim on the profile, as text. Never sent to the model:
+  // used only to verify the GAP line names nothing the evidence already shows.
+  gapEvidence?: string | null;
 };
 
 export const EMPLOYER_SUMMARY_PROVEN_MIN = 3;
@@ -1442,6 +1461,18 @@ export function buildEmployerSummaryEvidence(input: EmployerSummaryInput): { sou
     };
   }
   return { source: "entries", text: input.capabilitySummary };
+}
+
+// The individual facts the summary may draw a bullet from: each statement's
+// sentence and each of its proof lines (or one capability entry when there are
+// no statements).
+// A PROVEN AT bullet's numbers must all come from ONE of these.
+export function employerSummaryEvidenceUnits(input: EmployerSummaryInput): string[] {
+  const statements = (input.capabilityStatements ?? []).filter((s) => s && s.statement);
+  if (statements.length > 0) {
+    return statements.flatMap((s) => [s.statement, ...s.proof.map((p) => p.text)]);
+  }
+  return input.capabilitySummary.split(/\n\s*\n/).map((u) => u.trim()).filter(Boolean);
 }
 
 export function buildEmployerSummaryUserPrompt(input: EmployerSummaryInput): string {
@@ -1493,7 +1524,7 @@ ${thrivesIn}${input.isAlternateSummary ? " Lead with the broader set of role fam
 ${growingInto}
 
 ## GAP
-Optional. Include it only if there is a clear, specific, fixable gap for the role families named in THRIVES_IN: one line naming it and what closes it. Otherwise omit the heading entirely.
+Optional. Include it only if there is a clear, specific, fixable gap for the role families named in THRIVES_IN: one line naming it and what closes it, framed as the next skill to build. It must never name a tool, system, skill, or credential that appears in the EVIDENCE or in TOOLS AND SYSTEMS (no "no CRM experience" when they use Salesforce). Otherwise omit the heading entirely.
 
 Rules:
 - Present and direction first; the past is evidence, not identity.
@@ -1510,7 +1541,11 @@ DIRECTION:
 ${direction || "(not stated - infer the most natural direction from the evidence)"}
 
 EVIDENCE (${evidence.source === "statements" ? "capability statements with their proof" : "capability profile"}):
-${evidence.text}`;
+${evidence.text}${
+    input.tools && input.tools.length
+      ? `\n\nTOOLS AND SYSTEMS THEY USE (named in their documents; shows familiarity, carries no numbers, never a PROVEN_AT bullet on its own):\n${input.tools.join(", ")}`
+      : ""
+  }`;
 }
 
 export type EmployerSummaryProvenItem = { lead: string; proof: string };
@@ -1645,6 +1680,27 @@ export function checkEmployerSummaryFormat(text: string, input: EmployerSummaryI
     }
     const unsourced = findUnsourcedNumbers(item.proof, [evidenceText]);
     if (unsourced.length > 0) issues.push(`${label} uses number(s) not in the evidence: ${unsourced.map((u) => u.raw).join(", ")}.`);
+    // One fact per bullet, and shared results stay attributed.
+    const bulletText = `${item.lead} ${item.proof}`;
+    if (unsourced.length === 0 && extractNumbers(bulletText).length > 0) {
+      const units = employerSummaryEvidenceUnits(input).filter((u) => allNumbersFrom(bulletText, u));
+      if (units.length === 0 && extractNumbers(bulletText).length > 1) {
+        issues.push(`${label} combines numbers from different facts; every number in a bullet must come from the same proof line. Keep one fact per bullet.`);
+      } else if (units.length > 0 && !SHARED_ATTRIBUTION_WORDING.test(bulletText)) {
+        // The fact this bullet came from: of the units that supply all its
+        // numbers, the one sharing the most words with it (a number alone can
+        // match an unrelated fact). On a tie, every tied unit must be shared.
+        const words = (t: string) => new Set(t.toLowerCase().match(/[a-z]{4,}/g) ?? []);
+        const bulletWords = words(bulletText);
+        const scored = units.map((u) => ({ u, score: [...words(u)].filter((w) => bulletWords.has(w)).length }));
+        const top = Math.max(...scored.map((x) => x.score));
+        const source = scored.filter((x) => x.score === top).map((x) => x.u);
+        const shared = (u: string) => SHARED_RESULT_MARKER.test(u) || /\b(?:helped|contributed to|as part of)\b/i.test(u);
+        if (source.every(shared)) {
+          issues.push(`${label} presents a shared (team- or contract-level) result as theirs alone; attribute it, e.g. "helped raise..." or "as one of two...".`);
+        }
+      }
+    }
     const filler = item.proof.match(SUMMARY_FILLER_TAIL);
     if (filler) issues.push(`${label} ends in filler ("${filler[0]}"); cut it and let the number carry the proof.`);
   });
@@ -1657,6 +1713,13 @@ export function checkEmployerSummaryFormat(text: string, input: EmployerSummaryI
   }
   if (relabelsRecruitingAsSales(claimText, [evidenceText])) {
     issues.push('Calls recruiting work "sales". Name it as recruiting or talent acquisition.');
+  }
+  // GAP must be genuine: nothing it names may already be in the evidence or tools.
+  if (parsed.gap) {
+    const contradictions = findGapContradictions(parsed.gap, [evidenceText, input.gapEvidence ?? ""].join("\n"), input.tools ?? []);
+    if (contradictions.length > 0) {
+      issues.push(`GAP names something the evidence already shows: ${contradictions.join("; ")}. Name a different, genuine gap, or omit the GAP section.`);
+    }
   }
   // Civilian language: setting words and "operation" as a countable noun
   // (lib/civilianLanguage.ts), anywhere in the summary.
@@ -1758,6 +1821,13 @@ export async function generateEmployerSummary(
     latest = { ...retry, formatIssues: retryIssues };
     if (retryIssues.length <= best.formatIssues.length) best = latest;
     if (retryIssues.length === 0) break;
+  }
+  // GAP is optional. If the only thing still wrong is a GAP the evidence
+  // contradicts, drop the GAP rather than lose the whole summary.
+  if (best.formatIssues.length > 0 && best.formatIssues.every((i) => i.startsWith("GAP names"))) {
+    const withoutGap = best.text.replace(/\n*^[ \t]*##[ \t]+GAP\b[\s\S]*?(?=^[ \t]*##[ \t]|(?![\s\S]))/m, "\n").trim();
+    const issues = checkEmployerSummaryFormat(withoutGap, input);
+    if (issues.length === 0) return { ...best, text: withoutGap, formatIssues: [], attempts };
   }
   return { ...best, attempts };
 }
