@@ -612,6 +612,10 @@ function expect(name, cond, detail = "") {
     expect("summary parse: missing GAP stays null and does not swallow GROWING_INTO", noGap.gap === null && noGap.growingInto === "Leading operations and growth for a mission-driven company");
     expect("summary parse: '## PROVEN AT' with a space is read as PROVEN_AT", pipeline.parseEmployerSummary(good.replace("## PROVEN_AT", "## PROVEN AT")).provenAt.length === 3);
   }
+  {
+    const pr = pipeline.buildEmployerSummaryUserPrompt(input);
+    expect("summary prompt: bullets chosen by DIRECTION, not countability", /pick by relevance to DIRECTION, never by how easy a fact is to quantify/.test(pr) && /Administrative facts \(pay records, inventories/.test(pr) && /decisions under pressure/.test(pr));
+  }
   expect("store gate: valid summary may be stored", pipeline.employerSummaryStoreBlockers(good, input).length === 0, JSON.stringify(pipeline.employerSummaryStoreBlockers(good, input)));
   expect("store gate: empty summary blocked", pipeline.employerSummaryStoreBlockers("", input).length > 0);
   expect("store gate: preamble before ## HEADLINE blocked", /before ## HEADLINE/.test(pipeline.employerSummaryStoreBlockers("Looking at the evidence carefully, there are no numbers.\n\n" + good, input).join(" ")));

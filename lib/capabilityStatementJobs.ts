@@ -71,7 +71,7 @@ export type JobRow = {
   step_started_at: string | null;
   input: SynthesisInput;
   state: SynthesisState;
-  result: (SynthesisResult & { written?: boolean; writeError?: string | null; employerSummary?: JobEmployerSummary }) | null;
+  result: (SynthesisResult & { written?: boolean; writeError?: string | null; employerSummary?: JobEmployerSummary; summaryOnly?: boolean }) | null;
   error: string | null;
 };
 
@@ -116,11 +116,16 @@ export async function triggerStep(adminClient: SupabaseClient, origin: string, j
 
 export async function createJob(
   adminClient: SupabaseClient,
-  args: { userId: string; requestedBy: string; model?: string; dryRun: boolean }
+  // summaryOnly: regenerate only the employer summary from the statements
+  // already stored on the profile. The job starts at the summary step, so the
+  // write goes through exactly the same evidence check, identity guard, and
+  // employerSummaryStoreBlockers gate as a full run - and writes only
+  // employer_summary.
+  args: { userId: string; requestedBy: string; model?: string; dryRun: boolean; summaryOnly?: boolean }
 ): Promise<{ job: JobRow } | { error: string; httpStatus: number }> {
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("display_name, summary, capability_tags, pending_evidence_groups, document_metadata")
+    .select("display_name, summary, capability_tags, pending_evidence_groups, document_metadata, capability_statements, niche_capabilities, capability_profile_generated_at")
     .eq("user_id", args.userId)
     .maybeSingle();
   if (profileError) return { error: `Failed to load profile: ${profileError.message}`, httpStatus: 500 };
@@ -143,6 +148,29 @@ export async function createJob(
   };
   const model = args.model ?? DEFAULT_SYNTHESIS_MODEL;
 
+  let state = createSynthesisState(model);
+  let result: JobRow["result"] = null;
+  if (args.summaryOnly) {
+    const core = Array.isArray(profile.capability_statements) ? (profile.capability_statements as SynthesisResult["core"]) : [];
+    if (core.length === 0) {
+      return { error: "Profile has no capability statements to write the summary from. Run a full synthesis job first.", httpStatus: 400 };
+    }
+    state = { ...state, next: "done" };
+    result = {
+      status: "ok",
+      model,
+      generatedAt: profile.capability_profile_generated_at ?? new Date().toISOString(),
+      core,
+      niche: Array.isArray(profile.niche_capabilities) ? (profile.niche_capabilities as SynthesisResult["niche"]) : [],
+      uncertainTerms: [],
+      rejected: [],
+      failureLog: [],
+      calls: [],
+      notes: ["summary-only job: statements reused from the profile, not regenerated"],
+      summaryOnly: true,
+    };
+  }
+
   const { data, error } = await adminClient
     .from(JOB_TABLE)
     .insert({
@@ -153,7 +181,8 @@ export async function createJob(
       status: "running",
       step_seq: 0,
       input,
-      state: createSynthesisState(model),
+      state,
+      result,
     })
     .select("*")
     .single();
@@ -388,22 +417,35 @@ async function runSummaryStep(adminClient: SupabaseClient, job: JobRow, seq: num
   let written = false;
   let writeError: string | null = null;
   if (!job.dry_run) {
-    const update: Record<string, unknown> = {
-      capability_statements: result.core,
-      niche_capabilities: result.niche,
-      capability_profile_generated_at: result.generatedAt,
-    };
+    // A summary-only job writes nothing but the summary, and only when it
+    // passed every check; otherwise the stored statements are rewritten as-is
+    // alongside it.
+    const update: Record<string, unknown> = result.summaryOnly
+      ? {}
+      : {
+          capability_statements: result.core,
+          niche_capabilities: result.niche,
+          capability_profile_generated_at: result.generatedAt,
+        };
     if (summary.text) update.employer_summary = summary.text;
-    const { error } = await adminClient.from("candidate_profiles").update(update).eq("user_id", job.user_id);
-    if (error) writeError = error.message;
-    else {
-      written = true;
-      summary.written = Boolean(summary.text);
+    if (Object.keys(update).length > 0) {
+      const { error } = await adminClient.from("candidate_profiles").update(update).eq("user_id", job.user_id);
+      if (error) writeError = error.message;
+      else {
+        written = true;
+        summary.written = Boolean(summary.text);
+      }
     }
   }
 
-  const status: JobStatus = writeError ? "failed" : "succeeded";
-  const errorText = writeError ? `candidate_profiles write failed: ${writeError}` : null;
+  // A summary-only job exists to produce a summary; one that was blocked failed.
+  const summaryOnlyBlocked = Boolean(result.summaryOnly) && !summary.text;
+  const status: JobStatus = writeError || summaryOnlyBlocked ? "failed" : "succeeded";
+  const errorText = writeError
+    ? `candidate_profiles write failed: ${writeError}`
+    : summaryOnlyBlocked
+      ? `employer summary not stored: ${summary.skippedReason ?? "unknown"}`
+      : null;
   const { error: saveError } = await adminClient
     .from(JOB_TABLE)
     .update({ result: { ...result, written, writeError, employerSummary: summary }, status, error: errorText, updated_at: new Date().toISOString() })

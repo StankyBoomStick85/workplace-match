@@ -56,14 +56,22 @@ export async function POST(request: Request) {
   const auth = await requireAdmin();
   if (auth instanceof NextResponse) return auth;
 
-  const body = (await request.json().catch(() => null)) as { userId?: unknown; model?: unknown; write?: unknown } | null;
+  const body = (await request.json().catch(() => null)) as { userId?: unknown; model?: unknown; write?: unknown; summaryOnly?: unknown } | null;
   const userId = typeof body?.userId === "string" ? body.userId.trim() : "";
   if (!userId) {
     return NextResponse.json({ error: "userId is required." }, { status: 400 });
   }
   const model = typeof body?.model === "string" && body.model.trim() ? body.model.trim() : undefined;
 
-  const created = await createJob(auth.adminClient, { userId, requestedBy: auth.userId, model, dryRun: body?.write !== true });
+  // summaryOnly: true regenerates only the employer summary from the stored
+  // statements, through the job's normal summary step and write gate.
+  const created = await createJob(auth.adminClient, {
+    userId,
+    requestedBy: auth.userId,
+    model,
+    dryRun: body?.write !== true,
+    summaryOnly: body?.summaryOnly === true,
+  });
   if ("error" in created) {
     return NextResponse.json({ error: created.error }, { status: created.httpStatus });
   }

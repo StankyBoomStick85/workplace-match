@@ -1445,7 +1445,11 @@ One line, about 15 words (never more than ${EMPLOYER_SUMMARY_HEADLINE_MAX_WORDS}
 ## PROVEN_AT
 ${EMPLOYER_SUMMARY_PROVEN_MIN} to ${EMPLOYER_SUMMARY_PROVEN_MAX} bullets, one per line, each exactly in the form:
 - **Lead phrase**: one line of proof
-The lead phrase is 2-4 words in bold, followed by a colon. The proof contains at least one concrete number taken from the EVIDENCE below. The whole bullet is under 20 words. Pick the bullets that best support where the person is heading (see DIRECTION), not simply the most impressive past facts.
+The lead phrase is 2-4 words in bold, followed by a colon. The proof contains at least one concrete number taken from the EVIDENCE below. The whole bullet is under 20 words.
+Choosing the bullets: pick by relevance to DIRECTION, never by how easy a fact is to quantify. First decide what the roles in DIRECTION are judged on, then pick the evidence that proves exactly that.
+- When DIRECTION centers on leadership, trust, authority, or relationships, prefer evidence of judgment, decisions under pressure, leading and developing people, advising senior leaders, and building relationships or partnerships.
+- Administrative facts (pay records, inventories, equipment or property accountability, paperwork or records tracking) appear only when DIRECTION is administrative or logistics work.
+- Every bullet still needs a number from the EVIDENCE. If the most relevant capability has a number anywhere in its proof, use that number; do not swap in a less relevant fact because its number is cleaner.
 
 ## THRIVES_IN
 One line naming role FAMILIES and work settings, e.g. "operations leadership, business development, and program management; remote or hybrid". Never a single job title, unless DIRECTION says they want only one specific role.${input.isAlternateSummary ? " Lead with the broader set of role families their strengths support, beyond their most direct experience." : ""}
