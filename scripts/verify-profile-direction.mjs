@@ -119,6 +119,31 @@ const summary = (thrives, growing = "Leading operations for a company where tech
   expect("summary prompt: 'open' rendered as 'any work setting'", fivePrompt.includes('("any work setting")') && fivePrompt.includes("Work setting: any work setting") && !/Work setting: open/.test(fivePrompt));
   expect("summary prompt: 3 or fewer families -> no 'never all of them'", !/never all of them/.test(pipeline.buildEmployerSummaryUserPrompt(input(openDir))));
 
+  // Preferred work setting + travel willingness (2026-10-25)
+  {
+    const base = { roleFamilies: ["operations_leadership", "business_development"], scope: "open_related" };
+    const pref = dir.normalizeDirection({ ...base, workSetting: "remote", workSettingPreferred: true, travel: "occasional" }).direction;
+    expect("direction: preferred + travel kept", pref.workSettingPreferred === true && pref.travel === "occasional");
+    expect("direction: 'preferred' dropped for open; bad travel dropped", (() => { const d = dir.normalizeDirection({ ...base, workSetting: "open", workSettingPreferred: true, travel: "always" }).direction; return !d.workSettingPreferred && !d.travel; })());
+    const strict = dir.normalizeDirection({ ...base, workSetting: "remote", travel: "occasional" }).direction;
+    const noTravel = dir.normalizeDirection({ ...base, workSetting: "remote", workSettingPreferred: true, travel: "none" }).direction;
+    expect("direction hash: preferred changes it", dir.canonicalDirection(pref) !== dir.canonicalDirection(strict));
+    expect("direction hash: travel changes it", dir.canonicalDirection(pref) !== dir.canonicalDirection(noTravel));
+    expect("direction: setting clause reads naturally", dir.settingClause(pref) === "remote preferred, open to occasional travel" && dir.settingClause(noTravel) === "remote preferred" && dir.settingClause(strict) === "remote, open to occasional travel");
+    expect("direction: compat work_preference 'remote preferred'", dir.directionCompatColumns(pref).work_preference === "remote preferred");
+    expect("direction: prompt text has setting and travel", /Work setting: remote preferred\nTravel: open to occasional travel/.test(dir.formatDirectionForPrompt(pref)) && /Travel: not willing to travel/.test(dir.formatDirectionForPrompt(noTravel)));
+    expect("direction: scoring object carries both", JSON.stringify(dir.directionForScoring(pref)).includes('"work_setting":"remote preferred","travel":"occasional"'));
+
+    const p = pipeline.buildEmployerSummaryUserPrompt(input(pref));
+    expect("summary prompt: setting clause with travel", p.includes('then the work setting and travel ("remote preferred, open to occasional travel")') && p.includes("remote preferred, open to occasional travel for partner meetings and events"));
+    const ok = "Operations leadership and business development; remote preferred, open to travel for partner meetings and events";
+    expect("thrives: preferred + travel rendered naturally passes", issues(summary(ok), pref) === "", issues(summary(ok), pref));
+    expect("thrives: 'preferred' missing -> rejected", /must say the work setting is preferred/.test(issues(summary("Operations leadership and business development; remote, open to travel for events"), pref)));
+    expect("thrives: travel missing -> rejected", /willingness to travel/.test(issues(summary("Operations leadership and business development; remote preferred"), pref)));
+    expect("thrives: travel offered when none -> rejected", /not willing to travel/.test(issues(summary("Operations leadership and business development; remote preferred, open to occasional travel"), noTravel)));
+    expect("thrives: no travel mention when none passes", issues(summary("Operations leadership and business development; remote preferred"), noTravel) === "");
+  }
+
   const prompt = pipeline.buildEmployerSummaryUserPrompt(input(openDir));
   expect("summary prompt: lists the selected families", prompt.includes('"Operations leadership"') && prompt.includes('"Business development and partnerships"'));
   expect("summary prompt: open -> never a specific title", /Never a specific job title \(no director, manager, officer, chief, or similar\)/.test(prompt));

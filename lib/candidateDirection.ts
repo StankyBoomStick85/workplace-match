@@ -10,6 +10,7 @@ import { OTHER_ROLE_FAMILY_ID, ROLE_FAMILY_BY_ID } from "@/lib/roleFamilies";
 
 export type DirectionScope = "open_related" | "only_these";
 export type WorkSetting = "remote" | "hybrid" | "onsite" | "open";
+export type TravelWillingness = "none" | "occasional" | "frequent";
 
 export type CandidateDirection = {
   // Role family ids from lib/roleFamilies.ts, plus "other" with otherFamily.
@@ -19,6 +20,10 @@ export type CandidateDirection = {
   // Specific titles - only kept when scope is "only_these".
   titles?: string[];
   workSetting: WorkSetting;
+  // true = this setting is preferred but they stay open to others ("remote
+  // preferred"). Never set for "open".
+  workSettingPreferred?: boolean;
+  travel?: TravelWillingness;
   howIWantToWork?: string;
 };
 
@@ -29,6 +34,7 @@ export const OTHER_FAMILY_MAX = 60;
 export const TITLE_MAX = 60;
 
 const WORK_SETTINGS: WorkSetting[] = ["remote", "hybrid", "onsite", "open"];
+const TRAVEL: TravelWillingness[] = ["none", "occasional", "frequent"];
 
 const clean = (v: unknown, max: number) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, max) : "");
 
@@ -53,6 +59,8 @@ export function normalizeDirection(raw: unknown): { direction: CandidateDirectio
   if (scope === "only_these" && titles.length === 0) return { error: "Add at least one role title, or choose \"Open to related roles\"." };
 
   const workSetting: WorkSetting = WORK_SETTINGS.includes(r.workSetting as WorkSetting) ? (r.workSetting as WorkSetting) : "open";
+  const workSettingPreferred = workSetting !== "open" && r.workSettingPreferred === true;
+  const travel = TRAVEL.includes(r.travel as TravelWillingness) ? (r.travel as TravelWillingness) : null;
   const howIWantToWork = clean(r.howIWantToWork, HOW_I_WANT_TO_WORK_MAX);
 
   return {
@@ -62,6 +70,8 @@ export function normalizeDirection(raw: unknown): { direction: CandidateDirectio
       scope,
       ...(scope === "only_these" ? { titles } : {}),
       workSetting,
+      ...(workSettingPreferred ? { workSettingPreferred } : {}),
+      ...(travel ? { travel } : {}),
       ...(howIWantToWork ? { howIWantToWork } : {}),
     },
   };
@@ -90,6 +100,8 @@ export function canonicalDirection(direction: CandidateDirection | null): string
     scope: direction.scope,
     titles: direction.scope === "only_these" ? [...(direction.titles ?? [])].sort() : [],
     workSetting: direction.workSetting,
+    workSettingPreferred: Boolean(direction.workSettingPreferred),
+    travel: direction.travel ?? "",
     howIWantToWork: direction.howIWantToWork ?? "",
   });
 }
@@ -97,14 +109,29 @@ export function canonicalDirection(direction: CandidateDirection | null): string
 // job_types / work_preference written alongside direction for readers that
 // predate it. job_types holds the titles for "only these roles", otherwise the
 // role family labels.
-export function directionCompatColumns(direction: CandidateDirection): { job_types: string[]; work_preference: WorkSetting } {
+export function directionCompatColumns(direction: CandidateDirection): { job_types: string[]; work_preference: string } {
   const jobTypes = direction.scope === "only_these" && direction.titles?.length ? direction.titles : roleFamilyLabels(direction);
-  return { job_types: jobTypes, work_preference: direction.workSetting };
+  return { job_types: jobTypes, work_preference: workSettingPhrase(direction) };
 }
 
-// How a work setting reads in employer-facing text: "open" alone reads oddly.
-export function workSettingPhrase(setting: WorkSetting): string {
-  return setting === "open" ? "any work setting" : setting;
+// How the work setting reads in employer-facing text: "remote", "remote
+// preferred", or "any work setting" ("open" alone reads oddly).
+export function workSettingPhrase(direction: Pick<CandidateDirection, "workSetting" | "workSettingPreferred">): string {
+  if (direction.workSetting === "open") return "any work setting";
+  return direction.workSettingPreferred ? `${direction.workSetting} preferred` : direction.workSetting;
+}
+
+// Travel willingness as employer-facing words; empty when none or not stated.
+export function travelPhrase(direction: Pick<CandidateDirection, "travel">): string {
+  if (direction.travel === "occasional") return "open to occasional travel";
+  if (direction.travel === "frequent") return "open to frequent travel";
+  return "";
+}
+
+// The full setting clause THRIVES IN ends with, e.g. "remote preferred, open
+// to occasional travel".
+export function settingClause(direction: CandidateDirection): string {
+  return [workSettingPhrase(direction), travelPhrase(direction)].filter(Boolean).join(", ");
 }
 
 // THRIVES IN names the families the evidence supports best, never all of them.
@@ -119,7 +146,8 @@ export function formatDirectionForPrompt(direction: CandidateDirection): string 
       ? `Wants ONLY these specific roles: ${(direction.titles ?? []).join("; ")}`
       : "Open to related roles in these families (no single target title)"
   );
-  lines.push(`Work setting: ${workSettingPhrase(direction.workSetting)}`);
+  lines.push(`Work setting: ${workSettingPhrase(direction)}`);
+  if (direction.travel) lines.push(`Travel: ${direction.travel === "none" ? "not willing to travel" : travelPhrase(direction)}`);
   if (direction.howIWantToWork) lines.push(`How they want to work: ${direction.howIWantToWork}`);
   return lines.join("\n");
 }
@@ -130,7 +158,8 @@ export function directionForScoring(direction: CandidateDirection) {
     target_role_families: roleFamilyLabels(direction),
     open_to_related_roles: direction.scope === "open_related",
     ...(direction.scope === "only_these" ? { only_these_titles: direction.titles ?? [] } : {}),
-    work_setting: direction.workSetting,
+    work_setting: workSettingPhrase(direction),
+    ...(direction.travel ? { travel: direction.travel } : {}),
     ...(direction.howIWantToWork ? { how_they_want_to_work: direction.howIWantToWork } : {}),
   };
 }

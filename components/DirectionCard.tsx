@@ -11,6 +11,7 @@ import {
   roleFamilyLabels,
   type CandidateDirection,
   type DirectionScope,
+  type TravelWillingness,
   type WorkSetting
 } from "../lib/candidateDirection";
 
@@ -24,6 +25,12 @@ const WORK_SETTING_OPTIONS: Array<{ value: WorkSetting; label: string }> = [
   { value: "hybrid", label: "Hybrid" },
   { value: "onsite", label: "Onsite" },
   { value: "open", label: "Open" }
+];
+
+const TRAVEL_OPTIONS: Array<{ value: TravelWillingness; label: string }> = [
+  { value: "none", label: "None" },
+  { value: "occasional", label: "Occasional" },
+  { value: "frequent", label: "Frequent" }
 ];
 
 type RebuildOutcome =
@@ -46,8 +53,14 @@ function savedMessage(changed: boolean, rebuild: RebuildOutcome): string {
   }
 }
 
-function settingLabel(value: WorkSetting) {
-  return WORK_SETTING_OPTIONS.find((o) => o.value === value)?.label ?? value;
+function settingLabel(direction: CandidateDirection) {
+  const label = WORK_SETTING_OPTIONS.find((o) => o.value === direction.workSetting)?.label ?? direction.workSetting;
+  if (direction.workSetting === "open") return "Open to any work setting";
+  return direction.workSettingPreferred ? `${label} preferred, open to others` : `${label} only`;
+}
+
+function travelLabel(travel: TravelWillingness | undefined) {
+  return TRAVEL_OPTIONS.find((o) => o.value === travel)?.label ?? "None";
 }
 
 export function DirectionCard({ initialDirection }: { initialDirection: CandidateDirection | null }) {
@@ -58,6 +71,8 @@ export function DirectionCard({ initialDirection }: { initialDirection: Candidat
   const [scope, setScope] = useState<DirectionScope>(initialDirection?.scope ?? "open_related");
   const [titles, setTitles] = useState<string[]>(initialDirection?.titles?.length ? initialDirection.titles : [""]);
   const [workSetting, setWorkSetting] = useState<WorkSetting>(initialDirection?.workSetting ?? "open");
+  const [workSettingPreferred, setWorkSettingPreferred] = useState(Boolean(initialDirection?.workSettingPreferred));
+  const [travel, setTravel] = useState<TravelWillingness>(initialDirection?.travel ?? "none");
   const [howIWantToWork, setHowIWantToWork] = useState(initialDirection?.howIWantToWork ?? "");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
@@ -69,6 +84,8 @@ export function DirectionCard({ initialDirection }: { initialDirection: Candidat
     setScope(from?.scope ?? "open_related");
     setTitles(from?.titles?.length ? from.titles : [""]);
     setWorkSetting(from?.workSetting ?? "open");
+    setWorkSettingPreferred(Boolean(from?.workSettingPreferred));
+    setTravel(from?.travel ?? "none");
     setHowIWantToWork(from?.howIWantToWork ?? "");
   }
 
@@ -99,6 +116,8 @@ export function DirectionCard({ initialDirection }: { initialDirection: Candidat
             scope,
             titles: scope === "only_these" ? titles.map((t) => t.trim()).filter(Boolean) : [],
             workSetting,
+            workSettingPreferred: workSetting !== "open" && workSettingPreferred,
+            travel,
             howIWantToWork
           }
         })
@@ -161,7 +180,11 @@ export function DirectionCard({ initialDirection }: { initialDirection: Candidat
             </div>
             <div>
               <dt className={label}>Work setting</dt>
-              <dd className="mt-1 text-sm text-zinc-800">{settingLabel(saved.workSetting)}</dd>
+              <dd className="mt-1 text-sm text-zinc-800">{settingLabel(saved)}</dd>
+            </div>
+            <div>
+              <dt className={label}>Willing to travel</dt>
+              <dd className="mt-1 text-sm text-zinc-800">{travelLabel(saved.travel)}</dd>
             </div>
             {saved.howIWantToWork ? (
               <div>
@@ -258,6 +281,34 @@ export function DirectionCard({ initialDirection }: { initialDirection: Candidat
                   aria-pressed={workSetting === option.value}
                   onClick={() => setWorkSetting(option.value)}
                   className={`rounded px-3 py-1.5 text-xs font-semibold transition ${workSetting === option.value ? "bg-zinc-900 text-white" : "text-zinc-700 hover:bg-gray-50"}`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            {workSetting !== "open" ? (
+              <label className="mt-3 flex items-center gap-2 text-sm text-zinc-700">
+                <input
+                  type="checkbox"
+                  checked={workSettingPreferred}
+                  onChange={(event) => setWorkSettingPreferred(event.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300"
+                />
+                Preferred, but open to other settings
+              </label>
+            ) : null}
+          </fieldset>
+
+          <fieldset>
+            <legend className="label">Willing to travel</legend>
+            <div className="mt-2 inline-flex rounded-md border border-gray-300 p-0.5">
+              {TRAVEL_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={travel === option.value}
+                  onClick={() => setTravel(option.value)}
+                  className={`rounded px-3 py-1.5 text-xs font-semibold transition ${travel === option.value ? "bg-zinc-900 text-white" : "text-zinc-700 hover:bg-gray-50"}`}
                 >
                   {option.label}
                 </button>

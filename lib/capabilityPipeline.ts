@@ -8,7 +8,7 @@ import {
   findTitleWords,
   formatDirectionForPrompt,
   roleFamilyLabels,
-  workSettingPhrase,
+  settingClause,
   type CandidateDirection,
 } from "@/lib/candidateDirection";
 import { CIVILIAN_LANGUAGE_RULES, GUIDING_PRINCIPLE, describeSettingLanguage, findSettingLanguage } from "@/lib/civilianLanguage";
@@ -1460,7 +1460,7 @@ export function buildEmployerSummaryUserPrompt(input: EmployerSummaryInput): str
         families.length > THRIVES_IN_MAX_FAMILIES
           ? `the 2 or 3 target role families from DIRECTION that the EVIDENCE supports best (never all of them; choose from ${families.map((f) => `"${f}"`).join(", ")})`
           : `the target role families from DIRECTION (${families.map((f) => `"${f}"`).join(", ")})`
-      }, named in those words, then the work setting ("${workSettingPhrase(d.workSetting)}"), e.g. "${families.slice(0, 2).join(", ").toLowerCase()}; ${workSettingPhrase(d.workSetting)}".${
+      }, named in those words, then the work setting${d.travel === "occasional" || d.travel === "frequent" ? " and travel" : ""} ("${settingClause(d)}"), written naturally, e.g. "${families.slice(0, 2).join(", ").toLowerCase()}; ${settingClause(d)}${d.travel === "occasional" || d.travel === "frequent" ? " for partner meetings and events" : ""}". Do not add a context for travel that the evidence or DIRECTION does not support.${
         onlyThese
           ? ` They want ONLY these roles, so name them too: ${(d.titles ?? []).map((t) => `"${t}"`).join(", ")}.`
           : " Never a specific job title (no director, manager, officer, chief, or similar): they are open to related roles across these families."
@@ -1681,6 +1681,16 @@ export function checkEmployerSummaryFormat(text: string, input: EmployerSummaryI
     }
     if (input.direction.workSetting === "open" && /(?:^|[;,]\s*)open\.?\s*$/i.test(parsed.thrivesIn.trim())) {
       issues.push('THRIVES_IN ends in "open"; write the work setting as "any work setting".');
+    }
+    if (input.direction.workSettingPreferred && !/\bprefer/i.test(parsed.thrivesIn)) {
+      issues.push(`THRIVES_IN must say the work setting is preferred, not required ("${settingClause(input.direction)}").`);
+    }
+    const travelling = input.direction.travel === "occasional" || input.direction.travel === "frequent";
+    if (travelling && !/\btravel/i.test(parsed.thrivesIn)) {
+      issues.push(`THRIVES_IN must include their willingness to travel ("${settingClause(input.direction)}").`);
+    }
+    if (input.direction.travel === "none" && /\b(?:open to|willing to|available (?:for|to))\s+(?:\w+\s+)?travel/i.test(parsed.thrivesIn)) {
+      issues.push("THRIVES_IN offers travel, but they are not willing to travel.");
     }
     if (input.direction.scope !== "only_these") {
       const titleWords = findTitleWords(parsed.thrivesIn);
