@@ -5,15 +5,15 @@ import { parseEmployerSummary } from "../lib/capabilityPipeline";
 
 // Renders an employer_summary value - the only capability content an
 // employer sees. Three stored shapes keep rendering:
-//   v2 (current): HEADLINE / PROVEN_AT / THRIVES_IN / GROWING_INTO / GAP -
-//      headline prominent, small section labels, bold lead phrases, built to
-//      scan in about ten seconds.
+//   v2 (current): HEADLINE / PROVEN_AT / THRIVES_IN / GROWING_INTO / GAP,
+//      rendered in exactly that order - headline prominent, small section
+//      labels, bold lead phrases, built to scan in about ten seconds.
 //   v1: BEST_FIT / STRENGTHS / GROWTH / GAP (2026-09 to 2026-10).
 //   legacy: a plain paragraph (parseEmployerSummary returns null).
 // Existing rows are not migrated; they change shape when regenerated.
 //
 // collapsible: true is for a list of candidates an employer is scanning (the
-// headline and THRIVES IN stay visible, the rest is behind a toggle). false is
+// headline and PROVEN AT stay visible, the rest is behind a toggle). false is
 // for a single summary on its own (the candidate's own profile page).
 export function EmployerSummaryContent({ text, collapsible = true }: { text: string; collapsible?: boolean }) {
   const [isExpanded, setIsExpanded] = useState(!collapsible);
@@ -72,25 +72,25 @@ export function EmployerSummaryContent({ text, collapsible = true }: { text: str
     <div>
       <p className="text-base font-semibold leading-snug text-zinc-950">{parsed.headline}</p>
       <div className="mt-2">
-        <p className={label}>Thrives in</p>
-        <p className="text-sm leading-6 text-zinc-800">{parsed.thrivesIn}</p>
+        <p className={label}>Proven at</p>
+        <ul className="mt-0.5 space-y-1 text-sm leading-5 text-zinc-700">
+          {parsed.provenAt.map((item, index) => (
+            <li key={index} className="flex gap-1.5">
+              <span aria-hidden="true" className="text-zinc-400">&bull;</span>
+              <span>
+                {item.lead ? <span className="font-semibold text-zinc-950">{item.lead}:</span> : null}
+                {item.lead ? " " : null}
+                {item.proof}
+              </span>
+            </li>
+          ))}
+        </ul>
       </div>
       {isExpanded ? (
         <div className="mt-2 space-y-2">
           <div>
-            <p className={label}>Proven at</p>
-            <ul className="mt-0.5 space-y-1 text-sm leading-5 text-zinc-700">
-              {parsed.provenAt.map((item, index) => (
-                <li key={index} className="flex gap-1.5">
-                  <span aria-hidden="true" className="text-zinc-400">&bull;</span>
-                  <span>
-                    {item.lead ? <span className="font-semibold text-zinc-950">{item.lead}:</span> : null}
-                    {item.lead ? " " : null}
-                    {item.proof}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <p className={label}>Thrives in</p>
+            <p className="text-sm leading-6 text-zinc-800">{parsed.thrivesIn}</p>
           </div>
           {parsed.growingInto ? (
             <div>

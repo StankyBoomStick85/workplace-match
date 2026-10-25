@@ -14,11 +14,14 @@ import { EmployerSummaryContent } from "./EmployerSummaryContent";
 export function EmployerFacingSummary({
   candidateId,
   text,
-  route
+  route,
+  collapsible = true
 }: {
   candidateId: string;
   text?: string | null;
   route: string;
+  // false shows the summary fully expanded (e.g. an opened mutual match).
+  collapsible?: boolean;
 }) {
   const summary = text ?? "";
   const violations = summary ? scanEmployerFacingText(summary) : [];
@@ -40,7 +43,7 @@ export function EmployerFacingSummary({
   }, [candidateId, summary, route]);
 
   return isSafe ? (
-    <EmployerSummaryContent text={summary} />
+    <EmployerSummaryContent text={summary} collapsible={collapsible} />
   ) : (
     <p className="text-xs text-zinc-500">Capability summary unavailable - pending review.</p>
   );

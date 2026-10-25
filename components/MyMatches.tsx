@@ -65,6 +65,9 @@ export function MyMatches({ role }: { role: Role }) {
   const [pendingInterests, setPendingInterests] = useState<PendingInterestRecord[]>([]);
   const [expandedMatchKey, setExpandedMatchKey] = useState("");
   const [expandedPendingKey, setExpandedPendingKey] = useState("");
+  // Employer side: the job description in an opened match is collapsed to one
+  // line until asked for.
+  const [openJobDescriptionKey, setOpenJobDescriptionKey] = useState("");
   const [pendingRemoveInterest, setPendingRemoveInterest] = useState<MatchRecord | null>(null);
   const [privateNotes, setPrivateNotes] = useState<Record<string, string>>({});
   const [openMessageKey, setOpenMessageKey] = useState("");
@@ -403,17 +406,51 @@ export function MyMatches({ role }: { role: Role }) {
                                   candidateId={record.match.candidateId}
                                   text={record.candidateProfile?.employerSummary}
                                   route="MyMatches"
+                                  collapsible={false}
                                 />
                               </div>
                             </div>
                           </div>
                         ) : null}
-                        <div className="grid gap-3 text-sm md:grid-cols-3">
-                          <Detail label="Job" value={record.job.title} />
-                          <Detail label="Location" value={[record.job.locationCity, record.job.locationState, record.job.locationZip].filter(Boolean).join(", ")} />
-                          <Detail label="Pay" value={record.job.payRange || "Not listed"} />
-                        </div>
-                        <p className="text-sm leading-6 text-zinc-700">{record.job.description}</p>
+                        {role === "employer" ? (
+                          // Employer side leads with the candidate: the job is
+                          // one line, its description on demand.
+                          <div className="text-sm">
+                            <p className="text-zinc-700">
+                              <span className="font-semibold text-zinc-950">{record.job.title}</span>
+                              {[
+                                [record.job.locationCity, record.job.locationState, record.job.locationZip].filter(Boolean).join(", "),
+                                record.job.payRange || "Pay not listed"
+                              ]
+                                .filter(Boolean)
+                                .map((part) => ` · ${part}`)
+                                .join("")}
+                            </p>
+                            {record.job.description ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => setOpenJobDescriptionKey(openJobDescriptionKey === record.key ? "" : record.key)}
+                                  className="mt-1 text-xs font-semibold text-red-800 transition hover:underline"
+                                >
+                                  {openJobDescriptionKey === record.key ? "Hide job description" : "View job description"}
+                                </button>
+                                {openJobDescriptionKey === record.key ? (
+                                  <p className="mt-2 text-sm leading-6 text-zinc-700">{record.job.description}</p>
+                                ) : null}
+                              </>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <>
+                            <div className="grid gap-3 text-sm md:grid-cols-3">
+                              <Detail label="Job" value={record.job.title} />
+                              <Detail label="Location" value={[record.job.locationCity, record.job.locationState, record.job.locationZip].filter(Boolean).join(", ")} />
+                              <Detail label="Pay" value={record.job.payRange || "Not listed"} />
+                            </div>
+                            <p className="text-sm leading-6 text-zinc-700">{record.job.description}</p>
+                          </>
+                        )}
                         <div>
                           <label className="label" htmlFor={`note-${record.key}`}>Private notes</label>
                           <textarea
