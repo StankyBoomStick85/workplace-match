@@ -94,6 +94,16 @@ function expect(name, cond, detail = "") {
   };
   expect("core: valid statement passes", checks.checkCoreStatement(good, ctx).length === 0, JSON.stringify(checks.checkCoreStatement(good, ctx)));
 
+  // Scale and function fidelity against the cited claims.
+  const fid = (statement) => codes(checks.checkCoreStatement({ ...good, statement }, ctx));
+  expect("core: 'larger organizations' not in claims -> inflated_scale", fid("Runs teams and larger organizations whenever the leader is away.").includes("inflated_scale"));
+  expect("core: 'several hundred' with no cited number >= 200 -> inflated_scale", fid("Coordinates moves for organizations of several hundred people.").includes("inflated_scale"));
+  const recruitCtx = { groupsById: new Map([...groups, { groupId: "r1", verificationStatus: "VERIFIED", claims: ["Achieved 134% of annual recruiting target"] }].map((g) => [g.groupId, g])) };
+  const recruitStmt = (statement) => codes(checks.checkCoreStatement({ statement, proof: [{ text: "Achieved 134% of annual recruiting target", groupIds: ["r1"] }, good.proof[1]] }, recruitCtx));
+  expect("core: recruiting called 'sales-style' -> recruiting_as_sales", recruitStmt("Delivers sales-style talent acquisition results against a quota.").includes("recruiting_as_sales"));
+  expect("core: recruiting named as recruiting passes fidelity", !recruitStmt("Delivers recruiting results against a quota.").some((c) => c === "recruiting_as_sales" || c === "inflated_scale"));
+  expect("fidelity: 'hundreds' allowed when a cited number reaches 200", checks.findScaleInflation("Trains hundreds of people", ["Trained 500 partner personnel"]).length === 0);
+
   const oneGroup = { ...good, proof: [good.proof[0], { text: "Placed in the top 3% of peers", groupIds: ["g1"] }] };
   expect("core: two proof lines from one group -> too_few_distinct_groups", codes(checks.checkCoreStatement(oneGroup, ctx)).includes("too_few_distinct_groups"));
 
@@ -602,6 +612,10 @@ function expect(name, cond, detail = "") {
     expect("summary parse: missing GAP stays null and does not swallow GROWING_INTO", noGap.gap === null && noGap.growingInto === "Leading operations and growth for a mission-driven company");
     expect("summary parse: '## PROVEN AT' with a space is read as PROVEN_AT", pipeline.parseEmployerSummary(good.replace("## PROVEN_AT", "## PROVEN AT")).provenAt.length === 3);
   }
+  expect("store gate: valid summary may be stored", pipeline.employerSummaryStoreBlockers(good, input).length === 0, JSON.stringify(pipeline.employerSummaryStoreBlockers(good, input)));
+  expect("store gate: empty summary blocked", pipeline.employerSummaryStoreBlockers("", input).length > 0);
+  expect("store gate: preamble before ## HEADLINE blocked", /before ## HEADLINE/.test(pipeline.employerSummaryStoreBlockers("Looking at the evidence carefully, there are no numbers.\n\n" + good, input).join(" ")));
+  expect("store gate: apology-style PROVEN_AT blocked", pipeline.employerSummaryStoreBlockers(good.replace(/## PROVEN_AT[\s\S]*?## THRIVES_IN/, "## PROVEN_AT\nNo concrete numbers are present in the submitted evidence.\n\n## THRIVES_IN"), input).length > 0);
   expect("summary system prompt: no longer suggests 'documented across multiple performance reviews'", !/"documented across multiple performance reviews" is correct/.test(pipeline.EMPLOYER_SUMMARY_SYSTEM_PROMPT));
 
   const v1 = pipeline.parseEmployerSummary("## BEST_FIT\nOperations Manager\n## STRENGTHS\n- One\n- Two\n## GROWTH\nGrows");

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
 import { getCivilianDocLabel } from "@/lib/documentLabels";
-import { findUnsourcedNumbers } from "@/lib/capabilityStatementChecks";
+import { findScaleInflation, findUnsourcedNumbers, relabelsRecruitingAsSales } from "@/lib/capabilityStatementChecks";
 
 export type EvidenceItem = {
   claim: string;
@@ -1570,13 +1570,13 @@ function wordCount(s: string): number {
 // reviews"): adds words, not proof.
 const SUMMARY_FILLER_TAIL =
   /\b(?:corroborated|documented|confirmed|validated|verified|noted|recognized|reflected|evidenced)\s+(?:across|in|by|through|over)\s+(?:multiple|several|many|numerous|repeated|consecutive|successive|\d+)\s+[\w\s-]*?(?:reviews?|evaluations?|assessments?|reports?|documents?|records?|sources?)\b/i;
-// Scale words that inflate scope unless the evidence itself uses them.
-const SUMMARY_SCALE_WORDS =
-  /\b(?:large(?:[\s-]scale)?\s+(?:organi[sz]ations?|enterprises?|companies|teams|workforces?|operations)|large-scale|enterprise(?:[\s-]wide|[\s-]level)?|organi[sz]ation[\s-]wide|company[\s-]wide|massive|major\s+organi[sz]ations?)\b/gi;
 
 // Format and fidelity issues in a v2 summary, as retry instructions.
 export function checkEmployerSummaryFormat(text: string, input: EmployerSummaryInput): string[] {
   const issues: string[] = [];
+  if (!/^##[ \t]+HEADLINE\b/.test(text.trim())) {
+    issues.push("Text appears before ## HEADLINE. Output only the sections, starting with ## HEADLINE, with no preamble or explanation.");
+  }
   if (/[–—]/.test(text)) issues.push("Contains an em dash or en dash; use hyphens or commas.");
   const parsed = parseEmployerSummary(text);
   if (!parsed || parsed.format !== "v2") {
@@ -1607,15 +1607,24 @@ export function checkEmployerSummaryFormat(text: string, input: EmployerSummaryI
   // Scale and function fidelity apply to the claims (headline + proven at),
   // not to the role families the person wants (THRIVES_IN / GROWING_INTO).
   const claimText = [parsed.headline, ...parsed.provenAt.map((p) => `${p.lead} ${p.proof}`)].join("\n");
-  const evidenceLower = evidenceText.toLowerCase();
-  const inflated = [...new Set((claimText.match(SUMMARY_SCALE_WORDS) ?? []).map((w) => w.toLowerCase()))].filter((w) => !evidenceLower.includes(w));
+  const inflated = findScaleInflation(claimText, [evidenceText]);
   if (inflated.length > 0) {
     issues.push(`Inflates scale beyond the evidence: ${inflated.map((w) => `"${w}"`).join(", ")}. Describe the scope the numbers show (e.g. "teams of up to 100").`);
   }
-  if (/\brecruit/i.test(evidenceText) && !/\b(?:sales?|sell(?:s|ing)?)\b/i.test(evidenceText) && /\b(?:sales?|sell(?:s|ing)?)\b/i.test(claimText)) {
+  if (relabelsRecruitingAsSales(claimText, [evidenceText])) {
     issues.push('Calls recruiting work "sales". Name it as recruiting or talent acquisition.');
   }
   return issues;
+}
+
+// The one gate every employer_summary write goes through (synthesis job,
+// generate-capability-finalize, correct-capability). Returns the reasons the
+// text may NOT be stored; empty means it may. A blocked summary is never
+// written: the previous one stays, and the caller reports the failure. The
+// identity guard is separate and runs too.
+export function employerSummaryStoreBlockers(text: string, input: EmployerSummaryInput): string[] {
+  if (!text || !text.trim()) return ["empty response"];
+  return checkEmployerSummaryFormat(text, input);
 }
 
 export type EmployerSummaryGeneration = {

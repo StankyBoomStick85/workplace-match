@@ -9,6 +9,8 @@ import {
   buildGuardRewritePrompt,
   buildStep4Prompt,
   generateEmployerSummary,
+  employerSummaryStoreBlockers,
+  type EmployerSummaryInput,
   parseStep3Response,
   extractStep4Sections,
   STEP3_CATEGORY_RANK,
@@ -161,7 +163,7 @@ async function finalize(ctx: GenerationRunContext, t0: number): Promise<Response
   ctx.stage = "load_profile";
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("display_name, job_types, experience_level, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, capability_generation_status, document_metadata, capability_statements")
+    .select("display_name, job_types, experience_level, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, capability_generation_status, document_metadata, capability_statements, employer_summary")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -716,19 +718,21 @@ async function finalize(ctx: GenerationRunContext, t0: number): Promise<Response
 
   // --- Employer Summary ---
   const isAlternateSummary = profile.summary_priority === "alternate";
+  let employerSummaryInput: EmployerSummaryInput | null = null;
 
   try {
     // Written from capability statements when they exist (a regenerate clears
     // them, so here this normally falls back to the entries just written; the
     // synthesis job rewrites the summary from statements once it finishes).
-    const generated = await generateEmployerSummary(anthropic, {
+    employerSummaryInput = {
       capabilityStatements: Array.isArray(profile.capability_statements) ? profile.capability_statements : null,
       capabilitySummary,
       selfSummary: profile.summary ?? null,
       desiredRoles: Array.isArray(profile.job_types) && profile.job_types.length > 0 ? profile.job_types.join(", ") : null,
       workPreference: profile.work_preference ?? null,
       isAlternateSummary
-    });
+    };
+    const generated = await generateEmployerSummary(anthropic, employerSummaryInput);
     employerStopReason = generated.stopReason;
     rawEmployerText = generated.text;
     employerSummary = rawEmployerText;
@@ -967,6 +971,26 @@ async function finalize(ctx: GenerationRunContext, t0: number): Promise<Response
     });
   }
 
+  // Format gate (employerSummaryStoreBlockers), on the post-guard text. A
+  // summary that fails it is never stored: the previous summary stays (none
+  // for a new profile) and the failure is reported. The rest of the profile
+  // is still saved.
+  const summaryBlockers = employerSummaryInput ? employerSummaryStoreBlockers(employerSummary, employerSummaryInput) : ["summary was not generated"];
+  const storeEmployerSummary = summaryBlockers.length === 0;
+  if (!storeEmployerSummary) {
+    await reportGenerationFailure({
+      adminClient,
+      sendEmailFn: sendEmail,
+      route: ROUTE,
+      errorType: "employer_summary_not_stored",
+      message: `Employer summary failed format checks and was not stored; previous summary kept: ${summaryBlockers.join(" ")}`,
+      userId: user.id,
+      severity: "high",
+      metadata: { blockers: summaryBlockers, rejectedText: employerSummary.slice(0, 4000), hadPreviousSummary: Boolean(profile.employer_summary) }
+    });
+  }
+  const savedEmployerSummary: string = storeEmployerSummary ? employerSummary : profile.employer_summary ?? "";
+
   traceStage("before-db-write");
 
   ctx.stage = "db_write";
@@ -979,7 +1003,7 @@ async function finalize(ctx: GenerationRunContext, t0: number): Promise<Response
       recommended_position: recommendedPosition,
       entry_point: entryPoint,
       future_positions: futurePositions,
-      employer_summary: employerSummary,
+      ...(storeEmployerSummary ? { employer_summary: employerSummary } : {}),
       // pending_evidence_groups is retained (not cleared) so the correction flow
       // (correct-capability/route.ts) has a stable EvidenceGroup[] to reuse for
       // naming-only corrections instead of re-running extraction from scratch.
@@ -1020,5 +1044,5 @@ async function finalize(ctx: GenerationRunContext, t0: number): Promise<Response
   const tEnd = Date.now();
   console.log("[generate-capability-finalize][timing] phase2 complete tEnd=" + tEnd + " totalDelta=" + (tEnd - t0) + "ms entryCount=" + capabilityEntries.length);
 
-  return NextResponse.json({ success: true, capabilitySummary, capabilityEntries, recommendedPosition, entryPoint, futurePositions, employerSummary });
+  return NextResponse.json({ success: true, capabilitySummary, capabilityEntries, recommendedPosition, entryPoint, futurePositions, employerSummary: savedEmployerSummary });
 }

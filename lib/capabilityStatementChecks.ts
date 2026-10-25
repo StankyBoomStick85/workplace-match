@@ -67,7 +67,9 @@ export type StatementIssueCode =
   | "self_report_filler"
   | "dash_character"
   | "repeated_glossary_phrase"
-  | "mixed_citation";
+  | "mixed_citation"
+  | "inflated_scale"
+  | "recruiting_as_sales";
 
 export type StatementIssue = {
   code: StatementIssueCode;
@@ -363,6 +365,68 @@ function checkStatementNumbers(
     : [];
 }
 
+// ---------- scale and function fidelity ----------
+// Shared by capability statements (evidence = the cited claims) and the
+// employer summary (evidence = the statements it is written from).
+
+// Scope words that inflate scale unless the evidence itself uses them.
+const SCALE_WORDS =
+  /\b(?:larger?(?:[\s-]scale)?\s+(?:organi[sz]ations?|enterprises?|companies|teams|workforces?|operations)|large-scale|enterprise(?:[\s-]wide|[\s-]level)?|organi[sz]ation[\s-]wide|company[\s-]wide|massive|major\s+organi[sz]ations?)\b/gi;
+// Vague magnitudes are allowed only when a number in the evidence reaches them.
+const MAGNITUDE_WORDS = /\b(?:(?:several|many)\s+)?(hundreds|thousands)\b|\bseveral\s+(hundred|thousand)\b/gi;
+
+// Phrases in `text` that claim more scale than `evidenceTexts` supports.
+export function findScaleInflation(text: string, evidenceTexts: string[]): string[] {
+  const evidence = evidenceTexts.join("\n");
+  const evidenceLower = evidence.toLowerCase();
+  const out = new Set<string>();
+  for (const m of text.matchAll(SCALE_WORDS)) {
+    if (!evidenceLower.includes(m[0].toLowerCase())) out.add(m[0].toLowerCase());
+  }
+  // Headcount-style numbers only: a dollar amount or a percentage never
+  // supports "hundreds of people".
+  const countText = evidence
+    .replace(/\$\s?[\d,.]+\s*(?:[kmb]\b|million|billion|thousand)?/gi, " ")
+    .replace(/[\d,.]+\s*(?:%|percent)/gi, " ");
+  const maxNumber = Math.max(0, ...extractClaimNumbers(countText));
+  for (const m of text.matchAll(MAGNITUDE_WORDS)) {
+    const unit = (m[1] ?? m[2] ?? "").toLowerCase();
+    const needed = unit.startsWith("thousand") ? 2000 : 200;
+    if (maxNumber < needed && !evidenceLower.includes(m[0].toLowerCase())) out.add(m[0].toLowerCase());
+  }
+  return [...out];
+}
+
+const SALES_WORDS = /\b(?:sales|sell(?:s|ing)?|sold)\b/i;
+
+// True when `text` calls recruiting work "sales" and the evidence describes
+// recruiting but never sales.
+export function relabelsRecruitingAsSales(text: string, evidenceTexts: string[]): boolean {
+  const evidence = evidenceTexts.join("\n");
+  return /\brecruit/i.test(evidence) && !SALES_WORDS.test(evidence) && SALES_WORDS.test(text);
+}
+
+function checkFidelity(texts: string[], evidenceTexts: string[]): StatementIssue[] {
+  const issues: StatementIssue[] = [];
+  const joined = texts.join("\n");
+  const inflated = findScaleInflation(joined, evidenceTexts);
+  if (inflated.length > 0) {
+    issues.push({
+      code: "inflated_scale",
+      detail: `claims more scale than the cited evidence shows: ${inflated.map((w) => `"${w}"`).join(", ")}. State the scope the numbers show (e.g. "teams of up to 100")`,
+    });
+  }
+  if (relabelsRecruitingAsSales(joined, evidenceTexts)) {
+    issues.push({ code: "recruiting_as_sales", detail: 'calls recruiting work "sales"; name it as recruiting or talent acquisition' });
+  }
+  return issues;
+}
+
+function citedSourceTexts(proof: ProofLine[], groupsById: Map<string, CheckGroup>, sourceTextsFor: (ids: string[]) => string[]): string[] {
+  const cited = [...new Set(proof.flatMap((p) => (Array.isArray(p.groupIds) ? p.groupIds : [])).filter((id) => groupsById.has(id)))];
+  return sourceTextsFor(cited);
+}
+
 export type CheckContext = {
   groupsById: Map<string, CheckGroup>;
   // Texts the numbers in a proof line may come from, given its cited groups.
@@ -396,6 +460,7 @@ export function checkCoreStatement(s: CoreStatement, ctx: CheckContext): Stateme
   }
   issues.push(...checkItemText(s.statement ?? "", proof.map((p) => p.text ?? "")));
   issues.push(...checkSharedText([s.statement ?? "", ...proof.map((p) => p.text ?? "")]));
+  issues.push(...checkFidelity([s.statement ?? "", ...proof.map((p) => p.text ?? "")], citedSourceTexts(proof, ctx.groupsById, sourceTextsFor)));
   return issues;
 }
 
@@ -417,6 +482,9 @@ export function checkNicheCapability(s: NicheCapability, ctx: CheckContext): Sta
   issues.push(...checkStatementNumbers(s.statement ?? "", proof, ctx.groupsById, sourceTextsFor));
   issues.push(...checkItemText(s.statement ?? "", proof.map((p) => p.text ?? ""), s.applicability ?? []));
   issues.push(...checkSharedText([s.statement ?? "", ...proof.map((p) => p.text ?? ""), ...(s.applicability ?? [])]));
+  // Applicability tags name where a skill matters to an employer, not a claim
+  // about the person, so only the statement and proof are held to fidelity.
+  issues.push(...checkFidelity([s.statement ?? "", ...proof.map((p) => p.text ?? "")], citedSourceTexts(proof, ctx.groupsById, sourceTextsFor)));
   return issues;
 }
 

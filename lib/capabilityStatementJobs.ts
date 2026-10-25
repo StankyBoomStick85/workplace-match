@@ -28,7 +28,14 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
-import { buildGuardRewritePrompt, generateEmployerSummary, type EvidenceGroup, type StoredDoc } from "@/lib/capabilityPipeline";
+import {
+  buildGuardRewritePrompt,
+  employerSummaryStoreBlockers,
+  generateEmployerSummary,
+  type EmployerSummaryInput,
+  type EvidenceGroup,
+  type StoredDoc,
+} from "@/lib/capabilityPipeline";
 import { scanEmployerFacingText } from "@/lib/employerTextGuard";
 import {
   DEFAULT_SYNTHESIS_MODEL,
@@ -324,14 +331,15 @@ async function runSummaryStep(adminClient: SupabaseClient, job: JobRow, seq: num
   };
   const knownFullName = job.input.knownFullName;
   try {
-    const generated = await generateEmployerSummary(anthropic, {
+    const summaryInput: EmployerSummaryInput = {
       capabilityStatements: result.core,
       capabilitySummary: "",
       selfSummary: profile?.summary ?? job.input.context?.summary ?? null,
       desiredRoles: Array.isArray(profile?.job_types) && profile.job_types.length > 0 ? profile.job_types.join(", ") : null,
       workPreference: profile?.work_preference ?? null,
       isAlternateSummary: profile?.summary_priority === "alternate",
-    });
+    };
+    const generated = await generateEmployerSummary(anthropic, summaryInput);
     summary.formatIssues = generated.formatIssues;
     let text = generated.text;
     let violations = text ? scanEmployerFacingText(text, { knownFullName }) : [];
@@ -355,8 +363,11 @@ async function runSummaryStep(adminClient: SupabaseClient, job: JobRow, seq: num
       }
     }
     summary.guardViolations = violations.map((v) => ({ category: v.category, match: v.match }));
+    // Re-checked on the final text: a guard rewrite can change the format.
+    summary.formatIssues = text ? employerSummaryStoreBlockers(text, summaryInput) : summary.formatIssues;
     if (!text) summary.skippedReason = "empty response";
     else if (violations.length > 0) summary.skippedReason = "identity guard still flagged the summary after one rewrite";
+    else if (summary.formatIssues.length > 0) summary.skippedReason = `failed format checks: ${summary.formatIssues.join(" ")}`;
     else summary.text = text;
   } catch (err) {
     summary.skippedReason = `employer summary call failed: ${err instanceof Error ? err.message : String(err)}`;

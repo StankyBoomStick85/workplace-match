@@ -7,8 +7,10 @@ import {
   buildStep3Prompt,
   buildStep4Prompt,
   generateEmployerSummary,
+  employerSummaryStoreBlockers,
   parseStep3Response,
   extractStep4Sections,
+  type EmployerSummaryInput,
   type EvidenceGroup,
   type StoredDoc,
   type Step3Result
@@ -59,7 +61,7 @@ export async function POST(request: Request) {
 
   const { data: profile, error: profileError } = await adminClient
     .from("candidate_profiles")
-    .select("display_name, job_types, experience_level, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, document_metadata, capability_statements")
+    .select("display_name, job_types, experience_level, work_preference, capability_tags, summary, summary_priority, pending_evidence_groups, document_metadata, capability_statements, employer_summary")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -224,17 +226,18 @@ export async function POST(request: Request) {
 
   const isAlternateSummary = profile.summary_priority === "alternate";
   let employerSummary = "";
+  // A Tier 1 correction never changes grouping, so stored capability
+  // statements (if any) are still valid and are the preferred source.
+  const employerSummaryInput: EmployerSummaryInput = {
+    capabilityStatements: Array.isArray(profile.capability_statements) ? profile.capability_statements : null,
+    capabilitySummary,
+    selfSummary: profile.summary ?? null,
+    desiredRoles: Array.isArray(profile.job_types) && profile.job_types.length > 0 ? profile.job_types.join(", ") : null,
+    workPreference: profile.work_preference ?? null,
+    isAlternateSummary
+  };
   try {
-    // A Tier 1 correction never changes grouping, so stored capability
-    // statements (if any) are still valid and are the preferred source.
-    const generated = await generateEmployerSummary(anthropic, {
-      capabilityStatements: Array.isArray(profile.capability_statements) ? profile.capability_statements : null,
-      capabilitySummary,
-      selfSummary: profile.summary ?? null,
-      desiredRoles: Array.isArray(profile.job_types) && profile.job_types.length > 0 ? profile.job_types.join(", ") : null,
-      workPreference: profile.work_preference ?? null,
-      isAlternateSummary
-    });
+    const generated = await generateEmployerSummary(anthropic, employerSummaryInput);
     const employerStopReason = generated.stopReason;
     employerSummary = generated.text;
     if (generated.formatIssues.length > 0) {
@@ -343,6 +346,25 @@ export async function POST(request: Request) {
     );
   }
 
+  // Format gate on the post-guard text (a summary the identity guard redacted
+  // is empty here and blocked too). A blocked summary is never stored: the
+  // previous summary stays and the failure is reported.
+  const summaryBlockers = employerSummaryStoreBlockers(employerSummary, employerSummaryInput);
+  const storeEmployerSummary = summaryBlockers.length === 0;
+  if (!storeEmployerSummary) {
+    await reportGenerationFailure({
+      adminClient,
+      sendEmailFn: sendEmail,
+      route: "correct-capability",
+      errorType: "employer_summary_not_stored",
+      message: `Employer summary failed checks and was not stored; previous summary kept: ${summaryBlockers.join(" ")}`,
+      userId: user.id,
+      severity: "high",
+      metadata: { blockers: summaryBlockers, rejectedText: employerSummary.slice(0, 4000), hadPreviousSummary: Boolean(profile.employer_summary) }
+    });
+  }
+  const savedEmployerSummary: string = storeEmployerSummary ? employerSummary : profile.employer_summary ?? "";
+
   // Tier 1 never changes grouping, so pending_evidence_groups is left exactly as it
   // was for the next correction to reuse.
   const { error: updateError } = await adminClient
@@ -353,7 +375,7 @@ export async function POST(request: Request) {
       recommended_position: recommendedPosition,
       entry_point: entryPoint,
       future_positions: futurePositions,
-      employer_summary: employerSummary,
+      ...(storeEmployerSummary ? { employer_summary: employerSummary } : {}),
       is_approved: false,
       correction_notes: correctionMessage,
     })
@@ -375,6 +397,6 @@ export async function POST(request: Request) {
     recommendedPosition,
     entryPoint,
     futurePositions,
-    employerSummary
+    employerSummary: savedEmployerSummary
   });
 }

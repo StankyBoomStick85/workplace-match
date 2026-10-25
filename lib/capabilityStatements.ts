@@ -157,6 +157,8 @@ WHAT TO PRODUCE
    - One sentence, under ${STATEMENT_MAX_WORDS + 1} words, specific about scope and stakes, readable in five seconds.
    - Write in the vocabulary a civilian hiring manager uses, strictly, in the statement and every proof line: "specialists" not "operators", "team" not "element" or "unit", "official records" not "service record". If a hiring manager in an ordinary company would not say the word, find the word they would.
    - Do not repeat the same glossary phrasing across statements. If one statement already says a team "works independently far from support", the others describe their own point in their own words.
+   - Match the scale the cited evidence shows; never inflate it. Teams of 12 to 100 are teams, not "large organizations" or "larger organizations"; nothing is "large-scale", "enterprise", "organization-wide", or "major" unless a cited claim says so; "hundreds" or "thousands" only when a cited number reaches them.
+   - Name each function for what it is. Recruiting is recruiting (or talent acquisition), never sales, selling, or "sales-style"; training is training. Do not relabel past work to fit a role the person wants.
    - Strongest first. Fewer strong statements beat many thin ones; a thin profile ships with as few as 3.
    - Specialized skills (see "niche") never go here.
 
