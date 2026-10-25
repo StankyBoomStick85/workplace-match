@@ -105,6 +105,20 @@ const summary = (thrives, growing = "Leading operations for a company where tech
   expect("thrives: title allowed when only_these", issues(summary("Director of Operations in operations leadership; remote"), onlyDir) === "");
   expect("thrives: no direction -> no direction checks (legacy)", issues(summary("Director of Operations; remote"), null) === "");
 
+  // THRIVES IN names only the best 2-3 of many families; "open" reads as "any work setting".
+  const fiveDir = dir.normalizeDirection({
+    roleFamilies: ["operations_leadership", "executive_leadership", "program_project_management", "customer_success", "recruiting_talent"],
+    scope: "open_related",
+    workSetting: "open",
+  }).direction;
+  expect("thrives: 4+ of 5 families named -> rejected", /names 5 role families; name only the 2 or 3/.test(issues(summary("Operations leadership, executive leadership, program management, customer success, and recruiting; any work setting"), fiveDir)));
+  expect("thrives: 2 of 5 families named passes", issues(summary("Operations leadership and recruiting; any work setting"), fiveDir) === "", issues(summary("Operations leadership and recruiting; any work setting"), fiveDir));
+  expect("thrives: bare 'open' setting rejected", /ends in "open"/.test(issues(summary("Operations leadership and recruiting; open"), fiveDir)));
+  const fivePrompt = pipeline.buildEmployerSummaryUserPrompt(input(fiveDir));
+  expect("summary prompt: many families -> 2 or 3 the evidence supports best", /the 2 or 3 target role families from DIRECTION that the EVIDENCE supports best \(never all of them/.test(fivePrompt));
+  expect("summary prompt: 'open' rendered as 'any work setting'", fivePrompt.includes('("any work setting")') && fivePrompt.includes("Work setting: any work setting") && !/Work setting: open/.test(fivePrompt));
+  expect("summary prompt: 3 or fewer families -> no 'never all of them'", !/never all of them/.test(pipeline.buildEmployerSummaryUserPrompt(input(openDir))));
+
   const prompt = pipeline.buildEmployerSummaryUserPrompt(input(openDir));
   expect("summary prompt: lists the selected families", prompt.includes('"Operations leadership"') && prompt.includes('"Business development and partnerships"'));
   expect("summary prompt: open -> never a specific title", /Never a specific job title \(no director, manager, officer, chief, or similar\)/.test(prompt));

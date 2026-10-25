@@ -3,10 +3,12 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getCivilianDocLabel } from "@/lib/documentLabels";
 import { findScaleInflation, findUnsourcedNumbers, relabelsRecruitingAsSales } from "@/lib/capabilityStatementChecks";
 import {
+  THRIVES_IN_MAX_FAMILIES,
   familiesNamedIn,
   findTitleWords,
   formatDirectionForPrompt,
   roleFamilyLabels,
+  workSettingPhrase,
   type CandidateDirection,
 } from "@/lib/candidateDirection";
 import { CIVILIAN_LANGUAGE_RULES, GUIDING_PRINCIPLE, describeSettingLanguage, findSettingLanguage } from "@/lib/civilianLanguage";
@@ -1425,7 +1427,8 @@ export type EmployerSummaryInput = {
 
 export const EMPLOYER_SUMMARY_PROVEN_MIN = 3;
 export const EMPLOYER_SUMMARY_PROVEN_MAX = 5;
-export const EMPLOYER_SUMMARY_BULLET_MAX_WORDS = 19; // "under 20 words"
+// Hard block. The prompt asks for 12-17 words; this is only the ceiling.
+export const EMPLOYER_SUMMARY_BULLET_MAX_WORDS = 22;
 export const EMPLOYER_SUMMARY_HEADLINE_MAX_WORDS = 20; // "about 15 words"
 
 // The evidence the summary is written from, as text. Exported so the format
@@ -1453,7 +1456,11 @@ export function buildEmployerSummaryUserPrompt(input: EmployerSummaryInput): str
   const families = d ? roleFamilyLabels(d) : [];
   const onlyThese = d?.scope === "only_these";
   const thrivesIn = d
-    ? `One line: the target role families from DIRECTION (${families.map((f) => `"${f}"`).join(", ")}), named in those words, then the work setting ("${d.workSetting}"), e.g. "${families.slice(0, 3).join(", ").toLowerCase()}; ${d.workSetting}".${
+    ? `One line: ${
+        families.length > THRIVES_IN_MAX_FAMILIES
+          ? `the 2 or 3 target role families from DIRECTION that the EVIDENCE supports best (never all of them; choose from ${families.map((f) => `"${f}"`).join(", ")})`
+          : `the target role families from DIRECTION (${families.map((f) => `"${f}"`).join(", ")})`
+      }, named in those words, then the work setting ("${workSettingPhrase(d.workSetting)}"), e.g. "${families.slice(0, 2).join(", ").toLowerCase()}; ${workSettingPhrase(d.workSetting)}".${
         onlyThese
           ? ` They want ONLY these roles, so name them too: ${(d.titles ?? []).map((t) => `"${t}"`).join(", ")}.`
           : " Never a specific job title (no director, manager, officer, chief, or similar): they are open to related roles across these families."
@@ -1633,7 +1640,7 @@ export function checkEmployerSummaryFormat(text: string, input: EmployerSummaryI
     const total = wordCount(item.lead) + wordCount(item.proof);
     if (total > EMPLOYER_SUMMARY_BULLET_MAX_WORDS) {
       issues.push(
-        `${label} has ${total} words counting the bold lead phrase; the limit is ${EMPLOYER_SUMMARY_BULLET_MAX_WORDS}. Cut at least ${total - 17} words from it (aim for 17 or fewer) and keep it under 20.`
+        `${label} has ${total} words counting the bold lead phrase; the hard limit is ${EMPLOYER_SUMMARY_BULLET_MAX_WORDS}. Cut at least ${total - 17} words from it (aim for 17 or fewer).`
       );
     }
     const unsourced = findUnsourcedNumbers(item.proof, [evidenceText]);
@@ -1657,15 +1664,23 @@ export function checkEmployerSummaryFormat(text: string, input: EmployerSummaryI
   if (settingHits.length > 0) {
     issues.push(`Uses wording that reveals the setting instead of the capability: ${describeSettingLanguage(settingHits)}.`);
   }
-  if (/\boperations leader\b/i.test(parsed.headline)) {
-    issues.push('HEADLINE says "operations leader"; say what they lead (teams, projects, programs).');
+  // "operations leader", "operations and program leader", ...: generic.
+  const genericHeadline = parsed.headline.match(/\boperations\b.*?\bleaders?\b/i);
+  if (genericHeadline) {
+    issues.push(`HEADLINE says "${genericHeadline[0]}"; say what they lead (teams, projects, programs), not a generic operations leader.`);
   }
   // Direction: THRIVES_IN is written from the selected role families, and
   // names a specific title only when the candidate wants only those roles.
   if (input.direction) {
     const labels = roleFamilyLabels(input.direction);
-    if (familiesNamedIn(parsed.thrivesIn, input.direction).length === 0) {
+    const named = familiesNamedIn(parsed.thrivesIn, input.direction);
+    if (named.length === 0) {
       issues.push(`THRIVES_IN must name at least one of the selected role families: ${labels.map((l) => `"${l}"`).join(", ")}.`);
+    } else if (named.length > THRIVES_IN_MAX_FAMILIES) {
+      issues.push(`THRIVES_IN names ${named.length} role families; name only the 2 or 3 the evidence supports best.`);
+    }
+    if (input.direction.workSetting === "open" && /(?:^|[;,]\s*)open\.?\s*$/i.test(parsed.thrivesIn.trim())) {
+      issues.push('THRIVES_IN ends in "open"; write the work setting as "any work setting".');
     }
     if (input.direction.scope !== "only_these") {
       const titleWords = findTitleWords(parsed.thrivesIn);

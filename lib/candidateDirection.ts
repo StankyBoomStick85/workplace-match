@@ -102,6 +102,14 @@ export function directionCompatColumns(direction: CandidateDirection): { job_typ
   return { job_types: jobTypes, work_preference: direction.workSetting };
 }
 
+// How a work setting reads in employer-facing text: "open" alone reads oddly.
+export function workSettingPhrase(setting: WorkSetting): string {
+  return setting === "open" ? "any work setting" : setting;
+}
+
+// THRIVES IN names the families the evidence supports best, never all of them.
+export const THRIVES_IN_MAX_FAMILIES = 3;
+
 // Plain-text direction for prompts (scorers, alternate paths, Step 4). Always
 // framed by the caller as context about what the person wants, not evidence.
 export function formatDirectionForPrompt(direction: CandidateDirection): string {
@@ -111,7 +119,7 @@ export function formatDirectionForPrompt(direction: CandidateDirection): string 
       ? `Wants ONLY these specific roles: ${(direction.titles ?? []).join("; ")}`
       : "Open to related roles in these families (no single target title)"
   );
-  lines.push(`Work setting: ${direction.workSetting}`);
+  lines.push(`Work setting: ${workSettingPhrase(direction.workSetting)}`);
   if (direction.howIWantToWork) lines.push(`How they want to work: ${direction.howIWantToWork}`);
   return lines.join("\n");
 }
