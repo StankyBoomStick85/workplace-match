@@ -616,6 +616,8 @@ function expect(name, cond, detail = "") {
     const pr = pipeline.buildEmployerSummaryUserPrompt(input);
     expect("summary prompt: bullets chosen by DIRECTION, not countability", /pick by relevance to DIRECTION, never by how easy a fact is to quantify/.test(pr) && /Administrative facts \(pay records, inventories/.test(pr) && /decisions under pressure/.test(pr));
   }
+  expect("prompts: preferred civilian rewrites in summary and statement prompts", /"allied nations" -> "partner countries"/.test(pipeline.buildEmployerSummaryUserPrompt(input)) && /"mission success rate" -> "success rate"/.test(synth.buildSynthesisPrompt([], [])));
+  expect("guard: preferred-rewrite phrases are NOT hard identity violations", employerGuard.scanEmployerFacingText("100% mission success rate across high-threat movements with 8 allied nations in a multinational staff exercise", {}).length === 0);
   expect("store gate: valid summary may be stored", pipeline.employerSummaryStoreBlockers(good, input).length === 0, JSON.stringify(pipeline.employerSummaryStoreBlockers(good, input)));
   expect("store gate: empty summary blocked", pipeline.employerSummaryStoreBlockers("", input).length > 0);
   expect("store gate: preamble before ## HEADLINE blocked", /before ## HEADLINE/.test(pipeline.employerSummaryStoreBlockers("Looking at the evidence carefully, there are no numbers.\n\n" + good, input).join(" ")));

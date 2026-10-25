@@ -1462,7 +1462,7 @@ Optional. Include it only if there is a clear, specific, fixable gap for the rol
 
 Rules:
 - Present and direction first; the past is evidence, not identity.
-- Plain civilian business language. Do not reuse jargon from the evidence.
+- Plain civilian business language. Do not reuse jargon from the evidence. Preferred rewrites: "mission success rate" -> "success rate"; "high-threat movements" -> "high-risk operations"; "allied nations" -> "partner countries" (or just the count); "multinational staff exercise" -> "international planning exercise".
 - Do not mention physical fitness or physical performance unless their direction is physical work.
 - No paragraphs, no em dashes or en dashes, no sentence that names a past organization, place, date, or rank.
 - Numbers come only from the EVIDENCE.
