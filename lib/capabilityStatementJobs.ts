@@ -221,6 +221,9 @@ export type StepOutcome =
 // What the job did with the employer summary (written from the new statements).
 export type JobEmployerSummary = {
   text: string | null;
+  // A generated summary that was NOT stored (failed a check), kept on the
+  // admin-only job row for review. Never written to the profile.
+  rejectedText?: string | null;
   formatIssues: string[];
   guardViolations: Array<{ category: string; match: string }>;
   guardRewriteAttempted: boolean;
@@ -398,6 +401,7 @@ async function runSummaryStep(adminClient: SupabaseClient, job: JobRow, seq: num
     else if (violations.length > 0) summary.skippedReason = "identity guard still flagged the summary after one rewrite";
     else if (summary.formatIssues.length > 0) summary.skippedReason = `failed format checks: ${summary.formatIssues.join(" ")}`;
     else summary.text = text;
+    if (text && !summary.text) summary.rejectedText = text;
   } catch (err) {
     summary.skippedReason = `employer summary call failed: ${err instanceof Error ? err.message : String(err)}`;
   }

@@ -1445,7 +1445,7 @@ One line, about 15 words (never more than ${EMPLOYER_SUMMARY_HEADLINE_MAX_WORDS}
 ## PROVEN_AT
 ${EMPLOYER_SUMMARY_PROVEN_MIN} to ${EMPLOYER_SUMMARY_PROVEN_MAX} bullets, one per line, each exactly in the form:
 - **Lead phrase**: one line of proof
-The lead phrase is 2-4 words in bold, followed by a colon. The proof contains at least one concrete number taken from the EVIDENCE below. The whole bullet is under 20 words.
+The lead phrase is 2-4 words in bold, followed by a colon. The proof contains at least one concrete number taken from the EVIDENCE below. Length: the lead phrase and the proof TOGETHER are 12 to 17 words, and never more than ${EMPLOYER_SUMMARY_BULLET_MAX_WORDS}; count every word of both before answering, and cut the proof rather than run over.
 Choosing the bullets: pick by relevance to DIRECTION, never by how easy a fact is to quantify. First decide what the roles in DIRECTION are judged on, then pick the evidence that proves exactly that.
 - When DIRECTION centers on leadership, trust, authority, or relationships, prefer evidence of judgment, decisions under pressure, leading and developing people, advising senior leaders, and building relationships or partnerships.
 - Administrative facts (pay records, inventories, equipment or property accountability, paperwork or records tracking) appear only when DIRECTION is administrative or logistics work.
@@ -1602,7 +1602,11 @@ export function checkEmployerSummaryFormat(text: string, input: EmployerSummaryI
     if (!item.lead || leadWords < 2 || leadWords > 4) issues.push(`${label} needs a bold 2-4 word lead phrase in the form "- **Lead phrase** proof".`);
     if (!/\d/.test(item.proof)) issues.push(`${label} needs a concrete number from the evidence.`);
     const total = wordCount(item.lead) + wordCount(item.proof);
-    if (total > EMPLOYER_SUMMARY_BULLET_MAX_WORDS) issues.push(`${label} has ${total} words; keep it under 20.`);
+    if (total > EMPLOYER_SUMMARY_BULLET_MAX_WORDS) {
+      issues.push(
+        `${label} has ${total} words counting the bold lead phrase; the limit is ${EMPLOYER_SUMMARY_BULLET_MAX_WORDS}. Cut at least ${total - 17} words from it (aim for 17 or fewer) and keep it under 20.`
+      );
+    }
     const unsourced = findUnsourcedNumbers(item.proof, [evidenceText]);
     if (unsourced.length > 0) issues.push(`${label} uses number(s) not in the evidence: ${unsourced.map((u) => u.raw).join(", ")}.`);
     const filler = item.proof.match(SUMMARY_FILLER_TAIL);
@@ -1638,9 +1642,11 @@ export type EmployerSummaryGeneration = {
   attempts: number;
 };
 
-// One generation plus, when the format check fails, one targeted retry with
-// the exact issues named. Returns whichever attempt has fewer issues. Throws
-// on an API error (callers already report those).
+// One generation plus, while the format check fails, up to
+// EMPLOYER_SUMMARY_FORMAT_RETRIES targeted retries, each naming the exact
+// issues in the latest attempt. Returns the first clean attempt, else the one
+// with the fewest issues. Throws on an API error (callers already report those).
+export const EMPLOYER_SUMMARY_FORMAT_RETRIES = 2;
 export async function generateEmployerSummary(
   anthropic: Anthropic,
   input: EmployerSummaryInput,
@@ -1663,11 +1669,18 @@ export async function generateEmployerSummary(
   const firstIssues = first.text ? checkEmployerSummaryFormat(first.text, input) : ["Empty response."];
   if (firstIssues.length === 0) return { ...first, formatIssues: [], attempts: 1 };
 
-  const retry = await call(
-    `${userPrompt}\n\nYOUR PREVIOUS ANSWER (REJECTED):\n${first.text}\n\nFix exactly these problems and return the full summary again in the same format:\n${firstIssues.map((i) => `- ${i}`).join("\n")}`
-  );
-  const retryIssues = retry.text ? checkEmployerSummaryFormat(retry.text, input) : ["Empty response."];
-  return retryIssues.length <= firstIssues.length
-    ? { ...retry, formatIssues: retryIssues, attempts: 2 }
-    : { ...first, formatIssues: firstIssues, attempts: 2 };
+  let best = { ...first, formatIssues: firstIssues };
+  let latest = best;
+  let attempts = 1;
+  for (let i = 0; i < EMPLOYER_SUMMARY_FORMAT_RETRIES; i++) {
+    const retry = await call(
+      `${userPrompt}\n\nYOUR PREVIOUS ANSWER (REJECTED):\n${latest.text}\n\nFix exactly these problems and return the full summary again in the same format:\n${latest.formatIssues.map((x) => `- ${x}`).join("\n")}`
+    );
+    attempts++;
+    const retryIssues = retry.text ? checkEmployerSummaryFormat(retry.text, input) : ["Empty response."];
+    latest = { ...retry, formatIssues: retryIssues };
+    if (retryIssues.length <= best.formatIssues.length) best = latest;
+    if (retryIssues.length === 0) break;
+  }
+  return { ...best, attempts };
 }
