@@ -448,16 +448,25 @@ export async function GET(request: Request) {
     if (resource === "admin-summary") {
       if (!user) return notAuthenticated();
       if (!(await getCaller()).isAdmin) return forbidden();
-      const [messages, notifications] = await Promise.all([
+      const [messages, notifications, skills] = await Promise.all([
         adminClient.from("match_messages").select("id"),
-        adminClient.from("notifications").select("type")
+        adminClient.from("notifications").select("type"),
+        adminClient.from("candidate_profiles").select("user_id, capability_tags")
       ]);
       if (messages.error) throw messages.error;
       if (notifications.error) throw notifications.error;
+      if (skills.error) throw skills.error;
+      // Admin-only: per-candidate skill COUNTS. capability_tags left the
+      // shared "candidate-profiles" allowlist so it never reaches an employer.
+      const skillCounts: Record<string, number> = {};
+      for (const row of skills.data ?? []) {
+        skillCounts[row.user_id] = Array.isArray(row.capability_tags) ? row.capability_tags.length : 0;
+      }
       return NextResponse.json({
         data: {
           messages: messages.data ?? [],
-          notifications: notifications.data ?? []
+          notifications: notifications.data ?? [],
+          skillCounts
         }
       });
     }

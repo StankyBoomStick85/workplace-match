@@ -24,15 +24,18 @@ export type MvpApplicantProfile = {
   employerSummary?: string;
   // capability_entries is deliberately absent: employers see the employer
   // summary only, and the "candidate-profiles" read no longer returns entries.
-  // topSkills is populated only on a candidate's OWN profile read; the
-  // employer-facing "candidate-profiles" read never returns capability_tags,
-  // so it is always empty in any employer view (match % there is the stored
-  // AI score - see getEmployerMatchScores).
+  // topSkills is the candidate's OWN signup skills (capability_tags). It is
+  // never part of MvpEmployerViewProfile below.
   topSkills?: string[];
   experienceLevel?: string;
   updatedAt?: string;
   profilePictureUrl?: string;
 };
+
+// What the employer-facing "candidate-profiles" read returns. No raw signup
+// skills (capability_tags): the match % an employer sees is the stored AI
+// score (see getEmployerMatchScores).
+export type MvpEmployerViewProfile = Omit<MvpApplicantProfile, "topSkills">;
 
 export type MvpEmployerProfile = {
   userId: string;
@@ -134,9 +137,12 @@ export async function getApplicantProfile(userId: string) {
   return mapCandidateProfile(data);
 }
 
-export async function getAllApplicantProfiles() {
+export async function getAllApplicantProfiles(): Promise<MvpEmployerViewProfile[]> {
   const data = await fetchMvpData<any[]>("candidate-profiles");
-  return data.map(mapCandidateProfile);
+  return data.map((row) => {
+    const { topSkills: _omitted, ...profile } = mapCandidateProfile(row);
+    return profile;
+  });
 }
 
 export async function getEmployerProfile(userId: string) {

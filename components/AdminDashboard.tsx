@@ -430,7 +430,7 @@ async function buildAdminData() {
     const zipCode = profile.zipCode || "";
     const cityState = zipCityStateLookup[zipCode] ?? null;
     const applicantId = profile.userId;
-    const skillsCount = Array.isArray(profile.topSkills) ? profile.topSkills.length : 0;
+    const skillsCount = Number(messageResult.data?.skillCounts?.[applicantId] ?? 0);
 
     return {
       id: applicantId,

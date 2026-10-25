@@ -377,25 +377,73 @@ function expect(name, cond, detail = "") {
   const fixed = good("Plans multinational logistics across borders on schedule.", { text: "Coordinated 15 logistics movements", groupIds: ["e"] }, { text: "Planned air support for 8 months", groupIds: ["e", "c"] });
   const responses = [
     { core: [ok1, ok2, bad], niche: [], uncertainTerms: [{ term: "X", assumedMeaning: "y", reason: "z" }] },
+    { core: [], niche: [], uncertainTerms: [] },
     { core: [fixed], niche: [], uncertainTerms: [] },
   ];
   const prompts = [];
-  const anthropic = {
+  const efforts = [];
+  // A response of "HANG" never resolves until the call is aborted.
+  const mockClient = (queue) => ({
     messages: {
       stream: (params) => {
         prompts.push(params.messages[0].content);
-        const body = responses.shift();
-        return { finalMessage: async () => ({ model: params.model, stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 }, content: [{ type: "text", text: JSON.stringify(body) }] }) };
+        efforts.push(params.output_config?.effort);
+        const body = queue.shift();
+        let abort = () => {};
+        const aborted = new Promise((_, reject) => (abort = () => reject(new Error("Request was aborted."))));
+        return {
+          abort,
+          finalMessage: async () =>
+            body === "HANG"
+              ? aborted
+              : { model: params.model, stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 }, content: [{ type: "text", text: JSON.stringify(body) }] },
+        };
       },
     },
-  };
+  });
+  const anthropic = mockClient(responses);
   const result = await synth.runCapabilityStatementSynthesis({ anthropic, groups, storedDocs: [], knownFullName: "Joel DeToy", model: "claude-fable-5-1" });
   expect("state machine: ok after one targeted retry", result.status === "ok", JSON.stringify({ status: result.status, notes: result.notes, rejected: result.rejected }));
-  expect("state machine: 2 model calls", result.calls.length === 2);
+  expect("state machine: core call, niche call, 1 retry", result.calls.map((c) => c.phase).join(",") === "initial_core,initial_niche,retry_1", result.calls.map((c) => c.phase).join(","));
+  expect("state machine: core call asks for core only", /THIS CALL - CORE ONLY/.test(prompts[0]) && !/THIS CALL - NICHE ONLY/.test(prompts[0]));
+  expect("state machine: niche call asks for niche only and sees accepted core", /THIS CALL - NICHE ONLY/.test(prompts[1]) && prompts[1].includes(ok1.statement));
   expect("state machine: replacement lands in the failed slot", result.core[2]?.statement === fixed.statement, JSON.stringify(result.core.map((c) => c.statement)));
-  expect("state machine: retry prompt names the rejected phrases", /core_only_term|"combat"/.test(prompts[1]) && /theater/.test(prompts[1]));
-  expect("state machine: accepted items not re-sent as rejected", !prompts[1].includes("REJECTED CORE STATEMENTS (2)"));
+  expect("state machine: retry prompt names the rejected phrases", /core_only_term|"combat"/.test(prompts[2]) && /theater/.test(prompts[2]));
+  expect("state machine: accepted items not re-sent as rejected", !prompts[2].includes("REJECTED CORE STATEMENTS (2)"));
   expect("state machine: uncertain terms carried through", result.uncertainTerms.length === 1);
+
+  // A state saved before the split ("initial") resumes as the core step.
+  {
+    const legacy = { ...synth.createSynthesisState("claude-fable-5-1"), next: "initial" };
+    delete legacy.effort;
+    delete legacy.phaseFailures;
+    const step = await synth.runSynthesisStep(legacy, { anthropic: mockClient([{ core: [ok1, ok2], niche: [], uncertainTerms: [] }]), groups, storedDocs: [], knownFullName: null });
+    expect("state machine: legacy 'initial' state runs as core step", step.calls[0]?.phase === "initial_core" && step.next === "initial_niche");
+  }
+
+  // A call that hangs is aborted at the timeout, recorded, and its phase is
+  // run again at medium effort; later calls stay at medium.
+  {
+    prompts.length = 0;
+    efforts.length = 0;
+    const t0 = Date.now();
+    const r = await synth.runCapabilityStatementSynthesis({
+      anthropic: mockClient(["HANG", { core: [ok1, ok2, fixed], niche: [], uncertainTerms: [] }, { core: [], niche: [], uncertainTerms: [] }]),
+      groups, storedDocs: [], knownFullName: null, model: "claude-fable-5-1", callTimeoutMs: 50,
+    });
+    expect("timeout: hung call aborted within the timeout", Date.now() - t0 < 2000);
+    expect("timeout: recorded as timed out", r.calls[0]?.timedOut === true && /timed out/.test(r.calls[0]?.error ?? ""), JSON.stringify(r.calls[0]));
+    expect("timeout: core phase re-run, then niche", r.calls.map((c) => c.phase).join(",") === "initial_core,initial_core,initial_niche", r.calls.map((c) => c.phase).join(","));
+    expect("timeout: first call high effort, later calls medium", efforts.join(",") === "high,medium,medium", efforts.join(","));
+    expect("timeout: run still succeeds", r.status === "ok", JSON.stringify({ status: r.status, notes: r.notes }));
+  }
+  {
+    const r = await synth.runCapabilityStatementSynthesis({
+      anthropic: mockClient(["HANG", "HANG"]),
+      groups, storedDocs: [], knownFullName: null, model: "claude-fable-5-1", callTimeoutMs: 20,
+    });
+    expect("timeout: phase failing twice fails the run", r.status === "failed" && r.calls.length === 2 && /core synthesis failed twice/.test(r.notes.join(" ")), JSON.stringify(r.notes));
+  }
 
   // Cross-statement glossary phrasing: the second statement to use a phrase fails.
   const dupA = good("Runs a team that works independently far from support.", { text: "Accountable for $2M in equipment", groupIds: ["b"] }, { text: "Ranked #2 of 6 peers", groupIds: ["a"] });
@@ -513,6 +561,15 @@ function expect(name, cond, detail = "") {
   expect("summary check: too few bullets rejected", /PROVEN_AT has 2/.test(issues(good.replace(/- \*\*Quota delivery\*\*.*\n/, ""))));
   expect("summary check: long bullet rejected", /keep it under 20/.test(issues(good.replace("Trained over 500 people across 5 program rounds", "Trained over 500 people across 5 program rounds while also building curriculum, coaching instructors, and measuring every result"))));
   expect("summary check: old-format text is reported as missing sections", /Missing required sections/.test(issues("## BEST_FIT\nx\n## STRENGTHS\n- y\n## GROWTH\nz")));
+  expect("summary check: filler tail rejected", /filler/.test(issues(good.replace("with zero loss", "corroborated across multiple performance reviews"))));
+  expect("summary check: inflated scale rejected", /Inflates scale/.test(issues(good.replace("builds accountable teams", "leads large organizations"))));
+  expect("summary check: scale word allowed when the evidence uses it", !/Inflates scale/.test(pipeline.checkEmployerSummaryFormat(good.replace("builds accountable teams", "runs large-scale training"), { ...input, capabilityStatements: [...input.capabilityStatements, { statement: "Runs large-scale training.", proof: [] }] }).join(" ")));
+  expect("summary check: recruiting called sales rejected", /recruiting work "sales"/.test(issues(good.replace("Quota delivery** Delivered 134% of an annual recruiting target", "Sales results** Delivered 134% of an annual sales target"))));
+  expect("summary check: sales role family in THRIVES_IN still allowed", !/recruiting work/.test(issues(good.replace("business development", "sales"))));
+  const colonLead = pipeline.parseEmployerSummary(good.replace("**Asset accountability** ", "**Asset accountability:** ").replace("**Training at scale** ", "**Training at scale**: "));
+  expect("summary v2: colon after lead, inside or outside the bold, is not part of lead or proof", colonLead.provenAt[0].lead === "Asset accountability" && colonLead.provenAt[0].proof.startsWith("Kept") && colonLead.provenAt[1].lead === "Training at scale" && colonLead.provenAt[1].proof.startsWith("Trained"), JSON.stringify(colonLead.provenAt.slice(0, 2)));
+  expect("summary prompt: lead phrase followed by a colon; scale, recruiting, filler rules", /\*\*Lead phrase\*\*: one line of proof/.test(pipeline.buildEmployerSummaryUserPrompt(input)) && /never inflate/.test(pipeline.buildEmployerSummaryUserPrompt(input)) && /Recruiting is recruiting/.test(pipeline.buildEmployerSummaryUserPrompt(input)) && /No filler tails/.test(pipeline.buildEmployerSummaryUserPrompt(input)));
+  expect("summary system prompt: no longer suggests 'documented across multiple performance reviews'", !/"documented across multiple performance reviews" is correct/.test(pipeline.EMPLOYER_SUMMARY_SYSTEM_PROMPT));
 
   const v1 = pipeline.parseEmployerSummary("## BEST_FIT\nOperations Manager\n## STRENGTHS\n- One\n- Two\n## GROWTH\nGrows");
   expect("summary v1 (old format) still parses", v1 && v1.format === "v1" && v1.strengths.length === 2);

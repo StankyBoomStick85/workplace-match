@@ -1375,7 +1375,7 @@ export function extractStep4Sections(positionsText: string): Step4ExtractionResu
 // context, in a fixed scannable shape:
 //
 //   ## HEADLINE      one line, who they are NOW and the value they bring
-//   ## PROVEN_AT     3-5 bullets: "- **Lead phrase** proof with a number"
+//   ## PROVEN_AT     3-5 bullets: "- **Lead phrase**: proof with a number"
 //   ## THRIVES_IN    one line: role FAMILIES and work settings
 //   ## GROWING_INTO  one line: where they are heading
 //   ## GAP           optional, one line, a clear fixable gap
@@ -1388,7 +1388,7 @@ Write about a capable professional applying for a job. Lead with who this person
 
 Security clearance is the one exception to "describe capability only": if the source material states the candidate holds a security clearance with an expiration date, it may be reported as a capability fact with that date. Never name who granted, sponsored, or investigated it.
 
-When the source material indicates a capability was corroborated by more than one document or source, describe it as a corroboration count, never by naming the document type or its issuer - "documented across multiple performance reviews" is correct, naming the review form or the organization that issued it is not.
+Let the numbers carry the proof. Never name a document type or its issuer, and never pad a line with a corroboration tail such as "corroborated across multiple performance reviews" or "documented in several reviews".
 
 A genuine gap may be stated, but only as a specific, nameable, fixable missing item ("has not yet worked with a named tool or system," "would benefit from a specific named certification"); never as a vague category of unfamiliarity, which is unfalsifiable and diminishing. No filler language. No paragraphs. No em dashes or en dashes anywhere - use hyphens or commas.`;
 
@@ -1442,8 +1442,8 @@ One line, about 15 words (never more than ${EMPLOYER_SUMMARY_HEADLINE_MAX_WORDS}
 
 ## PROVEN_AT
 ${EMPLOYER_SUMMARY_PROVEN_MIN} to ${EMPLOYER_SUMMARY_PROVEN_MAX} bullets, one per line, each exactly in the form:
-- **Lead phrase** one line of proof
-The lead phrase is 2-4 words in bold. The proof contains at least one concrete number taken from the EVIDENCE below. The whole bullet is under 20 words. Pick the bullets that best support where the person is heading (see DIRECTION), not simply the most impressive past facts.
+- **Lead phrase**: one line of proof
+The lead phrase is 2-4 words in bold, followed by a colon. The proof contains at least one concrete number taken from the EVIDENCE below. The whole bullet is under 20 words. Pick the bullets that best support where the person is heading (see DIRECTION), not simply the most impressive past facts.
 
 ## THRIVES_IN
 One line naming role FAMILIES and work settings, e.g. "operations leadership, business development, and program management; remote or hybrid". Never a single job title, unless DIRECTION says they want only one specific role.${input.isAlternateSummary ? " Lead with the broader set of role families their strengths support, beyond their most direct experience." : ""}
@@ -1460,6 +1460,9 @@ Rules:
 - Do not mention physical fitness or physical performance unless their direction is physical work.
 - No paragraphs, no em dashes or en dashes, no sentence that names a past organization, place, date, or rank.
 - Numbers come only from the EVIDENCE.
+- Match the scale the evidence shows; never inflate it. The headline and every lead phrase claim no more than the numbers support: teams of 12 to 100 are teams, not "large organizations", and nothing is "large-scale", "enterprise", "organization-wide", or "major" unless the evidence says so.
+- Name each function for what it is. Recruiting is recruiting (or talent acquisition), never sales or selling; training is training. Do not relabel past work to fit a desired role. A role family the person wants may still be named in THRIVES_IN or GROWING_INTO.
+- No filler tails. Never end a line with phrases like "corroborated across multiple performance reviews", "documented across reviews", or "consistently recognized". The number is the proof.
 
 DIRECTION:
 ${direction || "(not stated - infer the most natural direction from the evidence)"}
@@ -1498,7 +1501,8 @@ function splitBullets(block: string): string[] {
 
 function parseProvenItem(line: string): EmployerSummaryProvenItem {
   const m = line.match(/^\*\*(.+?)\*\*\s*[:.,-]?\s*(.*)$/);
-  return m ? { lead: m[1].trim(), proof: m[2].trim() } : { lead: "", proof: line };
+  // A colon written inside the bold ("**Lead:**") belongs to the separator.
+  return m ? { lead: m[1].trim().replace(/[:.,]$/, "").trim(), proof: m[2].trim() } : { lead: "", proof: line };
 }
 
 const oneLine = (s: string) => s.replace(/\s*\n\s*/g, " ").trim();
@@ -1536,6 +1540,15 @@ function wordCount(s: string): number {
 
 // Deterministic format check for a freshly generated summary. Every issue is
 // phrased as an instruction so it can be fed straight back to the model.
+// Trailing corroboration filler ("corroborated across multiple performance
+// reviews"): adds words, not proof.
+const SUMMARY_FILLER_TAIL =
+  /\b(?:corroborated|documented|confirmed|validated|verified|noted|recognized|reflected|evidenced)\s+(?:across|in|by|through|over)\s+(?:multiple|several|many|numerous|repeated|consecutive|successive|\d+)\s+[\w\s-]*?(?:reviews?|evaluations?|assessments?|reports?|documents?|records?|sources?)\b/i;
+// Scale words that inflate scope unless the evidence itself uses them.
+const SUMMARY_SCALE_WORDS =
+  /\b(?:large(?:[\s-]scale)?\s+(?:organi[sz]ations?|enterprises?|companies|teams|workforces?|operations)|large-scale|enterprise(?:[\s-]wide|[\s-]level)?|organi[sz]ation[\s-]wide|company[\s-]wide|massive|major\s+organi[sz]ations?)\b/gi;
+
+// Format and fidelity issues in a v2 summary, as retry instructions.
 export function checkEmployerSummaryFormat(text: string, input: EmployerSummaryInput): string[] {
   const issues: string[] = [];
   if (/[–—]/.test(text)) issues.push("Contains an em dash or en dash; use hyphens or commas.");
@@ -1562,7 +1575,20 @@ export function checkEmployerSummaryFormat(text: string, input: EmployerSummaryI
     if (total > EMPLOYER_SUMMARY_BULLET_MAX_WORDS) issues.push(`${label} has ${total} words; keep it under 20.`);
     const unsourced = findUnsourcedNumbers(item.proof, [evidenceText]);
     if (unsourced.length > 0) issues.push(`${label} uses number(s) not in the evidence: ${unsourced.map((u) => u.raw).join(", ")}.`);
+    const filler = item.proof.match(SUMMARY_FILLER_TAIL);
+    if (filler) issues.push(`${label} ends in filler ("${filler[0]}"); cut it and let the number carry the proof.`);
   });
+  // Scale and function fidelity apply to the claims (headline + proven at),
+  // not to the role families the person wants (THRIVES_IN / GROWING_INTO).
+  const claimText = [parsed.headline, ...parsed.provenAt.map((p) => `${p.lead} ${p.proof}`)].join("\n");
+  const evidenceLower = evidenceText.toLowerCase();
+  const inflated = [...new Set((claimText.match(SUMMARY_SCALE_WORDS) ?? []).map((w) => w.toLowerCase()))].filter((w) => !evidenceLower.includes(w));
+  if (inflated.length > 0) {
+    issues.push(`Inflates scale beyond the evidence: ${inflated.map((w) => `"${w}"`).join(", ")}. Describe the scope the numbers show (e.g. "teams of up to 100").`);
+  }
+  if (/\brecruit/i.test(evidenceText) && !/\b(?:sales?|sell(?:s|ing)?)\b/i.test(evidenceText) && /\b(?:sales?|sell(?:s|ing)?)\b/i.test(claimText)) {
+    issues.push('Calls recruiting work "sales". Name it as recruiting or talent acquisition.');
+  }
   return issues;
 }
 

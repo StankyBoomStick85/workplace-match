@@ -19,6 +19,11 @@
 // one 300s function invocation, so lib/capabilityStatementJobs.ts persists the
 // state and runs each step in its own invocation. runCapabilityStatementSynthesis
 // drives the same steps in-process for scripts.
+//
+// No single step may outlive its invocation: the first synthesis is split into
+// a core step and a niche step (one combined call ran 306-307s), and every
+// call is aborted at SYNTHESIS_CALL_TIMEOUT_MS. A call that times out is run
+// again once at lower effort, and every later call in that run stays there.
 
 import type Anthropic from "@anthropic-ai/sdk";
 import type { EvidenceGroup, StoredDoc } from "@/lib/capabilityPipeline";
@@ -46,6 +51,11 @@ export const DEFAULT_SYNTHESIS_MODEL = "claude-fable-5-1";
 
 export const SYNTHESIS_MAX_TOKENS = 32000;
 export const SYNTHESIS_RETRY_ATTEMPTS = 2;
+// Hard ceiling on one model call. The step route's maxDuration is 300s; the
+// rest is headroom for loading and saving the job around the call.
+export const SYNTHESIS_CALL_TIMEOUT_MS = 240_000;
+
+export type SynthesisEffort = "high" | "medium";
 
 export type UncertainTerm = { term: string; assumedMeaning: string; reason: string };
 
@@ -63,7 +73,11 @@ export type ItemFailure = {
 };
 
 export type ModelCallRecord = {
-  phase: "initial" | `retry_${number}`;
+  // "initial" is the old combined core+niche call (states saved before the
+  // split); new runs make "initial_core" then "initial_niche".
+  phase: "initial" | "initial_core" | "initial_niche" | `retry_${number}`;
+  effort?: SynthesisEffort;
+  timedOut?: boolean;
   // The model that actually served the response - differs from the requested
   // one only when a server-side refusal fallback ran.
   model: string;
@@ -181,6 +195,23 @@ ${formatPersonContext(context)}EVIDENCE GROUPS:
 ${JSON.stringify(promptGroups, null, 1)}
 
 Return only the JSON object.`;
+}
+
+// The first synthesis runs as two calls so neither can approach the function
+// time limit. Same prompt and schema; this names which half to return.
+export function buildInitialScopeInstruction(scope: "core" | "niche", acceptedCore: CoreStatement[] = []): string {
+  if (scope === "core") {
+    return `
+
+THIS CALL - CORE ONLY:
+Return "core" and "uncertainTerms". Return "niche" as an empty array: specialized skills are written in a separate call, so leave them out of core entirely rather than folding them in.`;
+  }
+  return `
+
+THIS CALL - NICHE ONLY:
+Return "niche" and "uncertainTerms". Return "core" as an empty array: the core statements were written in a separate call and are listed below for reference only. Do not restate their substance as a niche item, and do not reuse their wording.
+CORE STATEMENTS ALREADY WRITTEN:
+${JSON.stringify(acceptedCore.map((c) => c.statement))}`;
 }
 
 // The self-written summary and signup skill tags describe who the person is
@@ -311,7 +342,14 @@ const REFUSAL_FALLBACK_BETA = "server-side-fallback-2026-07-01";
 
 type RawCall = { text: string; record: ModelCallRecord };
 
-async function callModel(anthropic: Anthropic, model: string, prompt: string, phase: ModelCallRecord["phase"]): Promise<RawCall> {
+async function callModel(
+  anthropic: Anthropic,
+  model: string,
+  prompt: string,
+  phase: ModelCallRecord["phase"],
+  effort: SynthesisEffort = "high",
+  timeoutMs: number = SYNTHESIS_CALL_TIMEOUT_MS
+): Promise<RawCall> {
   const start = Date.now();
   const legacy = isLegacySamplingModel(model);
   const params = {
@@ -320,17 +358,26 @@ async function callModel(anthropic: Anthropic, model: string, prompt: string, ph
     messages: [{ role: "user" as const, content: prompt }],
     output_config: {
       format: { type: "json_schema" as const, schema: SYNTHESIS_OUTPUT_SCHEMA },
-      ...(legacy ? {} : { effort: "high" as const }),
+      ...(legacy ? {} : { effort }),
     },
     ...(legacy ? { temperature: 0.2 } : { fallbacks: "default" }),
   };
-  const base = { phase, requestedModel: model, inputTokens: null, outputTokens: null, parseOk: false };
+  const base = { phase, requestedModel: model, effort: legacy ? undefined : effort, inputTokens: null, outputTokens: null, parseOk: false };
+  // Streamed: a long synthesis on a thinking model can run past the SDK's
+  // non-streaming timeout. Aborted at timeoutMs so the step that made the
+  // call always finishes inside its function invocation.
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    // Streamed: a long synthesis on a thinking model can run past the SDK's
-    // non-streaming timeout.
-    const message = await anthropic.messages
-      .stream(params as Anthropic.MessageStreamParams, legacy ? undefined : { headers: { "anthropic-beta": REFUSAL_FALLBACK_BETA } })
-      .finalMessage();
+    const stream = anthropic.messages.stream(
+      params as Anthropic.MessageStreamParams,
+      legacy ? undefined : { headers: { "anthropic-beta": REFUSAL_FALLBACK_BETA } }
+    );
+    timer = setTimeout(() => {
+      timedOut = true;
+      stream.abort();
+    }, timeoutMs);
+    const message = await stream.finalMessage();
     const text = message.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")
       .map((b) => b.text)
@@ -349,10 +396,13 @@ async function callModel(anthropic: Anthropic, model: string, prompt: string, ph
       },
     };
   } catch (err) {
+    const error = timedOut ? `timed out after ${Math.round(timeoutMs / 1000)}s` : err instanceof Error ? err.message : String(err);
     return {
       text: "",
-      record: { ...base, model, stopReason: null, elapsedMs: Date.now() - start, error: err instanceof Error ? err.message : String(err) },
+      record: { ...base, model, stopReason: null, elapsedMs: Date.now() - start, error, ...(timedOut ? { timedOut: true } : {}) },
     };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -452,10 +502,15 @@ export type SynthesisState = {
   version: 1;
   model: string;
   generatedAt: string;
-  // "initial" -> next step is the first call; "retry" -> next step is a
-  // targeted retry; "done" -> call finishSynthesis.
-  next: "initial" | "retry" | "done";
+  // "initial_core" -> core statements; "initial_niche" -> niche items;
+  // "retry" -> a targeted retry; "done" -> call finishSynthesis. "initial" is
+  // a state saved before the split and runs as "initial_core".
+  next: "initial" | "initial_core" | "initial_niche" | "retry" | "done";
   retriesDone: number;
+  // Drops to "medium" after any call times out, for the rest of the run.
+  effort?: SynthesisEffort;
+  // Unusable calls (timed out or unparseable) in the current initial phase.
+  phaseFailures?: number;
   // Set when the run cannot continue (unusable initial response).
   fatal: string | null;
   coreSlots: Slot<CoreStatement>[];
@@ -473,6 +528,8 @@ export type SynthesisInput = {
   glossary?: GlossaryEntry[];
   // Summary + signup tags: context about the person, never evidence.
   context?: PersonContext;
+  // Overrides SYNTHESIS_CALL_TIMEOUT_MS (tests only).
+  callTimeoutMs?: number;
 };
 
 export function createSynthesisState(model: string = DEFAULT_SYNTHESIS_MODEL): SynthesisState {
@@ -480,8 +537,10 @@ export function createSynthesisState(model: string = DEFAULT_SYNTHESIS_MODEL): S
     version: 1,
     model,
     generatedAt: new Date().toISOString(),
-    next: "initial",
+    next: "initial_core",
     retriesDone: 0,
+    effort: "high",
+    phaseFailures: 0,
     fatal: null,
     coreSlots: [],
     nicheSlots: [],
@@ -540,30 +599,55 @@ export async function runSynthesisStep(state: SynthesisState, input: SynthesisIn
   const basePrompt = buildSynthesisPrompt(toPromptGroups(input.groups, input.storedDocs), glossary, input.context);
   const s: SynthesisState = JSON.parse(JSON.stringify(state));
 
-  if (s.next === "initial") {
+  if (s.next === "initial") s.next = "initial_core";
+  const effort: SynthesisEffort = s.effort ?? "high";
+
+  if (s.next === "initial_core" || s.next === "initial_niche") {
+    const scope = s.next === "initial_core" ? "core" : "niche";
     if (input.groups.length === 0) {
       s.fatal = "no evidence groups";
       s.next = "done";
       return s;
     }
-    const initial = await callModel(input.anthropic, s.model, basePrompt, "initial");
-    const parsed = parseSynthesisOutput(initial.text);
-    initial.record.parseOk = parsed !== null;
-    s.calls.push(initial.record);
+    const acceptedCore = s.coreSlots.filter((x) => !x.failure).map((x) => x.item);
+    const call = await callModel(
+      input.anthropic,
+      s.model,
+      basePrompt + buildInitialScopeInstruction(scope, acceptedCore),
+      s.next,
+      effort,
+      input.callTimeoutMs
+    );
+    const parsed = parseSynthesisOutput(call.text);
+    call.record.parseOk = parsed !== null;
+    s.calls.push(call.record);
+    if (call.record.timedOut) s.effort = "medium";
     if (!parsed) {
-      s.fatal = initial.record.error
-        ? `initial call failed: ${initial.record.error}`
-        : `initial response not parseable (stop_reason=${initial.record.stopReason})`;
+      const why = call.record.error ?? `response not parseable (stop_reason=${call.record.stopReason})`;
+      s.phaseFailures = (s.phaseFailures ?? 0) + 1;
+      if (s.phaseFailures < 2) {
+        // Same phase again, as its own step (at medium effort if it timed out).
+        s.notes.push(`${scope} synthesis call unusable (${why}); running it again${call.record.timedOut ? " at medium effort" : ""}`);
+        return s;
+      }
+      s.fatal = `${scope} synthesis failed twice: ${why}`;
       s.next = "done";
       return s;
     }
+    s.phaseFailures = 0;
     s.uncertainTerms.push(...parsed.uncertainTerms);
-    let core = parsed.core;
-    if (core.length > CORE_MAX) {
-      s.notes.push(`model returned ${core.length} core statements; kept the first ${CORE_MAX} (strongest first)`);
-      core = core.slice(0, CORE_MAX);
+    if (scope === "core") {
+      let core = parsed.core;
+      if (core.length > CORE_MAX) {
+        s.notes.push(`model returned ${core.length} core statements; kept the first ${CORE_MAX} (strongest first)`);
+        core = core.slice(0, CORE_MAX);
+      }
+      if (parsed.niche.length) s.notes.push(`core call also returned ${parsed.niche.length} niche item(s); ignored - niche has its own call`);
+      s.coreSlots = core.map((c) => evaluateSlot("core", c, ctx, input.knownFullName));
+      s.next = "initial_niche";
+      return s;
     }
-    s.coreSlots = core.map((c) => evaluateSlot("core", c, ctx, input.knownFullName));
+    if (parsed.core.length) s.notes.push(`niche call also returned ${parsed.core.length} core statement(s); ignored`);
     s.nicheSlots = parsed.niche.map((n) => evaluateSlot("niche", n, ctx, input.knownFullName));
     s.failureLog.push({ attempt: "initial", failures: currentFailures(s, ctx).map((f) => f.failure) });
   } else {
@@ -579,11 +663,14 @@ export async function runSynthesisStep(state: SynthesisState, input: SynthesisIn
       input.anthropic,
       s.model,
       buildSynthesisRetryPrompt(basePrompt, accepted, failures.map((f) => f.failure), extraCoreWanted),
-      `retry_${attempt}`
+      `retry_${attempt}`,
+      effort,
+      input.callTimeoutMs
     );
     const retryParsed = parseSynthesisOutput(retry.text);
     retry.record.parseOk = retryParsed !== null;
     s.calls.push(retry.record);
+    if (retry.record.timedOut) s.effort = "medium";
     s.retriesDone = attempt;
     if (!retryParsed) {
       s.notes.push(`retry ${attempt} unusable: ${retry.record.error ?? `stop_reason=${retry.record.stopReason}`}`);

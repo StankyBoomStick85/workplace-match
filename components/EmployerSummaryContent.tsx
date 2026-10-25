@@ -84,7 +84,7 @@ export function EmployerSummaryContent({ text, collapsible = true }: { text: str
                 <li key={index} className="flex gap-1.5">
                   <span aria-hidden="true" className="text-zinc-400">&bull;</span>
                   <span>
-                    {item.lead ? <span className="font-semibold text-zinc-950">{item.lead}</span> : null}
+                    {item.lead ? <span className="font-semibold text-zinc-950">{item.lead}:</span> : null}
                     {item.lead ? " " : null}
                     {item.proof}
                   </span>

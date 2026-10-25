@@ -1,10 +1,12 @@
 // Background jobs for Tier 1 capability statement synthesis. Server-only.
 //
-// Why a chain of steps: a full claude-fable-5-1 synthesis (initial call plus
-// up to two targeted retries) takes ~320s, longer than one 300s function
-// invocation. Each model call is therefore its own step in its own
-// invocation; the resumable SynthesisState (lib/capabilityStatements.ts) is
-// saved to capability_statement_jobs between steps.
+// Why a chain of steps: a full claude-fable-5-1 synthesis (core call, niche
+// call, up to two targeted retries) takes far longer than one 300s function
+// invocation, and one combined first call alone ran 307s. Each model call is
+// therefore its own step in its own invocation, and each call is aborted at
+// SYNTHESIS_CALL_TIMEOUT_MS (240s); the resumable SynthesisState
+// (lib/capabilityStatements.ts) is saved to capability_statement_jobs between
+// steps.
 //
 // Flow:
 //   admin POST /api/admin/synthesize-capability-statements
