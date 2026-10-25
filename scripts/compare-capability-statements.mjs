@@ -22,7 +22,7 @@ const [, , userArg = "707ef2c7", ...modelArgs] = process.argv;
 const models = modelArgs.length ? modelArgs : ["claude-fable-5-1"];
 
 const { runCapabilityStatementSynthesis } = await loadTsModules(
-  ["capabilityStatements", "capabilityStatementChecks", "statementGuard", "employerTextGuard", "translationGlossary", "documentLabels", "candidateDirection", "roleFamilies"],
+  ["capabilityStatements", "capabilityStatementChecks", "statementGuard", "employerTextGuard", "translationGlossary", "documentLabels", "candidateDirection", "roleFamilies", "civilianLanguage"],
   "capabilityStatements"
 );
 

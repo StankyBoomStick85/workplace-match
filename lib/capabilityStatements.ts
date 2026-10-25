@@ -45,6 +45,7 @@ import {
 import { STATEMENT_GUARD_CORRECTIONS, scanCoreOnlyText, scanStatementText, type StatementGuardViolation } from "@/lib/statementGuard";
 import { TRANSLATION_GLOSSARY, formatGlossaryForPrompt, matchGlossaryEntries, type GlossaryEntry } from "@/lib/translationGlossary";
 import { formatDirectionForPrompt, type CandidateDirection } from "@/lib/candidateDirection";
+import { CIVILIAN_LANGUAGE_RULES, GUIDING_PRINCIPLE } from "@/lib/civilianLanguage";
 
 // Chosen 2026-10-22 from the Phase 1 comparison (vs claude-sonnet-4-6): more
 // statements pass the checks, and the translation of scope is markedly better.
@@ -135,7 +136,9 @@ export function buildSynthesisPrompt(
   glossary: GlossaryEntry[] = TRANSLATION_GLOSSARY,
   context?: PersonContext
 ): string {
-  return `You are writing the capability statements a hiring manager will read about one person. Your job is to turn what this person has DONE into what they CAN DO and what they are capable of, in the plain language any hiring manager already uses.
+  return `${GUIDING_PRINCIPLE}
+
+You are writing the capability statements a hiring manager will read about one person. Your job is to turn what this person has DONE into what they CAN DO and what they are capable of, in the plain language any hiring manager already uses.
 
 THE CORE RULE: TRANSLATE, DON'T STRIP.
 - Never repeat a specialist term from the evidence. That is listing, and a hiring manager outside the field cannot read it.
@@ -156,12 +159,16 @@ WHAT TO PRODUCE
    - A rating, ranking, award, or promotion result is never a statement on its own. It is proof inside the capability it supports (a top peer ranking is a proof line under the leadership or operations statement it reflects, not a statement about being ranked).
    - Plain present tense, no subject, no pronouns: "Directs ...", "Builds ...", "Keeps ...". Never "this candidate", never they/he/she.
    - One sentence, under ${STATEMENT_MAX_WORDS + 1} words, specific about scope and stakes, readable in five seconds.
-   - Write in the vocabulary a civilian hiring manager uses, strictly, in the statement and every proof line: "specialists" not "operators", "team" not "element" or "unit", "official records" not "service record". If a hiring manager in an ordinary company would not say the word, find the word they would. Preferred rewrites: "mission success rate" -> "success rate"; "high-threat movements" -> "high-risk operations"; "allied nations" -> "partner countries" (or just the count); "multinational staff exercise" -> "international planning exercise".
+   - Write in the vocabulary a civilian hiring manager uses, strictly, in the statement and every proof line: "specialists" not "operators", "team" not "element" or "unit", "official records" not "service record". If a hiring manager in an ordinary company would not say the word, find the word they would. Preferred rewrites: "mission success rate" -> "success rate"; "high-threat movements" -> "time-critical moves" or "projects with zero room for error"; "allied nations" -> "partner countries" (or just the count); "multinational staff exercise" -> "international planning exercise".
    - Do not repeat the same glossary phrasing across statements. If one statement already says a team "works independently far from support", the others describe their own point in their own words.
    - Match the scale the cited evidence shows; never inflate it. Teams of 12 to 100 are teams, not "large organizations" or "larger organizations"; nothing is "large-scale", "enterprise", "organization-wide", or "major" unless a cited claim says so; "hundreds" or "thousands" only when a cited number reaches them.
    - Name each function for what it is. Recruiting is recruiting (or talent acquisition), never sales, selling, or "sales-style"; training is training. Do not relabel past work to fit a role the person wants.
    - Strongest first. Fewer strong statements beat many thin ones; a thin profile ships with as few as 3.
    - Specialized skills (see "niche") never go here.
+
+   - Lead with the transferable skill a business hires for, not the task.
+
+${CIVILIAN_LANGUAGE_RULES}
 
 2. Every core statement has 2 to 4 "proof" lines. Each proof line:
    - Contains at least one concrete number, taken from the claims of the groups it cites.

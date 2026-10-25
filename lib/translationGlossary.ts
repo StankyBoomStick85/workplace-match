@@ -91,7 +91,7 @@ export const TRANSLATION_GLOSSARY: GlossaryEntry[] = [
     aliases: ["Operations and Intelligence Sergeant", "Ops and Intel Sergeant", "O&I Sergeant", "18F"],
     field: "military",
     context: "Special Forces team",
-    employerMeaning: "Plans operations, manages intelligence, and frequently coordinates with senior government and diplomatic partners.",
+    employerMeaning: "Plans the team's projects and assignments, runs its analysis and planning, and frequently coordinates with senior government and diplomatic partners.",
   },
   {
     term: "Engineer Sergeant",
@@ -130,7 +130,7 @@ export const TRANSLATION_GLOSSARY: GlossaryEntry[] = [
     aliases: ["Battalion Operations Sergeant", "S3 Operations Sergeant", "Battalion S3", "S3 Air NCO"],
     field: "military",
     context: "battalion staff",
-    employerMeaning: "Plans and coordinates operations for the whole battalion.",
+    employerMeaning: "Plans and coordinates the projects and day-to-day operations of the whole parent organization.",
     allowedFacts: ["about 400 people"],
   },
   {
@@ -229,8 +229,15 @@ export const TRANSLATION_GLOSSARY: GlossaryEntry[] = [
     aliases: ["deployment", "deployed", "combat deployment", "imminent danger pay area"],
     field: "military",
     employerMeaning:
-      "Extended assignment abroad, often in high-risk or austere conditions. A combat deployment is performed under direct physical threat.",
+      "Extended assignment abroad, often in austere conditions with zero room for error. A combat deployment is performed under direct physical threat.",
     notes: "Never name locations or operations.",
+  },
+  {
+    term: "Convoy / movement leader",
+    aliases: ["convoy", "convoy commander", "convoy leader", "movement leader", "ground movement", "ground movements", "ground leader"],
+    field: "military",
+    employerMeaning:
+      "Led transport teams responsible for people's safety and on-time delivery of high-value equipment by road and air.",
   },
   {
     term: "Partner force training / FID",
@@ -242,14 +249,14 @@ export const TRANSLATION_GLOSSARY: GlossaryEntry[] = [
     term: "Fires / close air support",
     aliases: ["Joint Fires Observer", "JFO", "close air support", "CAS", "fire support", "FIST", "Forward Observer", "fires"],
     field: "military",
-    employerMeaning: "Real-time coordination of high-risk assets with zero margin for error.",
+    employerMeaning: "Real-time coordination of air and ground assets with zero room for error.",
     niche: true,
   },
   {
     term: "Recruiting / production",
     aliases: ["recruiting", "recruiter", "production", "USAREC"],
     field: "military",
-    employerMeaning: "Sales-style talent acquisition against a quota.",
+    employerMeaning: "Recruiting against an annual hiring target: prospecting, screening, and bringing on qualified candidates. It is recruiting, never sales.",
   },
   {
     term: "Selection prep",
@@ -284,7 +291,7 @@ export const TRANSLATION_GLOSSARY: GlossaryEntry[] = [
     term: "Medals",
     aliases: ["Medal", "Bronze Star", "Commendation Medal", "Achievement Medal", "Meritorious Service Medal"],
     field: "military",
-    employerMeaning: "Formal recognition for performance. A Bronze Star means significant achievement in a high-risk zone.",
+    employerMeaning: "Formal recognition for performance. A Bronze Star means significant achievement in a dangerous assignment.",
     notes: "Count only, never name the medal.",
   },
   {

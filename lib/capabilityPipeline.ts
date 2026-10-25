@@ -9,6 +9,7 @@ import {
   roleFamilyLabels,
   type CandidateDirection,
 } from "@/lib/candidateDirection";
+import { CIVILIAN_LANGUAGE_RULES, GUIDING_PRINCIPLE, describeSettingLanguage, findSettingLanguage } from "@/lib/civilianLanguage";
 
 export type EvidenceItem = {
   claim: string;
@@ -1391,7 +1392,9 @@ export function extractStep4Sections(positionsText: string): Step4ExtractionResu
 //
 // Every identity / framing rule from the previous versions is unchanged.
 
-export const EMPLOYER_SUMMARY_SYSTEM_PROMPT = `You are a talent strategist writing employer-facing candidate summaries. Your audience is a hiring manager or HR director scanning many candidates. This platform never discloses candidate identity to an employer, at any tier - describe capability only, never identity. If a motivated reader could identify a specific individual from your output, the output is wrong. Use no pronouns where you can avoid them, and when you cannot, only they/them/their - never he/him, she/her, or any gendered term. Never use the candidate's name or initials. Never name a past employer, unit, command, or organization. Never state a branch of service (Army, Navy, Air Force, Marines, Coast Guard, Space Force) or a specific rank, grade, or title (e.g. Sergeant First Class, Green Beret, Colonel). Never state exact dates, years of service, tenure length, or age. Never name a specific country, region, or named operation/deployment - use general framing like "high-risk international environments". Never mention a publication, book, article, or other named authored work. Never use unit designations, coded specialty designators, operation names, service acronyms, or any jargon that requires insider context to understand. Write in plain business language a civilian hiring manager already uses.
+export const EMPLOYER_SUMMARY_SYSTEM_PROMPT = `${GUIDING_PRINCIPLE}
+
+You are a talent strategist writing employer-facing candidate summaries. Your audience is a hiring manager or HR director scanning many candidates. This platform never discloses candidate identity to an employer, at any tier - describe capability only, never identity. If a motivated reader could identify a specific individual from your output, the output is wrong. Use no pronouns where you can avoid them, and when you cannot, only they/them/their - never he/him, she/her, or any gendered term. Never use the candidate's name or initials. Never name a past employer, unit, command, or organization. Never state a branch of service (Army, Navy, Air Force, Marines, Coast Guard, Space Force) or a specific rank, grade, or title (e.g. Sergeant First Class, Green Beret, Colonel). Never state exact dates, years of service, tenure length, or age. Never name a specific country, region, or named operation/deployment - use general framing like "high-risk international environments". Never mention a publication, book, article, or other named authored work. Never use unit designations, coded specialty designators, operation names, service acronyms, or any jargon that requires insider context to understand. Write in plain business language a civilian hiring manager already uses.
 
 Write about a capable professional applying for a job. Lead with who this person is NOW and where they are heading; the past is evidence, not identity. Describe what they have done and can do as accomplished fact. Do not frame the candidate as coming from outside ordinary work, entering a new sector, transitioning, adjusting, acclimating, or bridging into anything, and do not describe their experience as needing translation, conversion, or interpretation - it is simply their experience. Do not use the words "civilian" or "military" anywhere in the output, and do not use any wording that implies the candidate must earn their way into normal employment or prove they can do work they have already done.
 
@@ -1465,12 +1468,12 @@ export function buildEmployerSummaryUserPrompt(input: EmployerSummaryInput): str
 Output EXACTLY these sections with the "##" headings shown, in this order, and nothing before, between, or after them:
 
 ## HEADLINE
-One line, about 15 words (never more than ${EMPLOYER_SUMMARY_HEADLINE_MAX_WORDS}): who this person is NOW and the value they bring an employer. Present tense. No job title.
+One line, about 15 words (never more than ${EMPLOYER_SUMMARY_HEADLINE_MAX_WORDS}): who this person is NOW and the value they bring an employer. Present tense. No job title. Say what they lead (teams, projects, programs), not a generic "operations leader".
 
 ## PROVEN_AT
 ${EMPLOYER_SUMMARY_PROVEN_MIN} to ${EMPLOYER_SUMMARY_PROVEN_MAX} bullets, one per line, each exactly in the form:
 - **Lead phrase**: one line of proof
-The lead phrase is 2-4 words in bold, followed by a colon. The proof contains at least one concrete number taken from the EVIDENCE below. Length: the lead phrase and the proof TOGETHER are 12 to 17 words, and never more than ${EMPLOYER_SUMMARY_BULLET_MAX_WORDS}; count every word of both before answering, and cut the proof rather than run over.
+The lead phrase is 2-4 words in bold, followed by a colon, and names a transferable skill a business hires for (e.g. "Decision-making under pressure", "International logistics"), not the task. The proof contains at least one concrete number taken from the EVIDENCE below. Length: the lead phrase and the proof TOGETHER are 12 to 17 words, and never more than ${EMPLOYER_SUMMARY_BULLET_MAX_WORDS}; count every word of both before answering, and cut the proof rather than run over.
 Choosing the bullets: pick by relevance to DIRECTION, never by how easy a fact is to quantify. First decide what the roles in DIRECTION are judged on, then pick the evidence that proves exactly that.
 - When DIRECTION centers on leadership, trust, authority, or relationships, prefer evidence of judgment, decisions under pressure, leading and developing people, advising senior leaders, and building relationships or partnerships.
 - Administrative facts (pay records, inventories, equipment or property accountability, paperwork or records tracking) appear only when DIRECTION is administrative or logistics work.
@@ -1487,7 +1490,8 @@ Optional. Include it only if there is a clear, specific, fixable gap for the rol
 
 Rules:
 - Present and direction first; the past is evidence, not identity.
-- Plain civilian business language. Do not reuse jargon from the evidence. Preferred rewrites: "mission success rate" -> "success rate"; "high-threat movements" -> "high-risk operations"; "allied nations" -> "partner countries" (or just the count); "multinational staff exercise" -> "international planning exercise".
+- Plain civilian business language. Do not reuse jargon from the evidence. Preferred rewrites: "mission success rate" -> "success rate"; "high-threat movements" -> "time-critical moves" or "projects with zero room for error"; "allied nations" -> "partner countries" (or just the count); "multinational staff exercise" -> "international planning exercise".
+${CIVILIAN_LANGUAGE_RULES.split("\n").map((l) => (l.startsWith("CIVILIAN") ? `- ${l}` : `  ${l}`)).join("\n")}
 - Do not mention physical fitness or physical performance unless their direction is physical work.
 - No paragraphs, no em dashes or en dashes, no sentence that names a past organization, place, date, or rank.
 - Numbers come only from the EVIDENCE.
@@ -1646,6 +1650,15 @@ export function checkEmployerSummaryFormat(text: string, input: EmployerSummaryI
   }
   if (relabelsRecruitingAsSales(claimText, [evidenceText])) {
     issues.push('Calls recruiting work "sales". Name it as recruiting or talent acquisition.');
+  }
+  // Civilian language: setting words and "operation" as a countable noun
+  // (lib/civilianLanguage.ts), anywhere in the summary.
+  const settingHits = findSettingLanguage(text);
+  if (settingHits.length > 0) {
+    issues.push(`Uses wording that reveals the setting instead of the capability: ${describeSettingLanguage(settingHits)}.`);
+  }
+  if (/\boperations leader\b/i.test(parsed.headline)) {
+    issues.push('HEADLINE says "operations leader"; say what they lead (teams, projects, programs).');
   }
   // Direction: THRIVES_IN is written from the selected role families, and
   // names a specific title only when the candidate wants only those roles.

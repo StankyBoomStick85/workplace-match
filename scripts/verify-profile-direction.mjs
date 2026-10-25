@@ -15,7 +15,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test-service-role-key";
 const ALL = [
   "profileRebuilds", "capabilityStatementJobs", "capabilityPipeline", "capabilityStatements", "capabilityStatementChecks",
   "statementGuard", "employerTextGuard", "translationGlossary", "documentLabels", "generationAlerts", "email",
-  "candidateDirection", "roleFamilies",
+  "candidateDirection", "roleFamilies", "civilianLanguage",
 ];
 const dir = await loadTsModules(ALL, "candidateDirection");
 const fam = await loadTsModules(ALL, "roleFamilies");
@@ -87,7 +87,7 @@ const input = (direction) => ({
 });
 const summary = (thrives, growing = "Leading operations for a company where technology and people meet") =>
   [
-    "## HEADLINE", "Operations leader who builds accountable teams and delivers measurable results under pressure.",
+    "## HEADLINE", "Leads accountable teams and programs that deliver measurable results under pressure.",
     "## PROVEN_AT",
     "- **Asset accountability**: Kept $3.5M in equipment fully accounted for with zero loss",
     "- **Training at scale**: Trained over 500 people across 5 program rounds",

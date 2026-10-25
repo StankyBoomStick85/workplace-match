@@ -1,9 +1,12 @@
-// Deterministic, code-side checks for Tier 1 capability statements. Kept free
-// of runtime imports so scripts/verify-capability-statements.mjs can transpile
-// and unit-test it directly (same approach as scripts/verify-text-guard.mjs).
+// Deterministic, code-side checks for Tier 1 capability statements. Its only
+// import is lib/civilianLanguage.ts (pure, no runtime dependencies), so
+// scripts/verify-capability-statements.mjs can transpile and unit-test it
+// directly (same approach as scripts/verify-text-guard.mjs).
 //
 // The model writes the statements; this module decides whether each one is
 // allowed to stand. Nothing here asks the model anything.
+
+import { describeSettingLanguage, findSettingLanguage } from "@/lib/civilianLanguage";
 
 export type GroupVerification = "VERIFIED" | "USER_PROVIDED";
 
@@ -69,7 +72,8 @@ export type StatementIssueCode =
   | "repeated_glossary_phrase"
   | "mixed_citation"
   | "inflated_scale"
-  | "recruiting_as_sales";
+  | "recruiting_as_sales"
+  | "setting_language";
 
 export type StatementIssue = {
   code: StatementIssueCode;
@@ -409,6 +413,10 @@ export function relabelsRecruitingAsSales(text: string, evidenceTexts: string[])
 function checkFidelity(texts: string[], evidenceTexts: string[]): StatementIssue[] {
   const issues: StatementIssue[] = [];
   const joined = texts.join("\n");
+  const setting = findSettingLanguage(joined);
+  if (setting.length > 0) {
+    issues.push({ code: "setting_language", detail: `reveals the setting instead of the capability: ${describeSettingLanguage(setting)}` });
+  }
   const inflated = findScaleInflation(joined, evidenceTexts);
   if (inflated.length > 0) {
     issues.push({

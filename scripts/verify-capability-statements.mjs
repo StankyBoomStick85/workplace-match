@@ -10,11 +10,11 @@
  */
 import { loadTsModules } from "./lib/loadTsModules.mjs";
 
-const checks = await loadTsModules(["capabilityStatementChecks"], "capabilityStatementChecks");
+const checks = await loadTsModules(["capabilityStatementChecks", "civilianLanguage", "candidateDirection", "roleFamilies"], "capabilityStatementChecks");
 const guard = await loadTsModules(["statementGuard", "employerTextGuard"], "statementGuard");
 const employerGuard = await loadTsModules(["statementGuard", "employerTextGuard"], "employerTextGuard");
 const synth = await loadTsModules(
-  ["capabilityStatements", "capabilityStatementChecks", "statementGuard", "employerTextGuard", "translationGlossary", "documentLabels", "candidateDirection", "roleFamilies"],
+  ["capabilityStatements", "capabilityStatementChecks", "statementGuard", "employerTextGuard", "translationGlossary", "documentLabels", "candidateDirection", "roleFamilies", "civilianLanguage"],
   "capabilityStatements"
 );
 
@@ -101,6 +101,7 @@ function expect(name, cond, detail = "") {
   const recruitCtx = { groupsById: new Map([...groups, { groupId: "r1", verificationStatus: "VERIFIED", claims: ["Achieved 134% of annual recruiting target"] }].map((g) => [g.groupId, g])) };
   const recruitStmt = (statement) => codes(checks.checkCoreStatement({ statement, proof: [{ text: "Achieved 134% of annual recruiting target", groupIds: ["r1"] }, good.proof[1]] }, recruitCtx));
   expect("core: recruiting called 'sales-style' -> recruiting_as_sales", recruitStmt("Delivers sales-style talent acquisition results against a quota.").includes("recruiting_as_sales"));
+  expect("core: counted operations / setting words -> setting_language", codes(checks.checkCoreStatement({ ...good, statement: "Plans 15 high-risk operations across borders." }, ctx)).includes("setting_language"));
   expect("core: recruiting named as recruiting passes fidelity", !recruitStmt("Delivers recruiting results against a quota.").some((c) => c === "recruiting_as_sales" || c === "inflated_scale"));
   expect("fidelity: 'hundreds' allowed when a cited number reaches 200", checks.findScaleInflation("Trains hundreds of people", ["Trained 500 partner personnel"]).length === 0);
 
@@ -472,7 +473,7 @@ function expect(name, cond, detail = "") {
 
 // ───────────── self-reported evidence is context / absorbed (2026-10-22) ─────────────
 {
-  const pipeline = await loadTsModules(["capabilityPipeline", "documentLabels", "capabilityStatementChecks", "candidateDirection", "roleFamilies"], "capabilityPipeline");
+  const pipeline = await loadTsModules(["capabilityPipeline", "documentLabels", "capabilityStatementChecks", "candidateDirection", "roleFamilies", "civilianLanguage"], "capabilityPipeline");
 
   const items = pipeline.buildSelfReportedEvidenceItems({ summary: "Retired senior leader with 20 years", capabilityTags: ["Budget & Asset Accountability", "Cybersecurity"] });
   expect("self-reported items: summary is not evidence", items.length === 2 && items.every((i) => i.claim !== "Retired senior leader with 20 years"));
@@ -532,7 +533,7 @@ function expect(name, cond, detail = "") {
 
 // ───────────────────────── employer summary v2 (2026-10-22) ─────────────────────────
 {
-  const pipeline = await loadTsModules(["capabilityPipeline", "documentLabels", "capabilityStatementChecks", "candidateDirection", "roleFamilies"], "capabilityPipeline");
+  const pipeline = await loadTsModules(["capabilityPipeline", "documentLabels", "capabilityStatementChecks", "candidateDirection", "roleFamilies", "civilianLanguage"], "capabilityPipeline");
   const input = {
     capabilityStatements: [
       { statement: "Keeps equipment accountable.", proof: [{ text: "Accountable for $3.5M in equipment with zero loss" }, { text: "Trained over 500 people across 5 rounds" }] },
@@ -546,7 +547,7 @@ function expect(name, cond, detail = "") {
   };
   const good = [
     "## HEADLINE",
-    "Operations leader who builds accountable teams and delivers measurable results under pressure.",
+    "Leads accountable teams and programs that deliver measurable results under pressure.",
     "## PROVEN_AT",
     "- **Asset accountability** Kept $3.5M in equipment fully accounted for with zero loss",
     "- **Training at scale** Trained over 500 people across 5 program rounds",
@@ -573,8 +574,8 @@ function expect(name, cond, detail = "") {
   expect("summary check: long bullet rejected", /keep it under 20/.test(issues(good.replace("Trained over 500 people across 5 program rounds", "Trained over 500 people across 5 program rounds while also building curriculum, coaching instructors, and measuring every result"))));
   expect("summary check: old-format text is reported as missing sections", /Missing required sections/.test(issues("## BEST_FIT\nx\n## STRENGTHS\n- y\n## GROWTH\nz")));
   expect("summary check: filler tail rejected", /filler/.test(issues(good.replace("with zero loss", "corroborated across multiple performance reviews"))));
-  expect("summary check: inflated scale rejected", /Inflates scale/.test(issues(good.replace("builds accountable teams", "leads large organizations"))));
-  expect("summary check: scale word allowed when the evidence uses it", !/Inflates scale/.test(pipeline.checkEmployerSummaryFormat(good.replace("builds accountable teams", "runs large-scale training"), { ...input, capabilityStatements: [...input.capabilityStatements, { statement: "Runs large-scale training.", proof: [] }] }).join(" ")));
+  expect("summary check: inflated scale rejected", /Inflates scale/.test(issues(good.replace("Leads accountable teams", "Leads large organizations"))));
+  expect("summary check: scale word allowed when the evidence uses it", !/Inflates scale/.test(pipeline.checkEmployerSummaryFormat(good.replace("Leads accountable teams", "Runs large-scale training"), { ...input, capabilityStatements: [...input.capabilityStatements, { statement: "Runs large-scale training.", proof: [] }] }).join(" ")));
   expect("summary check: recruiting called sales rejected", /recruiting work "sales"/.test(issues(good.replace("Quota delivery** Delivered 134% of an annual recruiting target", "Sales results** Delivered 134% of an annual sales target"))));
   expect("summary check: sales role family in THRIVES_IN still allowed", !/recruiting work/.test(issues(good.replace("business development", "sales"))));
   const colonLead = pipeline.parseEmployerSummary(good.replace("**Asset accountability** ", "**Asset accountability:** ").replace("**Training at scale** ", "**Training at scale**: "));
@@ -618,6 +619,26 @@ function expect(name, cond, detail = "") {
   }
   expect("prompts: preferred civilian rewrites in summary and statement prompts", /"allied nations" -> "partner countries"/.test(pipeline.buildEmployerSummaryUserPrompt(input)) && /"mission success rate" -> "success rate"/.test(synth.buildSynthesisPrompt([], [])));
   expect("guard: preferred-rewrite phrases are NOT hard identity violations", employerGuard.scanEmployerFacingText("100% mission success rate across high-threat movements with 8 allied nations in a multinational staff exercise", {}).length === 0);
+  {
+    // Guiding principle + civilian language (2026-10-25)
+    const civ = await loadTsModules(["civilianLanguage"], "civilianLanguage");
+    const hits = (t) => civ.findSettingLanguage(t).map((h) => h.match.toLowerCase());
+    expect("civilian: setting words caught", ["high-risk", "high threat", "ground leader", "no capability loss", "cross-border"].every((w) => hits(`Led a ${w} effort`).length === 1), JSON.stringify(["high-risk", "high threat", "ground leader", "no capability loss", "cross-border"].map((w) => hits(`Led a ${w} effort`))));
+    expect("civilian: counted operations caught", hits("Coordinated 15 logistics operations").length === 1 && hits("Led 14 operations").length === 1 && hits("planned each operation").length === 1);
+    expect("civilian: operations as a function allowed", hits("Operations leadership; directs day-to-day operations for 400 people; an operations leader; director of operations").length === 0, JSON.stringify(hits("Operations leadership; directs day-to-day operations for 400 people; an operations leader; director of operations")));
+    expect("civilian: target examples pass", hits("Led 14 time-critical projects with a 100% success rate, no supervision, and zero room for error.").length === 0 && hits("Led transport teams moving people and high-value equipment by road and air across multiple countries for 8 months, with zero losses.").length === 0);
+    expect("summary check: setting language rejected", /reveals the setting/.test(issues(good.replace("Kept $3.5M in equipment fully accounted for with zero loss", "Kept $3.5M in equipment accounted for across 5 cross-border operations"))));
+    expect("summary check: 'operations leader' headline rejected", /HEADLINE says "operations leader"/.test(issues(good.replace("Leads accountable teams and programs", "Operations leader who builds teams"))));
+    expect("prompts: guiding principle at the top of both", pipeline.EMPLOYER_SUMMARY_SYSTEM_PROMPT.startsWith("GUIDING PRINCIPLE:") && synth.buildSynthesisPrompt([], []).startsWith("GUIDING PRINCIPLE:"));
+    const up = pipeline.buildEmployerSummaryUserPrompt(input);
+    expect("summary prompt: skill-first lead, civilian rules, no 'high-risk operations' rewrite", /names a transferable skill a business hires for/.test(up) && /CIVILIAN LANGUAGE/.test(up) && !/-> "high-risk operations"/.test(up));
+    expect("statement prompt: civilian rules, no 'high-risk operations' rewrite", /CIVILIAN LANGUAGE/.test(synth.buildSynthesisPrompt([], [])) && !/-> "high-risk operations"/.test(synth.buildSynthesisPrompt([], [])));
+    const gl = await loadTsModules(["translationGlossary"], "translationGlossary");
+    const convoy = gl.matchGlossaryEntries("Served as convoy commander for 14 ground movements");
+    expect("glossary: convoy / movement leader entry", convoy.some((e) => e.term === "Convoy / movement leader" && /transport teams/.test(e.employerMeaning)));
+    expect("glossary: recruiting is recruiting, never sales-style", gl.TRANSLATION_GLOSSARY.every((e) => !/sales-style/i.test(e.employerMeaning)));
+    expect("glossary: no banned setting words in meanings", gl.TRANSLATION_GLOSSARY.every((e) => civ.findSettingLanguage(e.employerMeaning).length === 0), gl.TRANSLATION_GLOSSARY.filter((e) => civ.findSettingLanguage(e.employerMeaning).length).map((e) => e.term).join(", "));
+  }
   expect("store gate: valid summary may be stored", pipeline.employerSummaryStoreBlockers(good, input).length === 0, JSON.stringify(pipeline.employerSummaryStoreBlockers(good, input)));
   expect("store gate: empty summary blocked", pipeline.employerSummaryStoreBlockers("", input).length > 0);
   expect("store gate: preamble before ## HEADLINE blocked", /before ## HEADLINE/.test(pipeline.employerSummaryStoreBlockers("Looking at the evidence carefully, there are no numbers.\n\n" + good, input).join(" ")));
